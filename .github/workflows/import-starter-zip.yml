@@ -1,0 +1,47 @@
+
+name: Import System Formy Starter ZIP
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import-starter:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download starter ZIP
+        run: |
+          curl -fL \
+            "https://github.com/jakubgabriel2002-gif/system-formy-app/archive/refs/heads/main.zip" \
+            -o starter.zip
+
+      - name: Import files
+        run: |
+          unzip -o starter.zip -d extracted
+          SOURCE=$(find extracted -mindepth 1 -maxdepth 1 -type d | head -n 1)
+
+          if [ -z "$SOURCE" ]; then
+            echo "Nie znaleziono plikow ZIP."
+            exit 1
+          fi
+
+          cp -R "$SOURCE"/. .
+          rm -rf starter.zip extracted
+
+      - name: Commit imported files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          if git diff --cached --quiet; then
+            echo "Brak zmian do zapisania."
+          else
+            git commit -m "Import System Formy starter"
+            git push
+          fi
