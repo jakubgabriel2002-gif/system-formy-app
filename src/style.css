@@ -1,0 +1,316 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800;900&family=DM+Sans:wght@400;500;600;700&display=swap');
+
+:root {
+  font-family: 'DM Sans', sans-serif;
+  color: #f4f2ec;
+  background: #11110f;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --yellow: #e9ff57;
+  --muted: #92928a;
+  --panel: #1a1a17;
+  --line: #34342d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.shell {
+  max-width: 1440px;
+  margin: auto;
+  padding: 0 6%;
+}
+
+.topbar {
+  height: 82px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  font-size: 12px;
+  letter-spacing: 1.7px;
+}
+
+.brand b {
+  font-weight: 800;
+}
+
+.mark {
+  display: grid;
+  place-items: center;
+  width: 35px;
+  height: 35px;
+  background: var(--yellow);
+  color: #11110f;
+  font-weight: 900;
+}
+
+.nav-link,
+.primary-button,
+.secondary-button,
+.card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.hero {
+  position: relative;
+  padding: 95px 0 100px;
+  border-bottom: 1px solid var(--line);
+}
+
+.eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  background: var(--yellow);
+  border-radius: 50%;
+  margin-right: 8px;
+}
+
+h1,
+h2,
+h3 {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 800;
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(58px, 10vw, 125px);
+  line-height: 0.9;
+  max-width: 1000px;
+  margin: 28px 0;
+}
+
+h1 span,
+h2 span {
+  color: var(--yellow);
+}
+
+.hero-copy {
+  max-width: 460px;
+  color: #b6b5ad;
+  line-height: 1.8;
+  font-size: 14px;
+}
+
+.primary-button {
+  margin-top: 18px;
+  padding: 17px 20px;
+  background: var(--yellow);
+  color: #11110f;
+}
+
+.note {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  margin-top: 24px;
+}
+
+.hero-index {
+  position: absolute;
+  right: 0;
+  bottom: 28px;
+  color: #62625a;
+  font-size: 10px;
+  letter-spacing: 2px;
+}
+
+.challenges {
+  padding: 75px 0 85px;
+}
+
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 25px;
+  margin-bottom: 30px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+h2 {
+  font-size: clamp(36px, 5vw, 57px);
+  line-height: 0.98;
+  margin-top: 12px;
+}
+
+.section-copy,
+.account > p {
+  max-width: 300px;
+  color: #a5a59c;
+  line-height: 1.8;
+  font-size: 12px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 13px;
+}
+
+.challenge-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 23px;
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+}
+
+.card-top {
+  display: flex;
+  justify-content: space-between;
+  color: #a1a198;
+  font-size: 9px;
+  letter-spacing: 1.3px;
+}
+
+.card-top svg {
+  color: var(--yellow);
+}
+
+.tag {
+  align-self: flex-start;
+  margin-top: 29px;
+  padding: 5px 7px;
+  background: #2a2c1d;
+  color: var(--yellow);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+h3 {
+  font-size: 30px;
+  margin-top: 13px;
+}
+
+.challenge-card > p {
+  color: #a5a59c;
+  font-size: 12px;
+  line-height: 1.75;
+  margin: 8px 0 22px;
+}
+
+.card-link {
+  margin-top: auto;
+}
+
+.account {
+  padding: 40px 0 65px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  align-items: center;
+  gap: 22px;
+}
+
+.secondary-button {
+  border: 1px solid #68685c;
+  padding: 15px;
+}
+
+footer {
+  min-height: 80px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+
+footer .brand {
+  color: #f4f2ec;
+}
+
+@media (max-width: 760px) {
+  .shell {
+    padding: 0 22px;
+  }
+
+  .topbar {
+    height: 72px;
+  }
+
+  .hero {
+    padding: 75px 0 88px;
+  }
+
+  h1 {
+    font-size: clamp(58px, 14vw, 92px);
+  }
+
+  .section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .challenge-card {
+    min-height: 235px;
+  }
+
+  .account {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .account > p {
+    max-width: 400px;
+  }
+
+  .secondary-button {
+    justify-self: start;
+  }
+
+  footer {
+    padding: 22px 0;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
