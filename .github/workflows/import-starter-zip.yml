@@ -15,7 +15,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Create System Formy app
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Generate System Formy frontend
         shell: bash
         run: |
           set -euo pipefail
@@ -30,16 +35,16 @@ jobs:
             "type": "module",
             "scripts": {
               "dev": "vite --host 0.0.0.0",
-              "build": "tsc --noEmit && vite build"
+              "build": "tsc --noEmit && vite build",
               "preview": "vite preview --host 0.0.0.0"
             },
             "dependencies": {
+              "@vitejs/plugin-react": "latest",
               "lucide-react": "latest",
               "react": "latest",
               "react-dom": "latest",
-              "vite": "latest",
               "typescript": "latest",
-              "@vitejs/plugin-react": "latest"
+              "vite": "latest"
             },
             "devDependencies": {
               "@types/react": "latest",
@@ -95,7 +100,7 @@ jobs:
           EOF
 
           cat > src/main.tsx <<'EOF'
-          import React from 'react';
+          import * as React from 'react';
           import { createRoot } from 'react-dom/client';
           import App from './App';
           import './style.css';
@@ -108,27 +113,35 @@ jobs:
           EOF
 
           cat > src/App.tsx <<'EOF'
-          import { ArrowUpRight, Dumbbell, Flame, Sparkles } from 'lucide-react';
+          import {
+            ArrowUpRight,
+            Dumbbell,
+            Flame,
+            Sparkles
+          } from 'lucide-react';
 
           const challenges = [
             {
               number: '01',
               title: 'Zbuduj nawyk',
-              description: 'Zacznij regularnie trenować i uporządkuj swój tydzień.',
+              description:
+                'Zacznij regularnie trenować i uporządkuj swój tydzień.',
               tag: 'START',
               icon: Flame
             },
             {
               number: '02',
               title: 'Trenuj w domu',
-              description: 'Wykorzystaj to, co masz pod ręką. Trenuj we własnym tempie.',
+              description:
+                'Wykorzystaj to, co masz pod ręką. Trenuj we własnym tempie.',
               tag: 'DOM',
               icon: Dumbbell
             },
             {
               number: '03',
               title: 'Wejdź poziom wyżej',
-              description: 'Podejdź do treningu z planem i konsekwencją.',
+              description:
+                'Podejdź do treningu z planem i konsekwencją.',
               tag: 'ROZWÓJ',
               icon: Sparkles
             }
@@ -138,10 +151,11 @@ jobs:
             return (
               <main className="shell">
                 <nav className="topbar">
-                  <a className="brand" href="#">
+                  <a className="brand" href="#" aria-label="System Formy">
                     <span className="mark">SF</span>
                     <span>SYSTEM <b>FORMY</b></span>
                   </a>
+
                   <a className="nav-link" href="#konto">
                     KONTO <ArrowUpRight size={16} />
                   </a>
@@ -152,15 +166,24 @@ jobs:
                     <span className="dot" />
                     TWOJA DROGA. TWÓJ SYSTEM.
                   </div>
-                  <h1>FORMA NIE ROBI SIĘ <span>SAMA.</span></h1>
+
+                  <h1>
+                    FORMA NIE ROBI SIĘ <span>SAMA.</span>
+                  </h1>
+
                   <p className="hero-copy">
                     Mniej chaosu. Więcej konsekwencji. Wybierz wyzwanie
                     i buduj formę krok po kroku — we własnym tempie.
                   </p>
+
                   <a className="primary-button" href="#wyzwania">
                     WYBIERAM WYZWANIE <ArrowUpRight size={18} />
                   </a>
-                  <p className="note">JASNE CELE. REGULARNOŚĆ. TWÓJ POSTĘP.</p>
+
+                  <p className="note">
+                    JASNE CELE. REGULARNOŚĆ. TWÓJ POSTĘP.
+                  </p>
+
                   <span className="hero-index">SF / 001</span>
                 </section>
 
@@ -168,8 +191,11 @@ jobs:
                   <div className="section-heading">
                     <div>
                       <p className="eyebrow muted">ZACZNIJ TUTAJ</p>
-                      <h2>WYBIERZ SWÓJ <span>KIERUNEK.</span></h2>
+                      <h2>
+                        WYBIERZ SWÓJ <span>KIERUNEK.</span>
+                      </h2>
                     </div>
+
                     <p className="section-copy">
                       Wyzwania, które pomagają zbudować regularność
                       i ruszyć z miejsca.
@@ -177,42 +203,52 @@ jobs:
                   </div>
 
                   <div className="grid">
-                    {challenges.map(({ number, title, description, tag, icon: Icon }) => (
-                      <article className="challenge-card" key={number}>
-                        <div className="card-top">
-                          <span>{number} / WYZWANIE</span>
-                          <Icon size={21} />
-                        </div>
-                        <span className="tag">{tag}</span>
-                        <h3>{title}</h3>
-                        <p>{description}</p>
-                        <a className="card-link" href="#konto">
-                          POZNAJ SZCZEGÓŁY <ArrowUpRight size={16} />
-                        </a>
-                      </article>
-                    ))}
+                    {challenges.map(
+                      ({ number, title, description, tag, icon: Icon }) => (
+                        <article className="challenge-card" key={number}>
+                          <div className="card-top">
+                            <span>{number} / WYZWANIE</span>
+                            <Icon size={21} />
+                          </div>
+
+                          <span className="tag">{tag}</span>
+                          <h3>{title}</h3>
+                          <p>{description}</p>
+
+                          <a className="card-link" href="#konto">
+                            POZNAJ SZCZEGÓŁY <ArrowUpRight size={16} />
+                          </a>
+                        </article>
+                      )
+                    )}
                   </div>
                 </section>
 
                 <section className="account" id="konto">
                   <div>
                     <p className="eyebrow muted">KOLEJNY KROK</p>
-                    <h2>TWÓJ SYSTEM<br /><span>ZACZYNA SIĘ TUTAJ.</span></h2>
+                    <h2>
+                      TWÓJ SYSTEM<br />
+                      <span>ZACZYNA SIĘ TUTAJ.</span>
+                    </h2>
                   </div>
+
                   <p>
                     Strefa użytkownika, rejestracja i zakup wyzwań
                     zostaną podłączone w kolejnych etapach.
                   </p>
+
                   <a className="secondary-button" href="#wyzwania">
                     ZOBACZ WYZWANIA <ArrowUpRight size={17} />
                   </a>
                 </section>
 
                 <footer>
-                  <a className="brand" href="#">
+                  <a className="brand" href="#" aria-label="System Formy">
                     <span className="mark">SF</span>
                     <span>SYSTEM <b>FORMY</b></span>
                   </a>
+
                   <span>RUSZAJ. BUDUJ. POWTARZAJ.</span>
                   <span>© {new Date().getFullYear()} SYSTEM FORMY</span>
                 </footer>
@@ -237,69 +273,306 @@ jobs:
             --line: #34342d;
           }
 
-          * { box-sizing: border-box; }
-          html { scroll-behavior: smooth; }
-          body { margin: 0; min-width: 320px; }
-          a { color: inherit; text-decoration: none; }
+          * {
+            box-sizing: border-box;
+          }
 
-          .shell { max-width: 1440px; margin: auto; padding: 0 6%; }
+          html {
+            scroll-behavior: smooth;
+          }
+
+          body {
+            margin: 0;
+            min-width: 320px;
+          }
+
+          a {
+            color: inherit;
+            text-decoration: none;
+          }
+
+          .shell {
+            max-width: 1440px;
+            margin: auto;
+            padding: 0 6%;
+          }
+
           .topbar {
-            height: 82px; display: flex; align-items: center;
-            justify-content: space-between; border-bottom: 1px solid var(--line);
+            height: 82px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--line);
           }
+
           .brand {
-            display: inline-flex; align-items: center; gap: 11px;
-            font-size: 12px; letter-spacing: 1.7px;
+            display: inline-flex;
+            align-items: center;
+            gap: 11px;
+            font-size: 12px;
+            letter-spacing: 1.7px;
           }
-          .brand b { font-weight: 800; }
+
+          .brand b {
+            font-weight: 800;
+          }
+
           .mark {
-            display: grid; place-items: center; width: 35px; height: 35px;
-            background: var(--yellow); color: #11110f; font-weight: 900;
+            display: grid;
+            place-items: center;
+            width: 35px;
+            height: 35px;
+            background: var(--yellow);
+            color: #11110f;
+            font-weight: 900;
           }
-          .nav-link, .primary-button, .secondary-button, .card-link {
-            display: inline-flex; align-items: center; gap: 10px;
-            font-size: 10px; font-weight: 800; letter-spacing: 1px;
+
+          .nav-link,
+          .primary-button,
+          .secondary-button,
+          .card-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 1px;
           }
-          .hero { position: relative; padding: 95px 0 100px; border-bottom: 1px solid var(--line); }
-          .eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 2px; }
-          .dot { display: inline-block; width: 7px; height: 7px; background: var(--yellow); border-radius: 50%; margin-right: 8px; }
-          h1, h2, h3 { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; margin: 0; }
-          h1 { font-size: clamp(58px, 10vw, 125px); line-height: .9; max-width: 1000px; margin: 28px 0; }
-          h1 span, h2 span { color: var(--yellow); }
-          .hero-copy { max-width: 460px; color: #b6b5ad; line-height: 1.8; font-size: 14px; }
-          .primary-button { margin-top: 18px; padding: 17px 20px; background: var(--yellow); color: #11110f; }
-          .note { color: var(--muted); font-size: 9px; letter-spacing: 1.5px; margin-top: 24px; }
-          .hero-index { position: absolute; right: 0; bottom: 28px; color: #62625a; font-size: 10px; letter-spacing: 2px; }
-          .challenges { padding: 75px 0 85px; }
-          .section-heading { display: flex; justify-content: space-between; align-items: end; gap: 25px; margin-bottom: 30px; }
-          .muted { color: var(--muted); }
-          h2 { font-size: clamp(36px, 5vw, 57px); line-height: .98; margin-top: 12px; }
-          .section-copy, .account > p { max-width: 300px; color: #a5a59c; line-height: 1.8; font-size: 12px; }
-          .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; }
-          .challenge-card { background: var(--panel); border: 1px solid var(--line); padding: 23px; min-height: 260px; display: flex; flex-direction: column; }
-          .card-top { display: flex; justify-content: space-between; color: #a1a198; font-size: 9px; letter-spacing: 1.3px; }
-          .card-top svg { color: var(--yellow); }
-          .tag { align-self: flex-start; margin-top: 29px; padding: 5px 7px; background: #2a2c1d; color: var(--yellow); font-size: 9px; font-weight: 800; letter-spacing: 1px; }
-          h3 { font-size: 30px; margin-top: 13px; }
-          .challenge-card > p { color: #a5a59c; font-size: 12px; line-height: 1.75; margin: 8px 0 22px; }
-          .card-link { margin-top: auto; }
-          .account { padding: 40px 0 65px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 1fr 1fr auto; align-items: center; gap: 22px; }
-          .secondary-button { border: 1px solid #68685c; padding: 15px; }
-          footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 15px; color: var(--muted); font-size: 9px; letter-spacing: 1px; }
-          footer .brand { color: #f4f2ec; }
+
+          .hero {
+            position: relative;
+            padding: 95px 0 100px;
+            border-bottom: 1px solid var(--line);
+          }
+
+          .eyebrow {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 2px;
+          }
+
+          .dot {
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            background: var(--yellow);
+            border-radius: 50%;
+            margin-right: 8px;
+          }
+
+          h1,
+          h2,
+          h3 {
+            font-family: 'Barlow Condensed', sans-serif;
+            font-weight: 800;
+            margin: 0;
+          }
+
+          h1 {
+            font-size: clamp(58px, 10vw, 125px);
+            line-height: 0.9;
+            max-width: 1000px;
+            margin: 28px 0;
+          }
+
+          h1 span,
+          h2 span {
+            color: var(--yellow);
+          }
+
+          .hero-copy {
+            max-width: 460px;
+            color: #b6b5ad;
+            line-height: 1.8;
+            font-size: 14px;
+          }
+
+          .primary-button {
+            margin-top: 18px;
+            padding: 17px 20px;
+            background: var(--yellow);
+            color: #11110f;
+          }
+
+          .note {
+            color: var(--muted);
+            font-size: 9px;
+            letter-spacing: 1.5px;
+            margin-top: 24px;
+          }
+
+          .hero-index {
+            position: absolute;
+            right: 0;
+            bottom: 28px;
+            color: #62625a;
+            font-size: 10px;
+            letter-spacing: 2px;
+          }
+
+          .challenges {
+            padding: 75px 0 85px;
+          }
+
+          .section-heading {
+            display: flex;
+            justify-content: space-between;
+            align-items: end;
+            gap: 25px;
+            margin-bottom: 30px;
+          }
+
+          .muted {
+            color: var(--muted);
+          }
+
+          h2 {
+            font-size: clamp(36px, 5vw, 57px);
+            line-height: 0.98;
+            margin-top: 12px;
+          }
+
+          .section-copy,
+          .account > p {
+            max-width: 300px;
+            color: #a5a59c;
+            line-height: 1.8;
+            font-size: 12px;
+          }
+
+          .grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 13px;
+          }
+
+          .challenge-card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            padding: 23px;
+            min-height: 260px;
+            display: flex;
+            flex-direction: column;
+          }
+
+          .card-top {
+            display: flex;
+            justify-content: space-between;
+            color: #a1a198;
+            font-size: 9px;
+            letter-spacing: 1.3px;
+          }
+
+          .card-top svg {
+            color: var(--yellow);
+          }
+
+          .tag {
+            align-self: flex-start;
+            margin-top: 29px;
+            padding: 5px 7px;
+            background: #2a2c1d;
+            color: var(--yellow);
+            font-size: 9px;
+            font-weight: 800;
+            letter-spacing: 1px;
+          }
+
+          h3 {
+            font-size: 30px;
+            margin-top: 13px;
+          }
+
+          .challenge-card > p {
+            color: #a5a59c;
+            font-size: 12px;
+            line-height: 1.75;
+            margin: 8px 0 22px;
+          }
+
+          .card-link {
+            margin-top: auto;
+          }
+
+          .account {
+            padding: 40px 0 65px;
+            border-top: 1px solid var(--line);
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            align-items: center;
+            gap: 22px;
+          }
+
+          .secondary-button {
+            border: 1px solid #68685c;
+            padding: 15px;
+          }
+
+          footer {
+            min-height: 80px;
+            border-top: 1px solid var(--line);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 15px;
+            color: var(--muted);
+            font-size: 9px;
+            letter-spacing: 1px;
+          }
+
+          footer .brand {
+            color: #f4f2ec;
+          }
 
           @media (max-width: 760px) {
-            .shell { padding: 0 22px; }
-            .topbar { height: 72px; }
-            .hero { padding: 75px 0 88px; }
-            h1 { font-size: clamp(58px, 14vw, 92px); }
-            .section-heading { align-items: flex-start; flex-direction: column; gap: 10px; }
-            .grid { grid-template-columns: 1fr; }
-            .challenge-card { min-height: 235px; }
-            .account { grid-template-columns: 1fr; gap: 12px; }
-            .account > p { max-width: 400px; }
-            .secondary-button { justify-self: start; }
-            footer { padding: 22px 0; align-items: flex-start; flex-direction: column; }
+            .shell {
+              padding: 0 22px;
+            }
+
+            .topbar {
+              height: 72px;
+            }
+
+            .hero {
+              padding: 75px 0 88px;
+            }
+
+            h1 {
+              font-size: clamp(58px, 14vw, 92px);
+            }
+
+            .section-heading {
+              align-items: flex-start;
+              flex-direction: column;
+              gap: 10px;
+            }
+
+            .grid {
+              grid-template-columns: 1fr;
+            }
+
+            .challenge-card {
+              min-height: 235px;
+            }
+
+            .account {
+              grid-template-columns: 1fr;
+              gap: 12px;
+            }
+
+            .account > p {
+              max-width: 400px;
+            }
+
+            .secondary-button {
+              justify-self: start;
+            }
+
+            footer {
+              padding: 22px 0;
+              align-items: flex-start;
+              flex-direction: column;
+            }
           }
           EOF
 
@@ -332,27 +605,37 @@ jobs:
           Responsive React + TypeScript + Vite frontend starter.
 
           ## Development
-          1. Install Node.js 20 or newer.
-          2. Run `npm install`.
-          3. Run `npm run dev`.
+
+          Requires Node.js 22 or newer.
+
+          1. Run `npm install`.
+          2. Run `npm run dev`.
 
           ## Build
+
           Run `npm run build`.
 
-          ## Status
-          This starter contains a responsive landing page and challenge previews.
+          ## Current status
+
+          This starter includes a responsive landing page and challenge previews.
+
           Authentication, database, payments, admin tools, paid downloads,
-          progress tracking and custom training plans are not connected yet.
+          progress tracking, and custom training plans are not connected yet.
           EOF
 
-          npm install
+          npm install --no-audit --no-fund
           npm run build
 
       - name: Commit generated files
+        shell: bash
         run: |
+          set -euo pipefail
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add -A
+
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
