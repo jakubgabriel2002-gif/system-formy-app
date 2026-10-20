@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "deploy": "npx wrangler deploy",
+    "db:migrate:local": "npx wrangler d1 migrations apply system-formy-db --local",
+    "db:migrate:remote": "npx wrangler d1 migrations apply system-formy-db --remote"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
