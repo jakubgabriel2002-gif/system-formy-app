@@ -1,8 +1,8 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownRight, ArrowRight, ArrowUpRight, BookOpen, CheckCircle2, ChevronRight,
-  ClipboardList, Crown, Dumbbell, FileText, Flame, Headphones, LockKeyhole, LogOut,
-  Mail, Menu, ShieldCheck, ShoppingBag, UserRound, X,
+  ClipboardList, Crown, Dumbbell, FileText, Flame, Headphones, KeyRound, LockKeyhole, LogOut,
+  Mail, Menu, Save, ShieldCheck, ShoppingBag, UserRound, X,
 } from 'lucide-react';
 
 type CategoryKey = 'wyzwania' | 'produkty' | 'plan' | 'prowadzenie' | 'program' | 'premium';
@@ -10,11 +10,26 @@ type OfferItem = { title: string; type: string; description: string; meta: strin
 type Category = { key: CategoryKey; number: string; label: string; shortLabel: string; headline: string; intro: string; summary: string; icon: typeof Dumbbell; stage: string; items: OfferItem[] };
 type User = { id: string; email: string };
 type Order = { id: string; order_number: string; status: string; total_amount: number; currency: string; created_at: string };
-type Entitlement = { id: string; product_title: string; product_type: string; access_status: string; created_at: string };
+type Entitlement = { id: string; product_key: string; product_title: string; product_type: string; access_status: string; created_at: string };
 type PlanRequest = { id: string; status: string; created_at: string };
 type Overview = { orders: Order[]; entitlements: Entitlement[]; planRequests: PlanRequest[] };
+type Profile = { first_name: string; gender: string; weight_kg: number | null; height_cm: number | null; training_location: string; primary_goal: string; training_days_per_week: number | null };
 type AccountMode = 'login' | 'signup' | 'recovery' | 'dashboard';
+type AccountTab = 'profile' | 'orders' | 'materials' | 'plan' | 'premium';
+type ToastKind = 'success' | 'error' | 'info';
+type ToastMessage = { id: number; message: string; kind: ToastKind };
 type LegalKind = 'terms' | 'privacy';
+
+const emptyProfile = (): Profile => ({ first_name: '', gender: '', weight_kg: null, height_cm: null, training_location: '', primary_goal: '', training_days_per_week: null });
+const passwordChecks = (value: string) => [
+  { label: 'Minimum 8 znaków', ok: value.length >= 8 },
+  { label: 'Wielka litera (A–Z)', ok: /[A-Z]/.test(value) },
+  { label: 'Mała litera (a–z)', ok: /[a-z]/.test(value) },
+  { label: 'Cyfra (0–9)', ok: /[0-9]/.test(value) },
+  { label: 'Znak specjalny (!@#$…)', ok: /[^A-Za-z0-9\s]/.test(value) },
+  { label: 'Maksimum 128 znaków', ok: value.length > 0 && value.length <= 128 },
+];
+const isStrongPassword = (value: string) => passwordChecks(value).every((item) => item.ok);
 
 const LOGO = '/2F1E20BF-50D5-450A-99FB-4408BA767302.png';
 
@@ -77,6 +92,16 @@ export default function App() {
   const [accountMode, setAccountMode] = useState<AccountMode>('login');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [activeAccountTab, setActiveAccountTab] = useState<AccountTab>('profile');
+  const [profile, setProfile] = useState<Profile>(emptyProfile);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileLoadError, setProfileLoadError] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordAgain, setNewPasswordAgain] = useState('');
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordAgain, setPasswordAgain] = useState('');
@@ -85,17 +110,20 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [authReady, setAuthReady] = useState(false);
 
+  const profileReminderRef = useRef(false);
+  profileReminderRef.current = Boolean(profile.first_name.trim() && profile.training_location && profile.primary_goal);
+
   const active = useMemo(() => categories.find((category) => category.key === activeCategory) ?? categories[0], [activeCategory]);
   const ActiveIcon = active.icon;
 
   useEffect(() => {
     let alive = true;
     const params = new URLSearchParams(window.location.search);
-    if (params.get('auth') === 'verified') setMessage('Adres e-mail został potwierdzony. Możesz się zalogować.');
+    if (params.get('auth') === 'verified') notify('Adres e-mail został potwierdzony.', 'success');
     api<{ user: User | null }>('/api/auth/me').then((result) => {
       if (alive && result.user) { setCurrentUser(result.user); setAccountMode('dashboard'); }
     }).catch((e: unknown) => {
-      if (alive) setError(e instanceof Error ? e.message : 'Nie udało się sprawdzić sesji.');
+      if (alive) notify(e instanceof Error ? e.message : 'Nie udało się sprawdzić sesji.', 'error');
     }).finally(() => { if (alive) setAuthReady(true); });
     return () => { alive = false; };
   }, []);
@@ -110,9 +138,34 @@ export default function App() {
     return () => { alive = false; };
   }, [currentUser]);
 
+  useEffect(() => {
+    let alive = true;
+    if (!currentUser) { setProfile(emptyProfile()); setProfileLoading(false); setProfileLoadError(''); return () => { alive = false; }; }
+    setProfileLoading(true); setProfileLoadError('');
+    api<{ profile: Profile }>('/api/account/profile').then((result) => { if (alive) setProfile({ ...emptyProfile(), ...result.profile }); })
+      .catch((e: unknown) => {
+        if (alive) {
+          const message = e instanceof Error ? e.message : 'Nie udało się pobrać profilu.';
+          setProfileLoadError(message); notify(message, 'error');
+        }
+      }).finally(() => { if (alive) setProfileLoading(false); });
+    return () => { alive = false; };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timeout = window.setTimeout(() => setToast(null), 9000);
+    return () => window.clearTimeout(timeout);
+  }, [toast]);
+
+  function notify(message: string, kind: ToastKind = 'info') {
+    setToast({ id: Date.now(), message, kind });
+  }
+
   function openAccount() {
     setMenuOpen(false); setSelectedOffer(null); setLegalPage(null); setShowAccount(true);
-    setAccountMode(currentUser ? 'dashboard' : 'login'); setError(''); setMessage(''); setPassword(''); setPasswordAgain('');
+    setAccountMode(currentUser ? 'dashboard' : 'login'); setActiveAccountTab('profile'); setError(''); setMessage('');
+    setPassword(''); setPasswordAgain(''); setCurrentPassword(''); setNewPassword(''); setNewPasswordAgain('');
   }
   function switchMode(mode: AccountMode) {
     setAccountMode(mode); setError(''); setMessage(''); setPassword(''); setPasswordAgain('');
@@ -123,22 +176,57 @@ export default function App() {
     try {
       if (accountMode === 'login') {
         const result = await api<{ user: User }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
-        setCurrentUser(result.user); setAccountMode('dashboard'); setPassword(''); setMessage('Zalogowano pomyślnie.');
+        setCurrentUser(result.user); setAccountMode('dashboard'); setActiveAccountTab('profile'); setPassword('');
+        notify('Zalogowano pomyślnie.', 'success');
       } else if (accountMode === 'signup') {
         if (password !== passwordAgain) throw new Error('Podane hasła nie są takie same.');
-        if (password.length < 10) throw new Error('Hasło musi mieć co najmniej 10 znaków.');
+        if (!isStrongPassword(password)) throw new Error('Hasło musi mieć minimum 8 znaków, wielką i małą literę, cyfrę oraz znak specjalny.');
         const result = await api<{ user: User }>('/api/auth/register', { method: 'POST', body: JSON.stringify({ email, password }) });
-        setCurrentUser(result.user); setAccountMode('dashboard'); setPassword(''); setPasswordAgain(''); setMessage('Konto zostało utworzone.');
+        setCurrentUser(result.user); setAccountMode('dashboard'); setActiveAccountTab('profile'); setPassword(''); setPasswordAgain('');
+        notify('Konto zostało utworzone.', 'success');
+        window.setTimeout(() => { if (!profileReminderRef.current) notify('Uzupełnij dane w zakładce „Moje dane”, aby przygotować profil treningowy.', 'info'); }, 9300);
       }
-    } catch (e) { setError(e instanceof Error ? e.message : 'Nie udało się wykonać operacji.'); }
-    finally { setBusy(false); }
+    } catch (e) {
+      const text = e instanceof Error ? e.message : 'Nie udało się wykonać operacji.';
+      setError(text); notify(text, 'error');
+    } finally { setBusy(false); }
   }
 
   async function signOut() {
     setBusy(true); setError('');
-    try { await api<{ ok: boolean }>('/api/auth/logout', { method: 'POST', body: '{}' }); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Nie udało się wylogować.'); }
-    finally { setCurrentUser(null); setOverview(null); setAccountMode('login'); setPassword(''); setBusy(false); setMessage('Wylogowano.'); }
+    try {
+      await api<{ ok: boolean }>('/api/auth/logout', { method: 'POST', body: '{}' });
+      setCurrentUser(null); setOverview(null); setProfile(emptyProfile()); setAccountMode('login'); setPassword('');
+      notify('Wylogowano.', 'success');
+    } catch (e) {
+      const text = e instanceof Error ? e.message : 'Nie udało się wylogować.';
+      setError(text); notify(text, 'error');
+    } finally { setBusy(false); }
+  }
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setProfileSaving(true); setProfileLoadError('');
+    try {
+      const result = await api<{ profile: Profile }>('/api/account/profile', { method: 'PUT', body: JSON.stringify(profile) });
+      setProfile({ ...emptyProfile(), ...result.profile });
+      notify('Dane profilu zostały zapisane.', 'success');
+    } catch (e) {
+      const text = e instanceof Error ? e.message : 'Nie udało się zapisać profilu.';
+      notify(text, 'error');
+    } finally { setProfileSaving(false); }
+  }
+
+  async function changePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (newPassword !== newPasswordAgain) { notify('Nowe hasła nie są takie same.', 'error'); return; }
+    if (!isStrongPassword(newPassword)) { notify('Nowe hasło musi spełniać wszystkie wymagania bezpieczeństwa.', 'error'); return; }
+    setPasswordSaving(true);
+    try {
+      await api<{ ok: boolean }>('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) });
+      setCurrentPassword(''); setNewPassword(''); setNewPasswordAgain('');
+      notify('Hasło zostało zmienione.', 'success');
+    } catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się zmienić hasła.', 'error'); }
+    finally { setPasswordSaving(false); }
   }
 
   const accountTitle = accountMode === 'signup' ? 'UTWÓRZ KONTO.' : accountMode === 'recovery' ? 'ODZYSKAJ DOSTĘP.' : 'DOBRZE CIĘ WIDZIEĆ.';
@@ -180,10 +268,43 @@ export default function App() {
       {selectedOffer && <><p className="eyebrow muted">{selectedOffer.category.label.toUpperCase()}</p><span className="modal-type">{selectedOffer.item.type}</span><h2 id="modal-title">{selectedOffer.item.title}</h2><p className="modal-description">{selectedOffer.item.description}</p><div className="modal-divider" /><p className="modal-subhead">ZAŁOŻENIA</p><ul className="detail-list">{selectedOffer.item.details.map((detail) => <li key={detail}><span />{detail}</li>)}</ul><div className="modal-notice"><LockKeyhole size={17} /><span>Ta oferta nie jest jeszcze dostępna do zakupu. To opis założeń, a nie aktywna usługa.</span></div><button className="modal-done" onClick={closeOverlay}>ROZUMIEM <ArrowUpRight size={16} /></button></>}
       {legalPage && <><p className="eyebrow muted">SYSTEM FORMY / INFORMACJE</p><h2 id="modal-title">{legalPage === 'terms' ? <>REGULAMIN<span>.</span></> : <>POLITYKA PRYWATNOŚCI<span>.</span></>}</h2><p className="modal-description">{legalPage === 'terms' ? 'Treść regulaminu jest w przygotowaniu. Przed uruchomieniem sprzedaży należy opublikować pełne zasady zakupów, płatności, dostępu do produktów, odstąpienia od umowy i reklamacji.' : 'Treść polityki prywatności jest w przygotowaniu. Przed uruchomieniem rejestracji i sprzedaży należy opisać administratora danych, cele i podstawy przetwarzania, okresy przechowywania, prawa użytkownika oraz używane usługi.'}</p><div className="modal-notice"><ShieldCheck size={17} /><span>To tymczasowy komunikat informacyjny, a nie dokument prawny. Nie uruchamiaj płatnej sprzedaży przed uzupełnieniem treści.</span></div><button className="modal-done" onClick={closeOverlay}>ZAMKNIJ <ArrowUpRight size={16} /></button></>}
       {showAccount && <><div className="account-modal-heading"><p className="eyebrow muted">SYSTEM FORMY / STREFA KLIENTA</p><div className="modal-account-icon">{accountMode === 'recovery' ? <Mail size={24} /> : accountMode === 'dashboard' ? <UserRound size={24} /> : <LockKeyhole size={24} />}</div><h2 id="modal-title">{accountMode === 'dashboard' ? <>TWOJE KONTO<span>.</span></> : <>{accountTitle.split('.')[0]}<span>.</span></>}</h2><p className="modal-description">{accountMode === 'dashboard' ? `Zalogowano jako ${currentUser?.email ?? 'użytkownik'}.` : accountMode === 'signup' ? 'Utwórz konto, aby w przyszłości mieć w jednym miejscu swoje materiały i statusy usług.' : accountMode === 'recovery' ? 'Ze względów bezpieczeństwa zmiana hasła jest obsługiwana ręcznie przez właściciela Systemu Formy.' : 'Zaloguj się, aby przejść do swojej strefy klienta.'}</p></div>
-        {accountMode === 'dashboard' && currentUser ? <div className="customer-dashboard"><div className="account-toolbar"><div><span className="dashboard-label">STATUS SESJI</span><strong><span className="online-dot" /> ZALOGOWANO</strong></div><button className="signout-button" onClick={() => void signOut()} disabled={busy}><LogOut size={15} /> WYLOGUJ</button></div>
-          {overview === null ? <p className="dashboard-loading">Ładowanie danych konta…</p> : <><div className="dashboard-section"><div className="dashboard-section-heading"><ShoppingBag size={18} /><h3>MOJE ZAMÓWIENIA</h3></div>{overview.orders.length ? <div className="account-list">{overview.orders.map((order) => <div className="account-list-row" key={order.id}><div><strong>{order.order_number}</strong><span>{formatDate(order.created_at)} · {order.status}</span></div><b>{formatPrice(order.total_amount, order.currency)}</b></div>)}</div> : <p className="empty-state">Nie ma jeszcze zamówień na tym koncie. Płatności nie są jeszcze podłączone.</p>}</div>
-          <div className="dashboard-section"><div className="dashboard-section-heading"><BookOpen size={18} /><h3>ZAKUPIONE MATERIAŁY</h3></div>{overview.entitlements.length ? <div className="account-list">{overview.entitlements.map((entry) => <div className="account-list-row" key={entry.id}><div><strong>{entry.product_title}</strong><span>{entry.product_type} · {entry.access_status}</span></div><span className="entitlement-date">{formatDate(entry.created_at)}</span></div>)}</div> : <p className="empty-state">Zakupione materiały pojawią się tu po wdrożeniu płatności i przypisywania produktów.</p>}</div>
-          <div className="dashboard-section"><div className="dashboard-section-heading"><ClipboardList size={18} /><h3>INDYWIDUALNE PLANY</h3></div>{overview.planRequests.length ? <div className="account-list">{overview.planRequests.map((entry) => <div className="account-list-row" key={entry.id}><div><strong>Indywidualny plan</strong><span>Dodano: {formatDate(entry.created_at)}</span></div><span className="status-pill">{entry.status}</span></div>)}</div> : <p className="empty-state">Status realizacji planu pojawi się tutaj po wdrożeniu zamówienia i ankiety.</p>}</div></>}
+        {accountMode === 'dashboard' && currentUser ? <div className="customer-dashboard">
+          <div className="account-toolbar"><div><span className="dashboard-label">STATUS SESJI</span><strong><span className="online-dot" /> ZALOGOWANO</strong></div><button className="signout-button" onClick={() => void signOut()} disabled={busy}><LogOut size={15} /> WYLOGUJ</button></div>
+          <div className="account-tabs" role="tablist" aria-label="Sekcje konta">
+            {[
+              { key: 'profile' as const, label: 'Moje dane', icon: UserRound },
+              { key: 'orders' as const, label: 'Moje zamówienia', icon: ShoppingBag },
+              { key: 'materials' as const, label: 'Zakupione materiały', icon: BookOpen },
+              { key: 'plan' as const, label: 'Indywidualny plan', icon: ClipboardList },
+              { key: 'premium' as const, label: 'Premium', icon: Crown },
+            ].map((tab) => { const Icon = tab.icon; return <button key={tab.key} className={`account-tab${activeAccountTab === tab.key ? ' is-active' : ''}`} role="tab" aria-selected={activeAccountTab === tab.key} onClick={() => setActiveAccountTab(tab.key)}><Icon size={16} /><span>{tab.label}</span></button>; })}
+          </div>
+          {activeAccountTab === 'profile' && <div className="account-tab-panel">
+            <div className="profile-panel-heading"><div><p className="eyebrow muted">DANE I PREFERENCJE</p><h3>MOJE DANE</h3><p className="panel-subtitle">Uzupełnij tylko te informacje, które chcesz przekazać. Dane profilu pomagają przygotować przyszłe funkcje treningowe.</p></div><div className="profile-completion"><strong>{[profile.first_name.trim(), profile.gender, profile.weight_kg !== null, profile.height_cm !== null, profile.training_location, profile.primary_goal, profile.training_days_per_week !== null].filter(Boolean).length}/7</strong><span>UZUPEŁNIONYCH PÓL</span></div></div>
+            <div className="profile-email-row"><span className="dashboard-label">ADRES E-MAIL</span><strong>{currentUser.email}</strong><span>Adres logowania. Zmiana e-maila będzie wymagała osobnej weryfikacji.</span></div>
+            {!profileLoading && !profileLoadError && !profileReminderRef.current && <div className="profile-reminder"><CheckCircle2 size={17} /><span><strong>Uzupełnij profil treningowy.</strong> Podaj imię, miejsce treningu i główny cel, aby przygotować konto pod przyszłe funkcje.</span></div>}
+            {profileLoading ? <p className="dashboard-loading">Ładowanie danych profilu…</p> : profileLoadError ? <div className="modal-notice"><ShieldCheck size={17} /><span>Nie udało się wczytać profilu. Sprawdź komunikat powiadomienia i spróbuj odświeżyć stronę.</span></div> : <form className="profile-form" onSubmit={(event) => void saveProfile(event)}>
+              <label className="field-label">IMIĘ<input name="first_name" autoComplete="given-name" maxLength={80} placeholder="Jak mamy się do Ciebie zwracać?" value={profile.first_name} onChange={(event) => setProfile((old) => ({ ...old, first_name: event.target.value }))} /></label>
+              <label className="field-label">PŁEĆ (OPCJONALNIE)<select name="gender" value={profile.gender} onChange={(event) => setProfile((old) => ({ ...old, gender: event.target.value }))}><option value="">Nie podano</option><option value="female">Kobieta</option><option value="male">Mężczyzna</option><option value="other">Inna / wolę opisać inaczej</option><option value="prefer_not_to_say">Wolę nie podawać</option></select></label>
+              <label className="field-label">WAGA W KG (OPCJONALNIE)<input name="weight_kg" type="number" min={20} max={400} step="0.1" placeholder="np. 78.5" value={profile.weight_kg ?? ''} onChange={(event) => setProfile((old) => ({ ...old, weight_kg: event.target.value === '' ? null : Number(event.target.value) }))} /></label>
+              <label className="field-label">WZROST W CM (OPCJONALNIE)<input name="height_cm" type="number" min={80} max={260} step="1" placeholder="np. 180" value={profile.height_cm ?? ''} onChange={(event) => setProfile((old) => ({ ...old, height_cm: event.target.value === '' ? null : Number(event.target.value) }))} /></label>
+              <label className="field-label">GDZIE TRENUJESZ?<select name="training_location" value={profile.training_location} onChange={(event) => setProfile((old) => ({ ...old, training_location: event.target.value }))}><option value="">Wybierz miejsce</option><option value="gym">Na siłowni</option><option value="home">W domu</option><option value="both">W obu miejscach</option></select></label>
+              <label className="field-label">GŁÓWNY CEL<select name="primary_goal" value={profile.primary_goal} onChange={(event) => setProfile((old) => ({ ...old, primary_goal: event.target.value }))}><option value="">Wybierz cel (opcjonalnie)</option><option value="muscle">Budowanie mięśni</option><option value="fat_loss">Redukcja tkanki tłuszczowej</option><option value="strength">Zwiększenie siły</option><option value="consistency">Regularność i nawyki</option><option value="health">Ogólna sprawność</option></select></label>
+              <label className="field-label">TRENINGI W TYGODNIU (OPCJONALNIE)<select name="training_days_per_week" value={profile.training_days_per_week ?? ''} onChange={(event) => setProfile((old) => ({ ...old, training_days_per_week: event.target.value === '' ? null : Number(event.target.value) }))}><option value="">Nie określono</option>{[1,2,3,4,5,6,7].map((day) => <option key={day} value={day}>{day} {day === 1 ? 'dzień' : day < 5 ? 'dni' : 'dni'} w tygodniu</option>)}</select></label>
+              <div className="profile-form-footer"><p className="privacy-note"><ShieldCheck size={13} /> Dane są opcjonalne poza adresem konta. Możesz wrócić i zmienić je później.</p><button className="auth-submit" type="submit" disabled={profileSaving}><Save size={16} /> {profileSaving ? 'ZAPISYWANIE…' : 'ZAPISZ DANE'}</button></div>
+            </form>}
+            <section className="dashboard-section password-settings"><div className="dashboard-section-heading"><KeyRound size={18} /><h3>ZMIANA HASŁA</h3></div><p className="panel-subtitle">Wybierz nowe, mocne hasło. Zostaniesz poproszony o obecne hasło, aby potwierdzić zmianę.</p><form className="profile-form password-change-form" onSubmit={(event) => void changePassword(event)}>
+              <label className="field-label">OBECNE HASŁO<input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
+              <label className="field-label">NOWE HASŁO<input type="password" autoComplete="new-password" minLength={8} maxLength={128} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label>
+              <div className="password-rules" aria-live="polite">{passwordChecks(newPassword).map((rule) => <span key={rule.label} className={rule.ok ? 'password-rule is-met' : 'password-rule'}><CheckCircle2 size={13} />{rule.label}</span>)}</div>
+              <label className="field-label">POWTÓRZ NOWE HASŁO<input type="password" autoComplete="new-password" minLength={8} maxLength={128} value={newPasswordAgain} onChange={(event) => setNewPasswordAgain(event.target.value)} required /></label>
+              <button className="auth-submit" type="submit" disabled={passwordSaving}><KeyRound size={16} /> {passwordSaving ? 'ZMIENIANIE…' : 'ZMIEN HASŁO'}</button>
+            </form></section>
+          </div>}
+          {activeAccountTab === 'orders' && <div className="account-tab-panel"><div className="dashboard-section-heading"><ShoppingBag size={18} /><h3>MOJE ZAMÓWIENIA</h3></div>{overview === null ? <p className="dashboard-loading">Ładowanie zamówień…</p> : overview.orders.length ? <div className="account-list">{overview.orders.map((order) => <div className="account-list-row" key={order.id}><div><strong>{order.order_number}</strong><span>{formatDate(order.created_at)} · {order.status}</span></div><b>{formatPrice(order.total_amount, order.currency)}</b></div>)}</div> : <p className="empty-state">Nie ma jeszcze zamówień na tym koncie. Płatności nie są jeszcze podłączone.</p>}</div>}
+          {activeAccountTab === 'materials' && <div className="account-tab-panel"><div className="dashboard-section-heading"><BookOpen size={18} /><h3>ZAKUPIONE MATERIAŁY</h3></div>{overview === null ? <p className="dashboard-loading">Ładowanie materiałów…</p> : overview.entitlements.length ? <div className="account-list">{overview.entitlements.map((entry) => <div className="account-list-row" key={entry.id}><div><strong>{entry.product_title}</strong><span>{entry.product_type} · {entry.access_status}</span></div><span className="entitlement-date">{formatDate(entry.created_at)}</span></div>)}</div> : <p className="empty-state">Zakupione materiały pojawią się tu po wdrożeniu płatności i przypisywania produktów.</p>}</div>}
+          {activeAccountTab === 'plan' && <div className="account-tab-panel"><div className="dashboard-section-heading"><ClipboardList size={18} /><h3>INDYWIDUALNY PLAN</h3></div>{overview === null ? <p className="dashboard-loading">Ładowanie statusu planu…</p> : overview.planRequests.length ? <div className="account-list">{overview.planRequests.map((entry) => <div className="account-list-row" key={entry.id}><div><strong>Indywidualny plan</strong><span>Dodano: {formatDate(entry.created_at)}</span></div><span className="status-pill">{entry.status}</span></div>)}</div> : <p className="empty-state">Status realizacji planu pojawi się tutaj po wdrożeniu zamówienia i ankiety.</p>}</div>}
+          {activeAccountTab === 'premium' && <div className="account-tab-panel premium-panel"><div className="dashboard-section-heading"><Crown size={18} /><h3>PREMIUM</h3></div>{overview === null ? <p className="dashboard-loading">Sprawdzanie dostępu…</p> : overview.entitlements.some((entry) => entry.product_key.toLowerCase() === 'premium' && entry.access_status === 'active') ? <div className="premium-status is-active"><CheckCircle2 size={20} /><div><strong>Masz aktywny dostęp Premium.</strong><span>Status pobrany z uprawnień przypisanych do konta.</span></div></div> : <div className="premium-status"><Crown size={20} /><div><strong>Brak aktywnej subskrypcji.</strong><span>Zakładka Premium jest dostępna dla każdego konta. Zakupy i płatności nie zostały jeszcze uruchomione.</span></div></div>}<button className="secondary-button premium-learn-more" onClick={() => { setShowAccount(false); setActiveCategory('premium'); document.getElementById('oferta')?.scrollIntoView({ behavior: 'smooth' }); }}>POZNAJ OFERTĘ PREMIUM <ArrowUpRight size={16} /></button></div>}
         </div> : accountMode === 'recovery' ? <div className="auth-form recovery-contact">
           <div className="modal-notice"><Mail size={18} /><span>Nie możesz samodzielnie zmienić hasła przez stronę. Napisz do właściciela Systemu Formy z adresu e-mail przypisanego do konta. Po ręcznej weryfikacji otrzymasz dalsze instrukcje.</span></div>
           <a className="auth-submit recovery-mail-link" href="mailto:Jakub.gabriel2002@gmail.com?subject=System%20Formy%20%E2%80%94%20pro%C5%9Bba%20o%20odzyskanie%20dost%C4%99pu&body=Cze%C5%9B%C4%87%2C%20prosz%C4%99%20o%20pomoc%20w%20odzyskaniu%20dost%C4%99pu%20do%20konta%20Systemu%20Formy.%0AAdres%20e-mail%20konta%3A%20">NAPISZ E-MAIL <ArrowUpRight size={16} /></a>
@@ -192,15 +313,15 @@ export default function App() {
           <div className="auth-links"><button type="button" onClick={() => switchMode('login')}>Wróć do logowania</button></div>
         </div> : <form className="auth-form" onSubmit={(event) => void submitAuth(event)}>
           <label className="field-label">ADRES E-MAIL<input type="email" name="email" autoComplete="email" placeholder="ty@przyklad.pl" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-          {(accountMode === 'login' || accountMode === 'signup') && <label className="field-label">HASŁO<input type="password" name="password" autoComplete={accountMode === 'login' ? 'current-password' : 'new-password'} placeholder="Minimum 10 znaków" minLength={10} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>}
-          {accountMode === 'signup' && <label className="field-label">POWTÓRZ HASŁO<input type="password" name="passwordAgain" autoComplete="new-password" placeholder="Wpisz hasło ponownie" minLength={10} value={passwordAgain} onChange={(event) => setPasswordAgain(event.target.value)} required /></label>}
-          {error && <div className="form-feedback is-error" role="alert">{error}</div>}{message && <div className="form-feedback is-success" role="status">{message}</div>}
+          {(accountMode === 'login' || accountMode === 'signup') && <label className="field-label">HASŁO<input type="password" name="password" autoComplete={accountMode === 'login' ? 'current-password' : 'new-password'} placeholder="Minimum 8 znaków" minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>}
+          {accountMode === 'signup' && <div className="password-rules" aria-live="polite">{passwordChecks(password).map((rule) => <span key={rule.label} className={rule.ok ? 'password-rule is-met' : 'password-rule'}><CheckCircle2 size={13} />{rule.label}</span>)}</div>}
+          {accountMode === 'signup' && <label className="field-label">POWTÓRZ HASŁO<input type="password" name="passwordAgain" autoComplete="new-password" placeholder="Wpisz hasło ponownie" minLength={8} maxLength={128} value={passwordAgain} onChange={(event) => setPasswordAgain(event.target.value)} required /></label>}
           <button className="auth-submit" type="submit" disabled={busy || !authReady}>{busy ? 'CHWILA…' : accountMode === 'login' ? 'ZALOGUJ SIĘ' : 'UTWÓRZ KONTO'} <ArrowUpRight size={16} /></button>
           <div className="auth-links">{accountMode === 'login' ? <><button type="button" onClick={() => switchMode('recovery')}>Nie pamiętam hasła</button><button type="button" onClick={() => switchMode('signup')}>Utwórz konto</button></> : <button type="button" onClick={() => switchMode('login')}>Wróć do logowania</button>}</div>
           <p className="privacy-note"><LockKeyhole size={13} /> Hasła są haszowane po stronie Workera. Sesję przechowuje bezpieczne ciasteczko HttpOnly.</p>
         </form>}
-        {accountMode === 'dashboard' && <>{error && <div className="form-feedback is-error" role="alert">{error}</div>}{message && <div className="form-feedback is-success" role="status">{message}</div>}</>}
       </>}
     </section></div>}
+    {toast && <div key={toast.id} className={`toast-message toast-${toast.kind}`} role={toast.kind === 'error' ? 'alert' : 'status'} aria-live={toast.kind === 'error' ? 'assertive' : 'polite'}><div className="toast-icon">{toast.kind === 'success' ? <CheckCircle2 size={20} /> : toast.kind === 'error' ? <ShieldCheck size={20} /> : <Mail size={20} />}</div><span className="toast-text">{toast.message}</span><button type="button" className="toast-close" aria-label="Zamknij powiadomienie" onClick={() => setToast(null)}><X size={16} /></button><span className="toast-progress" /></div>}
   </main>;
 }

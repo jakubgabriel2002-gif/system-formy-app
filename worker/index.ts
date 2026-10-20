@@ -84,6 +84,9 @@ function stringField(body: JsonRecord, key: string): string {
 }
 function normalizedEmail(value: string): string { return value.trim().toLowerCase(); }
 function validEmail(value: string): boolean { return value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); }
+function validStrongPassword(value: string): boolean {
+  return value.length >= 8 && value.length <= 128 && /[A-Z]/.test(value) && /[a-z]/.test(value) && /[0-9]/.test(value) && /[^A-Za-z0-9\s]/.test(value);
+}
 function requireDb(env: Env): D1Database {
   if (!env.DB) throw new HttpError(503, 'Baza D1 nie jest jeszcze podłączona do Workera. Wykonaj instrukcję konfiguracji Cloudflare.');
   return env.DB;
@@ -165,13 +168,66 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return json({ user: session ? { id: session.user_id, email: session.email } : null });
     }
 
+    if (path === '/api/account/profile' && method === 'GET') {
+      const session = await requireSession(request, env);
+      const row = await db.prepare(`SELECT first_name, gender, weight_kg, height_cm, training_location, primary_goal, training_days_per_week
+        FROM user_profiles WHERE user_id = ? LIMIT 1`).bind(session.user_id).first();
+      return json({ profile: row ?? { first_name: '', gender: '', weight_kg: null, height_cm: null, training_location: '', primary_goal: '', training_days_per_week: null } });
+    }
+
+    if (path === '/api/account/profile' && method === 'PUT') {
+      const session = await requireSession(request, env);
+      const body = await readJson(request);
+      const firstName = stringField(body, 'first_name');
+      const gender = stringField(body, 'gender');
+      const trainingLocation = stringField(body, 'training_location');
+      const primaryGoal = stringField(body, 'primary_goal');
+      const weightKg = body.weight_kg === null || body.weight_kg === '' || typeof body.weight_kg === 'undefined' ? null : Number(body.weight_kg);
+      const heightCm = body.height_cm === null || body.height_cm === '' || typeof body.height_cm === 'undefined' ? null : Number(body.height_cm);
+      const trainingDays = body.training_days_per_week === null || body.training_days_per_week === '' || typeof body.training_days_per_week === 'undefined' ? null : Number(body.training_days_per_week);
+      if (firstName.length > 80) throw new HttpError(400, 'Imię może mieć maksymalnie 80 znaków.');
+      if (!['', 'female', 'male', 'other', 'prefer_not_to_say'].includes(gender)) throw new HttpError(400, 'Wybierz prawidłową wartość pola płci.');
+      if (!['', 'gym', 'home', 'both'].includes(trainingLocation)) throw new HttpError(400, 'Wybierz prawidłowe miejsce treningu.');
+      if (!['', 'muscle', 'fat_loss', 'strength', 'consistency', 'health'].includes(primaryGoal)) throw new HttpError(400, 'Wybierz prawidłowy cel treningowy.');
+      if (weightKg !== null && (!Number.isFinite(weightKg) || weightKg < 20 || weightKg > 400)) throw new HttpError(400, 'Waga musi mieścić się w zakresie 20–400 kg.');
+      if (heightCm !== null && (!Number.isFinite(heightCm) || heightCm < 80 || heightCm > 260)) throw new HttpError(400, 'Wzrost musi mieścić się w zakresie 80–260 cm.');
+      if (trainingDays !== null && (!Number.isInteger(trainingDays) || trainingDays < 1 || trainingDays > 7)) throw new HttpError(400, 'Liczba treningów musi wynosić od 1 do 7 tygodniowo.');
+      const now = new Date().toISOString();
+      await db.prepare(`INSERT INTO user_profiles (user_id, first_name, gender, weight_kg, height_cm, training_location, primary_goal, training_days_per_week, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET first_name = excluded.first_name, gender = excluded.gender, weight_kg = excluded.weight_kg,
+        height_cm = excluded.height_cm, training_location = excluded.training_location, primary_goal = excluded.primary_goal,
+        training_days_per_week = excluded.training_days_per_week, updated_at = excluded.updated_at`)
+        .bind(session.user_id, firstName, gender, weightKg, heightCm, trainingLocation, primaryGoal, trainingDays, now, now).run();
+      return json({ profile: { first_name: firstName, gender, weight_kg: weightKg, height_cm: heightCm, training_location: trainingLocation, primary_goal: primaryGoal, training_days_per_week: trainingDays } });
+    }
+
+    if (path === '/api/auth/change-password' && method === 'POST') {
+      const session = await requireSession(request, env);
+      await applyRateLimit(request, db, 'change-password', 6);
+      const body = await readJson(request);
+      const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : '';
+      const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
+      if (!currentPassword || currentPassword.length > 128) throw new HttpError(400, 'Podaj obecne hasło.');
+      if (!validStrongPassword(newPassword)) throw new HttpError(400, 'Nowe hasło musi mieć od 8 do 128 znaków oraz zawierać wielką i małą literę, cyfrę i znak specjalny.');
+      if (currentPassword === newPassword) throw new HttpError(400, 'Nowe hasło musi być inne niż obecne.');
+      const user = await db.prepare('SELECT password_hash, password_salt FROM users WHERE id = ? LIMIT 1').bind(session.user_id).first<{ password_hash: string; password_salt: string }>();
+      if (!user || !(await passwordMatches(currentPassword, user.password_salt, user.password_hash, requirePasswordPepper(env)))) {
+        throw new HttpError(401, 'Obecne hasło jest nieprawidłowe.');
+      }
+      const { salt, hash } = await makePasswordHash(newPassword, requirePasswordPepper(env));
+      await db.prepare('UPDATE users SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?')
+        .bind(hash, salt, new Date().toISOString(), session.user_id).run();
+      return json({ ok: true });
+    }
+
     if (path === '/api/auth/register' && method === 'POST') {
       await applyRateLimit(request, db, 'register', 8);
       const body = await readJson(request);
       const email = normalizedEmail(stringField(body, 'email'));
       const password = typeof body.password === 'string' ? body.password : '';
       if (!validEmail(email)) throw new HttpError(400, 'Podaj prawidłowy adres e-mail.');
-      if (password.length < 10 || password.length > 128) throw new HttpError(400, 'Hasło musi mieć od 10 do 128 znaków.');
+      if (!validStrongPassword(password)) throw new HttpError(400, 'Hasło musi mieć od 8 do 128 znaków oraz zawierać wielką i małą literę, cyfrę i znak specjalny.');
       const existing = await db.prepare('SELECT id FROM users WHERE email = ? LIMIT 1').bind(email).first<{ id: string }>();
       if (existing) throw new HttpError(409, 'Konto z tym adresem e-mail już istnieje. Zaloguj się lub odzyskaj hasło.');
       const { salt, hash } = await makePasswordHash(password, requirePasswordPepper(env));
@@ -210,7 +266,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       const session = await requireSession(request, env);
       const [orders, entitlements, planRequests] = await Promise.all([
         db.prepare('SELECT id, order_number, status, total_amount, currency, created_at FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(session.user_id).all(),
-        db.prepare('SELECT id, product_title, product_type, access_status, created_at FROM user_entitlements WHERE user_id = ? ORDER BY created_at DESC LIMIT 100').bind(session.user_id).all(),
+        db.prepare('SELECT id, product_key, product_title, product_type, access_status, created_at FROM user_entitlements WHERE user_id = ? ORDER BY created_at DESC LIMIT 100').bind(session.user_id).all(),
         db.prepare('SELECT id, status, created_at FROM individual_plan_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(session.user_id).all(),
       ]);
       return json({ orders: orders.results, entitlements: entitlements.results, planRequests: planRequests.results });
