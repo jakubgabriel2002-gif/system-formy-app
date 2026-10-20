@@ -26,6 +26,9 @@ jobs:
           set -euo pipefail
 
           mkdir -p src public
+          cat > src/vite-env.d.ts <<'EOF'
+          /// <reference types="vite/client" />
+          EOF
 
           cat > package.json <<'EOF'
           {
