@@ -19,3 +19,5 @@ This starter includes a responsive landing page and challenge previews.
 
 Authentication, database, payments, admin tools, paid downloads,
 progress tracking, and custom training plans are not connected yet.
+
+<!-- Cloudflare deployment trigger check -->
