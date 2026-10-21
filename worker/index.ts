@@ -1,24 +1,25 @@
+import { handlePlatformApi } from './platform';
+
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
   AUTH_PASSWORD_PEPPER?: string;
+  ADMIN_EMAIL?: string;
+  PRODUCT_FILES?: R2Bucket;
 }
-
 type PublicUser = { id: string; email: string };
 type UserRow = PublicUser & { password_hash: string; password_salt: string };
 type SessionRow = { id: string; user_id: string; expires_at: number; email: string };
 type JsonRecord = Record<string, unknown>;
-
 const SESSION_COOKIE = 'sf_session';
-const SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
-// Cloudflare Workers WebCrypto caps PBKDF2 iterations at 100,000. Pepper is stored only as a Worker secret.
+const REMEMBER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const IDLE_TTL_MS = 10 * 60 * 1000;
 const PASSWORD_ITERATIONS = 100_000;
 
 class HttpError extends Error {
   status: number;
   constructor(status: number, message: string) { super(message); this.status = status; }
 }
-
 function json(data: unknown, status = 200, extraHeaders?: HeadersInit): Response {
   const headers = new Headers(extraHeaders);
   headers.set('Content-Type', 'application/json; charset=utf-8');
@@ -50,8 +51,7 @@ async function makePasswordHash(password: string, pepper: string, salt = randomT
 }
 async function passwordMatches(password: string, salt: string, expected: string, pepper: string): Promise<boolean> {
   const computed = await makePasswordHash(password, pepper, salt);
-  const left = new TextEncoder().encode(computed.hash);
-  const right = new TextEncoder().encode(expected);
+  const left = new TextEncoder().encode(computed.hash), right = new TextEncoder().encode(expected);
   if (left.length !== right.length) return false;
   let difference = 0;
   for (let i = 0; i < left.length; i += 1) difference |= left[i] ^ right[i];
@@ -61,14 +61,23 @@ function parseCookie(request: Request, name: string): string | null {
   const header = request.headers.get('Cookie') ?? '';
   for (const part of header.split(';')) {
     const index = part.indexOf('=');
-    if (index < 0) continue;
-    if (part.slice(0, index).trim() === name) return part.slice(index + 1).trim() || null;
+    if (index >= 0 && part.slice(0, index).trim() === name) return part.slice(index + 1).trim() || null;
   }
   return null;
 }
-function sessionCookie(request: Request, token: string, maxAgeSeconds = Math.floor(SESSION_TTL_MS / 1000)): string {
+function sessionCookie(request: Request, token: string, maxAgeSeconds: number): string {
   const secure = new URL(request.url).protocol === 'https:' ? '; Secure' : '';
   return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`;
+}
+function rememberFlagCookie(request: Request, rememberMe: boolean, maxAgeSeconds?: number): string {
+  const secure = new URL(request.url).protocol === 'https:' ? '; Secure' : '';
+  const ttl = maxAgeSeconds ?? Math.floor((rememberMe ? REMEMBER_TTL_MS : IDLE_TTL_MS) / 1000);
+  return `sf_remember=${rememberMe ? '1' : '0'}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${ttl}${secure}`;
+}
+function appendCookie(response: Response, cookie: string): Response {
+  const headers = new Headers(response.headers);
+  headers.append('Set-Cookie', cookie);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 async function readJson(request: Request): Promise<JsonRecord> {
   const type = request.headers.get('Content-Type') ?? '';
@@ -79,22 +88,16 @@ async function readJson(request: Request): Promise<JsonRecord> {
     return value as JsonRecord;
   } catch { throw new HttpError(400, 'Nie udało się odczytać danych formularza.'); }
 }
-function stringField(body: JsonRecord, key: string): string {
-  return typeof body[key] === 'string' ? (body[key] as string).trim() : '';
-}
+function stringField(body: JsonRecord, key: string): string { return typeof body[key] === 'string' ? (body[key] as string).trim() : ''; }
 function normalizedEmail(value: string): string { return value.trim().toLowerCase(); }
 function validEmail(value: string): boolean { return value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); }
-function validStrongPassword(value: string): boolean {
-  return value.length >= 8 && value.length <= 128 && /[A-Z]/.test(value) && /[a-z]/.test(value) && /[0-9]/.test(value) && /[^A-Za-z0-9\s]/.test(value);
-}
+function validStrongPassword(value: string): boolean { return value.length >= 8 && value.length <= 128 && /[A-Z]/.test(value) && /[a-z]/.test(value) && /[0-9]/.test(value) && /[^A-Za-z0-9\s]/.test(value); }
 function requireDb(env: Env): D1Database {
-  if (!env.DB) throw new HttpError(503, 'Baza D1 nie jest jeszcze podłączona do Workera. Wykonaj instrukcję konfiguracji Cloudflare.');
+  if (!env.DB) throw new HttpError(503, 'Baza danych nie jest skonfigurowana. Sprawdź binding DB w Cloudflare.');
   return env.DB;
 }
 function requirePasswordPepper(env: Env): string {
-  if (!env.AUTH_PASSWORD_PEPPER || env.AUTH_PASSWORD_PEPPER.length < 32) {
-    throw new HttpError(503, 'Logowanie nie jest jeszcze skonfigurowane. Dodaj sekret AUTH_PASSWORD_PEPPER zgodnie z README-CLOUDFLARE.md.');
-  }
+  if (!env.AUTH_PASSWORD_PEPPER || env.AUTH_PASSWORD_PEPPER.length < 32) throw new HttpError(503, 'Logowanie nie jest skonfigurowane. Sprawdź sekret AUTH_PASSWORD_PEPPER.');
   return env.AUTH_PASSWORD_PEPPER;
 }
 function safeFailure(error: unknown): Response {
@@ -102,89 +105,89 @@ function safeFailure(error: unknown): Response {
   console.error('System Formy API error:', error);
   return json({ error: 'Wystąpił błąd serwera. Sprawdź konfigurację i spróbuj ponownie.' }, 500);
 }
-
 async function applyRateLimit(request: Request, db: D1Database, route: string, limit: number): Promise<void> {
   const ip = request.headers.get('CF-Connecting-IP') ?? 'local-development';
   const scope = `${route}:${await sha256(ip)}`;
-  const now = Date.now();
-  const windowStart = now - 15 * 60 * 1000;
+  const now = Date.now(), windowStart = now - 15 * 60 * 1000;
   await db.prepare('DELETE FROM auth_rate_limit_events WHERE created_at < ?').bind(now - 24 * 60 * 60 * 1000).run();
   const row = await db.prepare('SELECT COUNT(*) AS total FROM auth_rate_limit_events WHERE scope = ? AND created_at >= ?').bind(scope, windowStart).first<{ total: number }>();
   if ((row?.total ?? 0) >= limit) throw new HttpError(429, 'Wykonano zbyt wiele prób. Odczekaj 15 minut i spróbuj ponownie.');
   await db.prepare('INSERT INTO auth_rate_limit_events (scope, created_at) VALUES (?, ?)').bind(scope, now).run();
 }
-
 async function currentSession(request: Request, env: Env): Promise<SessionRow | null> {
   const token = parseCookie(request, SESSION_COOKIE);
   if (!token) return null;
-  const db = requireDb(env);
-  const tokenHash = await sha256(token);
+  const db = requireDb(env), tokenHash = await sha256(token), now = Date.now();
   const row = await db.prepare(`SELECT s.id, s.user_id, s.expires_at, u.email
     FROM auth_sessions s JOIN users u ON u.id = s.user_id
-    WHERE s.token_hash = ? AND s.expires_at > ? LIMIT 1`).bind(tokenHash, Date.now()).first<SessionRow>();
-  if (!row) {
-    await db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(tokenHash).run();
-    return null;
-  }
-  return row;
+    WHERE s.token_hash = ? AND s.expires_at > ? LIMIT 1`).bind(tokenHash, now).first<SessionRow>();
+  if (!row) await db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(tokenHash).run();
+  return row ?? null;
 }
 async function requireSession(request: Request, env: Env): Promise<SessionRow> {
   const session = await currentSession(request, env);
   if (!session) throw new HttpError(401, 'Sesja wygasła. Zaloguj się ponownie.');
   return session;
 }
-async function createSession(request: Request, env: Env, user: PublicUser): Promise<Response> {
-  const db = requireDb(env);
-  const token = randomToken(32);
-  const now = Date.now();
+async function createSession(request: Request, env: Env, user: PublicUser, rememberMe = false): Promise<Response> {
+  const db = requireDb(env), token = randomToken(32), now = Date.now();
+  const ttl = rememberMe ? REMEMBER_TTL_MS : IDLE_TTL_MS;
+  // Do not depend on an optional remember_me database column. The flag lives in a separate
+  // HttpOnly cookie, keeping this code compatible with existing and freshly migrated D1 schemas.
   await db.prepare('INSERT INTO auth_sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(crypto.randomUUID(), user.id, await sha256(token), now + SESSION_TTL_MS, new Date(now).toISOString()).run();
-  return json({ user }, 200, { 'Set-Cookie': sessionCookie(request, token) });
+    .bind(crypto.randomUUID(), user.id, await sha256(token), now + ttl, new Date(now).toISOString()).run();
+  const response = json({ user }, 200, { 'Set-Cookie': sessionCookie(request, token, Math.floor(ttl / 1000)) });
+  return appendCookie(response, rememberFlagCookie(request, rememberMe));
 }
-
+async function refreshRollingSessionCookie(request: Request, env: Env, response: Response): Promise<Response> {
+  const token = parseCookie(request, SESSION_COOKIE);
+  if (!token || !new URL(request.url).pathname.startsWith('/api/')) return response;
+  try {
+    const tokenHash = await sha256(token), now = Date.now(), db = requireDb(env);
+    const row = await db.prepare('SELECT id FROM auth_sessions WHERE token_hash = ? AND expires_at > ? LIMIT 1')
+      .bind(tokenHash, now).first<{ id: string }>();
+    if (!row) return response;
+    const rememberMe = parseCookie(request, 'sf_remember') === '1';
+    const ttl = rememberMe ? REMEMBER_TTL_MS : IDLE_TTL_MS;
+    await db.prepare('UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ? AND expires_at > ?').bind(now + ttl, tokenHash, now).run();
+    let refreshed = appendCookie(response, sessionCookie(request, token, Math.floor(ttl / 1000)));
+    refreshed = appendCookie(refreshed, rememberFlagCookie(request, rememberMe));
+    return refreshed;
+  } catch { return response; }
+}
 async function handleApi(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const path = url.pathname;
-  const method = request.method.toUpperCase();
-
+  const url = new URL(request.url), path = url.pathname, method = request.method.toUpperCase();
   if (path === '/api/health' && method === 'GET') {
     try {
-      const db = requireDb(env);
-      await db.prepare('SELECT 1 AS ok').first();
-      return json({ ok: true, database: 'connected', passwordAuthConfigured: Boolean(env.AUTH_PASSWORD_PEPPER && env.AUTH_PASSWORD_PEPPER.length >= 32), passwordRecovery: 'manual-email' });
+      const db = requireDb(env); await db.prepare('SELECT 1 AS ok').first();
+      return json({ ok: true, database: 'connected', passwordAuthConfigured: Boolean(env.AUTH_PASSWORD_PEPPER && env.AUTH_PASSWORD_PEPPER.length >= 32), productFilesConfigured: Boolean(env.PRODUCT_FILES), adminConfigured: Boolean(env.ADMIN_EMAIL) });
     } catch (error) { return safeFailure(error); }
   }
-
   if (!path.startsWith('/api/')) return env.ASSETS.fetch(request);
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     const origin = request.headers.get('Origin');
     if (origin && origin !== url.origin) return json({ error: 'Żądanie pochodzi z nieprawidłowej strony.' }, 403);
   }
-
   try {
     const db = requireDb(env);
     if (path === '/api/auth/me' && method === 'GET') {
       const session = await currentSession(request, env);
       return json({ user: session ? { id: session.user_id, email: session.email } : null });
     }
-
     if (path === '/api/account/profile' && method === 'GET') {
       const session = await requireSession(request, env);
       const row = await db.prepare(`SELECT first_name, gender, weight_kg, height_cm, training_location, primary_goal, training_days_per_week
-        FROM user_profiles WHERE user_id = ? LIMIT 1`).bind(session.user_id).first();
-      return json({ profile: row ?? { first_name: '', gender: '', weight_kg: null, height_cm: null, training_location: '', primary_goal: '', training_days_per_week: null } });
+        FROM user_profiles WHERE user_id = ? LIMIT 1`).bind(session.user_id).first<{
+          first_name: string; gender: string; weight_kg: number | null; height_cm: number | null; training_location: string; primary_goal: string; training_days_per_week: number | null;
+        }>();
+      return json({ has_profile: Boolean(row), profile: row ?? { first_name: '', gender: '', weight_kg: null, height_cm: null, training_location: '', primary_goal: '', training_days_per_week: null } });
     }
-
     if (path === '/api/account/profile' && method === 'PUT') {
-      const session = await requireSession(request, env);
-      const body = await readJson(request);
-      const firstName = stringField(body, 'first_name');
-      const gender = stringField(body, 'gender');
-      const trainingLocation = stringField(body, 'training_location');
-      const primaryGoal = stringField(body, 'primary_goal');
-      const weightKg = body.weight_kg === null || body.weight_kg === '' || typeof body.weight_kg === 'undefined' ? null : Number(body.weight_kg);
-      const heightCm = body.height_cm === null || body.height_cm === '' || typeof body.height_cm === 'undefined' ? null : Number(body.height_cm);
-      const trainingDays = body.training_days_per_week === null || body.training_days_per_week === '' || typeof body.training_days_per_week === 'undefined' ? null : Number(body.training_days_per_week);
+      const session = await requireSession(request, env), body = await readJson(request);
+      const firstName = stringField(body, 'first_name'), gender = stringField(body, 'gender'), trainingLocation = stringField(body, 'training_location'), primaryGoal = stringField(body, 'primary_goal');
+      const weightKg = body.weight_kg == null || body.weight_kg === '' ? null : Number(body.weight_kg);
+      const heightCm = body.height_cm == null || body.height_cm === '' ? null : Number(body.height_cm);
+      const trainingDays = body.training_days_per_week == null || body.training_days_per_week === '' ? null : Number(body.training_days_per_week);
       if (firstName.length > 80) throw new HttpError(400, 'Imię może mieć maksymalnie 80 znaków.');
       if (!['', 'female', 'male', 'other', 'prefer_not_to_say'].includes(gender)) throw new HttpError(400, 'Wybierz prawidłową wartość pola płci.');
       if (!['', 'gym', 'home', 'both'].includes(trainingLocation)) throw new HttpError(400, 'Wybierz prawidłowe miejsce treningu.');
@@ -195,73 +198,50 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       const now = new Date().toISOString();
       await db.prepare(`INSERT INTO user_profiles (user_id, first_name, gender, weight_kg, height_cm, training_location, primary_goal, training_days_per_week, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET first_name = excluded.first_name, gender = excluded.gender, weight_kg = excluded.weight_kg,
-        height_cm = excluded.height_cm, training_location = excluded.training_location, primary_goal = excluded.primary_goal,
-        training_days_per_week = excluded.training_days_per_week, updated_at = excluded.updated_at`)
+        ON CONFLICT(user_id) DO UPDATE SET first_name=excluded.first_name, gender=excluded.gender, weight_kg=excluded.weight_kg,
+        height_cm=excluded.height_cm, training_location=excluded.training_location, primary_goal=excluded.primary_goal,
+        training_days_per_week=excluded.training_days_per_week, updated_at=excluded.updated_at`)
         .bind(session.user_id, firstName, gender, weightKg, heightCm, trainingLocation, primaryGoal, trainingDays, now, now).run();
-      return json({ profile: { first_name: firstName, gender, weight_kg: weightKg, height_cm: heightCm, training_location: trainingLocation, primary_goal: primaryGoal, training_days_per_week: trainingDays } });
+      return json({ has_profile: true, profile: { first_name: firstName, gender, weight_kg: weightKg, height_cm: heightCm, training_location: trainingLocation, primary_goal: primaryGoal, training_days_per_week: trainingDays } });
     }
-
     if (path === '/api/auth/change-password' && method === 'POST') {
-      const session = await requireSession(request, env);
-      await applyRateLimit(request, db, 'change-password', 6);
-      const body = await readJson(request);
-      const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : '';
-      const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
+      const session = await requireSession(request, env); await applyRateLimit(request, db, 'change-password', 6);
+      const body = await readJson(request), currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : '', newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
       if (!currentPassword || currentPassword.length > 128) throw new HttpError(400, 'Podaj obecne hasło.');
       if (!validStrongPassword(newPassword)) throw new HttpError(400, 'Nowe hasło musi mieć od 8 do 128 znaków oraz zawierać wielką i małą literę, cyfrę i znak specjalny.');
       if (currentPassword === newPassword) throw new HttpError(400, 'Nowe hasło musi być inne niż obecne.');
       const user = await db.prepare('SELECT password_hash, password_salt FROM users WHERE id = ? LIMIT 1').bind(session.user_id).first<{ password_hash: string; password_salt: string }>();
-      if (!user || !(await passwordMatches(currentPassword, user.password_salt, user.password_hash, requirePasswordPepper(env)))) {
-        throw new HttpError(401, 'Obecne hasło jest nieprawidłowe.');
-      }
+      if (!user || !(await passwordMatches(currentPassword, user.password_salt, user.password_hash, requirePasswordPepper(env)))) throw new HttpError(401, 'Obecne hasło jest nieprawidłowe.');
       const { salt, hash } = await makePasswordHash(newPassword, requirePasswordPepper(env));
-      await db.prepare('UPDATE users SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?')
-        .bind(hash, salt, new Date().toISOString(), session.user_id).run();
-      return json({ ok: true });
+      await db.prepare('UPDATE users SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?').bind(hash, salt, new Date().toISOString(), session.user_id).run();
+      await db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').bind(session.user_id).run();
+      return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(request, '', 0) });
     }
-
     if (path === '/api/auth/register' && method === 'POST') {
       await applyRateLimit(request, db, 'register', 8);
-      const body = await readJson(request);
-      const email = normalizedEmail(stringField(body, 'email'));
-      const password = typeof body.password === 'string' ? body.password : '';
+      const body = await readJson(request), email = normalizedEmail(stringField(body, 'email')), password = typeof body.password === 'string' ? body.password : '';
       if (!validEmail(email)) throw new HttpError(400, 'Podaj prawidłowy adres e-mail.');
-      if (!validStrongPassword(password)) throw new HttpError(400, 'Hasło musi mieć od 8 do 128 znaków oraz zawierać wielką i małą literę, cyfrę i znak specjalny.');
-      const existing = await db.prepare('SELECT id FROM users WHERE email = ? LIMIT 1').bind(email).first<{ id: string }>();
-      if (existing) throw new HttpError(409, 'Konto z tym adresem e-mail już istnieje. Zaloguj się lub odzyskaj hasło.');
-      const { salt, hash } = await makePasswordHash(password, requirePasswordPepper(env));
-      const user = { id: crypto.randomUUID(), email };
-      const now = new Date().toISOString();
-      await db.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(user.id, email, hash, salt, now, now).run();
-      return createSession(request, env, user);
+      if (!validStrongPassword(password)) throw new HttpError(400, 'Hasło musi mieć od 8 do 128 znaków i zawierać wielką oraz małą literę, cyfrę i znak specjalny.');
+      if (await db.prepare('SELECT id FROM users WHERE email = ? LIMIT 1').bind(email).first()) throw new HttpError(409, 'Konto z tym adresem e-mail już istnieje.');
+      const { salt, hash } = await makePasswordHash(password, requirePasswordPepper(env)), user = { id: crypto.randomUUID(), email }, now = new Date().toISOString();
+      await db.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(user.id, email, hash, salt, now, now).run();
+      return createSession(request, env, user, false);
     }
-
     if (path === '/api/auth/login' && method === 'POST') {
       await applyRateLimit(request, db, 'login', 12);
-      const body = await readJson(request);
-      const email = normalizedEmail(stringField(body, 'email'));
-      const password = typeof body.password === 'string' ? body.password : '';
+      const body = await readJson(request), email = normalizedEmail(stringField(body, 'email')), password = typeof body.password === 'string' ? body.password : '', rememberMe = body.rememberMe === true;
       if (!validEmail(email) || !password || password.length > 128) throw new HttpError(400, 'Podaj prawidłowy e-mail i hasło.');
-      const pepper = requirePasswordPepper(env);
-      const user = await db.prepare('SELECT id, email, password_hash, password_salt FROM users WHERE email = ? LIMIT 1').bind(email).first<UserRow>();
-      // Do comparable password-hash work for unknown emails to reduce account-enumeration timing differences.
-      if (!user) {
-        await makePasswordHash(password, pepper, 'AAAAAAAAAAAAAAAAAAAAAA');
-        throw new HttpError(401, 'Nieprawidłowy e-mail lub hasło.');
-      }
-      const matches = await passwordMatches(password, user.password_salt, user.password_hash, pepper);
-      if (!matches) throw new HttpError(401, 'Nieprawidłowy e-mail lub hasło.');
-      return createSession(request, env, publicUser(user));
+      const pepper = requirePasswordPepper(env), user = await db.prepare('SELECT id, email, password_hash, password_salt FROM users WHERE email = ? LIMIT 1').bind(email).first<UserRow>();
+      if (!user) { await makePasswordHash(password, pepper, 'AAAAAAAAAAAAAAAAAAAAAA'); throw new HttpError(401, 'Nieprawidłowy e-mail lub hasło.'); }
+      if (!(await passwordMatches(password, user.password_salt, user.password_hash, pepper))) throw new HttpError(401, 'Nieprawidłowy e-mail lub hasło.');
+      return createSession(request, env, publicUser(user), rememberMe);
     }
-
     if (path === '/api/auth/logout' && method === 'POST') {
       const token = parseCookie(request, SESSION_COOKIE);
       if (token) await db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(await sha256(token)).run();
-      return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(request, '', 0) });
+      const response = json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(request, '', 0) });
+      return appendCookie(response, rememberFlagCookie(request, false, 0));
     }
-
     if (path === '/api/account/overview' && method === 'GET') {
       const session = await requireSession(request, env);
       const [orders, entitlements, planRequests] = await Promise.all([
@@ -271,7 +251,6 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       ]);
       return json({ orders: orders.results, entitlements: entitlements.results, planRequests: planRequests.results });
     }
-
     return json({ error: 'Nie znaleziono takiego endpointu API.' }, 404);
   } catch (error) { return safeFailure(error); }
 }
@@ -279,7 +258,9 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname.startsWith('/api/')) return handleApi(request, env);
-    return env.ASSETS.fetch(request);
+    if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
+    const platformResponse = await handlePlatformApi(request, env);
+    const response = platformResponse ?? await handleApi(request, env);
+    return refreshRollingSessionCookie(request, env, response);
   },
 };
