@@ -1,4 +1,4 @@
-interface PlatformEnv { DB: D1Database; PRODUCT_FILES?: R2Bucket; ADMIN_EMAIL?: string; }
+interface PlatformEnv { DB: D1Database; PRODUCT_FILES?: R2Bucket; ADMIN_EMAIL?: string; STRIPE_SECRET_KEY?: string; STRIPE_WEBHOOK_SECRET?: string; }
 type Session = { id: string; email: string };
 type Body = Record<string, unknown>;
 type Product = { id:string;product_key:string;title:string;description:string;product_type:string;price_amount:number;currency:string;is_free:number;is_published:number;checkout_url:string|null;file_key:string;original_filename:string;file_content_type:string;created_at:string;updated_at:string };
@@ -14,10 +14,70 @@ function field(b:Body,k:string,max=2000):string{const x=typeof b[k]==='string'?(
 async function product(e:PlatformEnv,k:string):Promise<Product|null>{return e.DB.prepare('SELECT * FROM products WHERE product_key=? LIMIT 1').bind(k).first<Product>();}
 async function adminGate(r:Request,e:PlatformEnv){const s=await sessionFor(r,e);if(!s)return{session:null,response:reply({error:'Zaloguj się ponownie.'},401)};if(!isAdmin(s,e))return{session:s,response:reply({error:'Ta funkcja jest dostępna wyłącznie dla administratora.'},403)};return{session:s,response:null};}
 function safeFileName(n:string):string{return(n.split(/[\\/]/).pop()||'material').normalize('NFKD').replace(/[^\w.\- ]/g,'').trim().replace(/\s+/g,'_').slice(0,140)||'material';}
+function fromHex(value: string): Uint8Array { const clean = value.trim(); if (!/^(?:[0-9a-f]{2})+$/i.test(clean)) return new Uint8Array(); return Uint8Array.from(clean.match(/.{2}/g) || [], (x) => parseInt(x, 16)); }
+async function verifyStripeSignature(raw: string, header: string | null, secret: string): Promise<boolean> {
+ if (!header) return false;
+ const parts = header.split(',').map((item) => item.trim().split('='));
+ const timestamp = parts.find(([key]) => key === 't')?.[1];
+ const signatures = parts.filter(([key]) => key === 'v1').map(([, value]) => value || '');
+ if (!timestamp || !/^\d+$/.test(timestamp) || !signatures.length) return false;
+ if (Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp)) > 300) return false;
+ const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+ const message = new TextEncoder().encode(`${timestamp}.${raw}`);
+ for (const signature of signatures) { const bytes = fromHex(signature); if (bytes.length && await crypto.subtle.verify('HMAC', key, bytes, message)) return true; }
+ return false;
+}
 export async function handlePlatformApi(request:Request,env:PlatformEnv):Promise<Response|null>{
  const path=new URL(request.url).pathname,method=request.method.toUpperCase();
- if(badOrigin(request))return reply({error:'Żądanie pochodzi z nieprawidłowej strony.'},403);
- try{
+  if(path==='/api/stripe/webhook' && method==='POST') {
+   if(!env.STRIPE_WEBHOOK_SECRET)return reply({error:'Webhook Stripe nie jest skonfigurowany.'},503);
+   const raw=await request.text();
+   if(!(await verifyStripeSignature(raw,request.headers.get('Stripe-Signature'),env.STRIPE_WEBHOOK_SECRET)))return reply({error:'Nieprawidłowy podpis webhooka Stripe.'},400);
+   let event:Record<string,any>;try{event=JSON.parse(raw) as Record<string,any>;}catch{return reply({error:'Nieprawidłowe zdarzenie Stripe.'},400);}
+   const eventId=typeof event.id==='string'?event.id:'',eventType=typeof event.type==='string'?event.type:'';
+   if(!eventId)return reply({error:'Brak identyfikatora zdarzenia Stripe.'},400);
+   if(eventType!=='checkout.session.completed'&&eventType!=='checkout.session.async_payment_succeeded')return reply({received:true,ignored:true});
+   const checkout=event.data?.object as Record<string,any>|undefined;
+   if(!checkout||checkout.object!=='checkout.session'||checkout.mode!=='payment'||checkout.payment_status!=='paid')return reply({received:true,ignored:true});
+   const userId=typeof checkout.metadata?.user_id==='string'?checkout.metadata.user_id:'',key=typeof checkout.metadata?.product_key==='string'?checkout.metadata.product_key:'',sessionId=typeof checkout.id==='string'?checkout.id:'',expectedAmount=Number(checkout.metadata?.unit_amount_cents);
+   const amount=Number(checkout.amount_total),currency=typeof checkout.currency==='string'?checkout.currency.toUpperCase():'PLN';
+   if(!userId||!key||!sessionId||!Number.isFinite(amount)||amount<=0)return reply({error:'Brak danych zamówienia w sesji Stripe.'},400);
+   const priorEvent=await env.DB.prepare('SELECT event_id FROM stripe_webhook_events WHERE event_id=? LIMIT 1').bind(eventId).first<{event_id:string}>();
+   if(priorEvent)return reply({received:true,duplicate:true});
+   const existingOrder=await env.DB.prepare('SELECT id FROM orders WHERE order_number=? LIMIT 1').bind(`STRIPE-${sessionId}`).first<{id:string}>();
+   const user=await env.DB.prepare('SELECT id FROM users WHERE id=? LIMIT 1').bind(userId).first<{id:string}>();
+   const item=await env.DB.prepare('SELECT id,product_key,title,product_type,is_free,price_amount,currency FROM products WHERE product_key=? LIMIT 1').bind(key).first<{id:string;product_key:string;title:string;product_type:string;is_free:number;price_amount:number;currency:string}>();
+   if(!user||!item||String(checkout.client_reference_id||'')!==userId||String(checkout.metadata?.product_id||'')!==item.id||currency!==(item.currency||'PLN').toUpperCase())return reply({error:'Nie udało się dopasować opłaconej sesji do użytkownika lub produktu.'},400);
+   if(!Number.isFinite(expectedAmount)||expectedAmount<=0||expectedAmount!==amount)return reply({error:'Kwota płatności nie zgadza się z ceną zapisaną w sesji.'},400);
+   const now=new Date().toISOString();
+   if(existingOrder){await env.DB.prepare('INSERT INTO stripe_webhook_events (event_id,event_type,received_at) VALUES (?,?,?)').bind(eventId,eventType,now).run();return reply({received:true,duplicate:true});}
+   const orderId=crypto.randomUUID(),entitlement=await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(userId,key).first<{id:string}>();
+   const stmts:D1PreparedStatement[]=[
+    env.DB.prepare('INSERT INTO stripe_webhook_events (event_id,event_type,received_at) VALUES (?,?,?)').bind(eventId,eventType,now),
+    env.DB.prepare("INSERT INTO orders (id,user_id,order_number,status,total_amount,currency,created_at,updated_at) VALUES (?,?,?,'paid',?,?,?,?)").bind(orderId,userId,`STRIPE-${sessionId}`,amount/100,currency,now,now),
+    env.DB.prepare('INSERT INTO order_items (id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES (?,?,?,?,?,1,?,?)').bind(crypto.randomUUID(),orderId,key,item.title,item.product_type,amount/100,now)
+   ];
+   if(!entitlement)stmts.push(env.DB.prepare("INSERT INTO user_entitlements (id,user_id,order_id,product_key,product_title,product_type,access_status,created_at) VALUES (?,?,?,?,?,?,'active',?)").bind(crypto.randomUUID(),userId,orderId,key,item.title,item.product_type,now));
+   await env.DB.batch(stmts);return reply({received:true,paid:true});
+  }
+  if(badOrigin(request))return reply({error:'Żądanie pochodzi z nieprawidłowej strony.'},403);
+  try {
+  if(path==='/api/checkout/session' && method==='POST'){
+   const s=await sessionFor(request,env);if(!s)return reply({error:'Zaloguj się, aby kupić produkt.'},401);
+   if(!env.STRIPE_SECRET_KEY||!env.STRIPE_WEBHOOK_SECRET)return reply({error:'Płatności Stripe nie są w pełni skonfigurowane. Sprzedaż zostanie uruchomiona po ustawieniu klucza API i webhooka.'},503);
+   const b=await readBody(request),key=field(b,'product_key',100);if(!key)return reply({error:'Brak klucza produktu.'},400);
+   const p=await product(env,key);if(!p||!p.is_published)return reply({error:'Produkt nie jest dostępny.'},404);if(p.is_free)return reply({error:'Ten produkt jest bezpłatny — użyj opcji odbioru.'},400);
+   if(!Number.isFinite(Number(p.price_amount))||Number(p.price_amount)<=0)return reply({error:'Produkt nie ma prawidłowej ceny.'},400);
+   const origin=new URL(request.url).origin,form=new URLSearchParams();
+   form.set('mode','payment');form.set('success_url',`${origin}/?payment=success&session_id={CHECKOUT_SESSION_ID}`);form.set('cancel_url',`${origin}/?payment=cancelled`);form.set('client_reference_id',s.id);form.set('customer_email',s.email);
+   form.set('line_items[0][price_data][currency]',(p.currency||'PLN').toLowerCase());form.set('line_items[0][price_data][unit_amount]',String(Math.round(Number(p.price_amount)*100)));form.set('line_items[0][price_data][product_data][name]',p.title);form.set('line_items[0][quantity]','1');
+   if(p.description)form.set('line_items[0][price_data][product_data][description]',p.description.slice(0,500));
+   form.set('metadata[user_id]',s.id);form.set('metadata[product_key]',p.product_key);form.set('metadata[product_id]',p.id);form.set('metadata[unit_amount_cents]',String(Math.round(Number(p.price_amount)*100)));
+   form.set('payment_intent_data[metadata][user_id]',s.id);form.set('payment_intent_data[metadata][product_key]',p.product_key);
+   const response=await fetch('https://api.stripe.com/v1/checkout/sessions',{method:'POST',headers:{Authorization:`Bearer ${env.STRIPE_SECRET_KEY}`,'Content-Type':'application/x-www-form-urlencoded'},body:form.toString()});
+   const payload=await response.json() as Record<string,any>;if(!response.ok||typeof payload.url!=='string')return reply({error:typeof payload.error?.message==='string'?'Stripe: '+payload.error.message:'Nie udało się utworzyć sesji płatności Stripe.'},502);
+   return reply({url:payload.url,session_id:payload.id});
+  }
   if(path==='/api/products'&&method==='GET'){
    const rows=await env.DB.prepare('SELECT id,product_key,title,description,product_type,price_amount,currency,is_free,is_published,checkout_url,created_at FROM products WHERE is_published=1 ORDER BY created_at DESC').all();return reply({products:rows.results});
   }
@@ -25,6 +85,13 @@ export async function handlePlatformApi(request:Request,env:PlatformEnv):Promise
   if(path==='/api/admin/products'&&method==='GET'){
    const g=await adminGate(request,env);if(g.response)return g.response;
    const rows=await env.DB.prepare('SELECT id,product_key,title,description,product_type,price_amount,currency,is_free,is_published,checkout_url,original_filename,created_at FROM products ORDER BY created_at DESC').all();return reply({products:rows.results});
+  }
+  if(path==='/api/admin/files'&&method==='GET'){
+   const g=await adminGate(request,env);if(g.response)return g.response;
+   if(!env.PRODUCT_FILES)return reply({error:'Magazyn plików R2 nie jest skonfigurowany.'},503);
+   const result=await env.PRODUCT_FILES.list({limit:1000});
+   const files=result.objects.filter((obj)=>/\.(pdf|xlsx|docx|zip|csv|txt)$/i.test(obj.key)&&obj.size>0&&obj.size<=MAX_FILE_BYTES).map((obj)=>({key:obj.key,name:(obj.key.split('/').pop()||obj.key),size:obj.size,uploaded:obj.uploaded.toISOString()}));
+   return reply({files,truncated:result.truncated});
   }
   const updateMatch=path.match(/^\/api\/admin\/products\/([a-z0-9-]+)$/);
   if(updateMatch&&method==='PATCH'){
@@ -45,21 +112,34 @@ export async function handlePlatformApi(request:Request,env:PlatformEnv):Promise
   }
   if(path==='/api/admin/products'&&method==='POST'){
    const g=await adminGate(request,env);if(g.response)return g.response;if(!env.PRODUCT_FILES)return reply({error:'Magazyn plików R2 nie jest skonfigurowany. Utwórz bucket i dodaj binding PRODUCT_FILES.'},503);
-   const f=await request.formData(),title=String(f.get('title')||'').trim(),key=String(f.get('product_key')||'').trim().toLowerCase(),description=String(f.get('description')||'').trim(),type=String(f.get('product_type')||'ebook'),free=String(f.get('is_free')||'')==='true',published=String(f.get('is_published')||'')==='true',price=Number(f.get('price_amount')||0),checkout=String(f.get('checkout_url')||'').trim(),file=f.get('file');
-   if(title.length<2||title.length>140)return reply({error:'Nazwa produktu musi mieć 2–140 znaków.'},400);
-   if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(key)||key.length>100)return reply({error:'Klucz produktu używa małych liter, cyfr i myślników, np. zacznij-trenowac.'},400);
-   if(description.length<2||description.length>2000)return reply({error:'Opis musi mieć 2–2000 znaków.'},400);
-   if(!['ebook','training_plan','guide','bundle','other'].includes(type))return reply({error:'Nieprawidłowy typ produktu.'},400);
-   if(!free&&(!Number.isFinite(price)||price<=0||price>100000))return reply({error:'Cena płatnego produktu musi być większa od zera.'},400);
-   if(checkout){try{if(new URL(checkout).protocol!=='https:')throw new Error();}catch{return reply({error:'Link zakupu musi być prawidłowym adresem HTTPS.'},400);}}
-   if(!(file instanceof File)||!file.size||file.size>MAX_FILE_BYTES)return reply({error:'Wybierz plik o rozmiarze do 25 MB.'},400);
-   if(!/\.(pdf|xlsx|docx|zip|csv|txt)$/i.test(file.name))return reply({error:'Dozwolone formaty: PDF, XLSX, DOCX, ZIP, CSV i TXT.'},400);
-   if(await product(env,key))return reply({error:'Produkt o takim kluczu już istnieje. Użyj innego klucza.'},409);
-   const fileKey='products/'+crypto.randomUUID()+'/'+safeFileName(file.name),contentType=file.type||'application/octet-stream';
-   await env.PRODUCT_FILES.put(fileKey,await file.arrayBuffer(),{httpMetadata:{contentType,cacheControl:'private, no-store'}});
-   const id=crypto.randomUUID(),now=new Date().toISOString();
-   try{await env.DB.prepare('INSERT INTO products (id,product_key,title,description,product_type,price_amount,currency,is_free,is_published,checkout_url,file_key,original_filename,file_content_type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,key,title,description,type,free?0:price,'PLN',free?1:0,published?1:0,checkout||null,fileKey,file.name,contentType,now,now).run();}
-   catch(err){await env.PRODUCT_FILES.delete(fileKey);throw err;}
+    const f=await request.formData(),title=String(f.get('title')||'').trim(),key=String(f.get('product_key')||'').trim().toLowerCase(),description=String(f.get('description')||'').trim(),type=String(f.get('product_type')||'ebook'),free=String(f.get('is_free')||'')==='true',published=String(f.get('is_published')||'')==='true',price=Number(f.get('price_amount')||0),checkout=String(f.get('checkout_url')||'').trim(),file=f.get('file'),existingFileKey=String(f.get('existing_file_key')||'').trim();
+    if(title.length<2||title.length>140)return reply({error:'Nazwa produktu musi mieć 2–140 znaków.'},400);
+    if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(key)||key.length>100)return reply({error:'Klucz produktu używa małych liter, cyfr i myślników, np. zacznij-trenowac.'},400);
+    if(description.length<2||description.length>2000)return reply({error:'Opis musi mieć 2–2000 znaków.'},400);
+    if(!['ebook','training_plan','guide','bundle','other'].includes(type))return reply({error:'Nieprawidłowy typ produktu.'},400);
+    if(!free&&(!Number.isFinite(price)||price<=0||price>100000))return reply({error:'Cena płatnego produktu musi być większa od zera.'},400);
+    if(checkout){try{if(new URL(checkout).protocol!=='https:')throw new Error();}catch{return reply({error:'Link zakupu musi być prawidłowym adresem HTTPS.'},400);}}
+    if(await product(env,key))return reply({error:'Produkt o takim kluczu już istnieje. Użyj innego klucza.'},409);
+    const selectedExisting=Boolean(existingFileKey),selectedNew=file instanceof File&&file.size>0;
+    if(selectedExisting&&selectedNew)return reply({error:'Wybierz plik z R2 albo prześlij nowy plik — nie oba naraz.'},400);
+    if(!selectedExisting&&!selectedNew)return reply({error:'Wybierz istniejący plik z R2 albo prześlij nowy plik.'},400);
+    let fileKey='',originalFilename='',contentType='application/octet-stream',uploadedNewFile=false;
+    if(selectedExisting){
+     if(existingFileKey.length>1024||existingFileKey.startsWith('/')||existingFileKey.includes('..')||existingFileKey.includes('\\'))return reply({error:'Nieprawidłowa ścieżka istniejącego pliku.'},400);
+     const object=await env.PRODUCT_FILES.get(existingFileKey);if(!object)return reply({error:'Wybrany plik nie istnieje już w R2.'},404);
+     originalFilename=safeFileName(existingFileKey.split('/').pop()||'material');
+     if(!/\.(pdf|xlsx|docx|zip|csv|txt)$/i.test(originalFilename))return reply({error:'Wybrany plik ma niedozwolony format.'},400);
+     if(object.size>MAX_FILE_BYTES)return reply({error:'Wybrany plik przekracza limit 25 MB.'},400);
+     fileKey=existingFileKey;contentType=object.httpMetadata?.contentType||'application/octet-stream';
+    }else{
+     if(!(file instanceof File)||file.size>MAX_FILE_BYTES)return reply({error:'Wybierz plik o rozmiarze do 25 MB.'},400);
+     if(!/\.(pdf|xlsx|docx|zip|csv|txt)$/i.test(file.name))return reply({error:'Dozwolone formaty: PDF, XLSX, DOCX, ZIP, CSV i TXT.'},400);
+     fileKey='products/'+crypto.randomUUID()+'/'+safeFileName(file.name);originalFilename=file.name;contentType=file.type||'application/octet-stream';
+     await env.PRODUCT_FILES.put(fileKey,await file.arrayBuffer(),{httpMetadata:{contentType,cacheControl:'private, no-store'}});uploadedNewFile=true;
+    }
+    const id=crypto.randomUUID(),now=new Date().toISOString();
+    try{await env.DB.prepare('INSERT INTO products (id,product_key,title,description,product_type,price_amount,currency,is_free,is_published,checkout_url,file_key,original_filename,file_content_type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,key,title,description,type,free?0:price,'PLN',free?1:0,published?1:0,checkout||null,fileKey,originalFilename,contentType,now,now).run();}
+    catch(err){if(uploadedNewFile)await env.PRODUCT_FILES.delete(fileKey);throw err;}
    return reply({ok:true,product:await product(env,key)},201);
   }
   const match=path.match(/^\/api\/products\/([a-z0-9-]+)\/(claim|download)$/);

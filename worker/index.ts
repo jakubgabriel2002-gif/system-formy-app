@@ -6,6 +6,8 @@ interface Env {
   AUTH_PASSWORD_PEPPER?: string;
   ADMIN_EMAIL?: string;
   PRODUCT_FILES?: R2Bucket;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
 }
 type PublicUser = { id: string; email: string };
 type UserRow = PublicUser & { password_hash: string; password_salt: string };
