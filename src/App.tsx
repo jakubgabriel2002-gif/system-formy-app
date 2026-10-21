@@ -1,66 +1,37 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
-  ArrowDownRight, ArrowRight, ArrowUpRight, BookOpen, CheckCircle2, ChevronRight,
-  ClipboardList, Crown, Dumbbell, FileText, Flame, Headphones, KeyRound, LockKeyhole, LogOut,
-  Mail, Menu, Save, ShieldCheck, ShoppingBag, UserRound, X,
+  ArrowDownToLine, ArrowRight, ArrowUpRight, BarChart3, BookOpen, CheckCircle2, ChevronRight,
+  ClipboardList, Crown, Download, Dumbbell, FileText, Flame, KeyRound, LayoutDashboard,
+  LockKeyhole, LogOut, Mail, Menu, Plus, Save, ShieldCheck, ShoppingBag, TrendingUp,
+  Upload, UserRound, X,
 } from 'lucide-react';
 
-type CategoryKey = 'wyzwania' | 'produkty' | 'plan' | 'prowadzenie' | 'program' | 'premium';
-type OfferItem = { title: string; type: string; description: string; meta: string; icon: typeof Dumbbell; details: string[] };
-type Category = { key: CategoryKey; number: string; label: string; shortLabel: string; headline: string; intro: string; summary: string; icon: typeof Dumbbell; stage: string; items: OfferItem[] };
 type User = { id: string; email: string };
-type Order = { id: string; order_number: string; status: string; total_amount: number; currency: string; created_at: string };
-type Entitlement = { id: string; product_key: string; product_title: string; product_type: string; access_status: string; created_at: string };
-type PlanRequest = { id: string; status: string; created_at: string };
-type Overview = { orders: Order[]; entitlements: Entitlement[]; planRequests: PlanRequest[] };
 type Profile = { first_name: string; gender: string; weight_kg: number | null; height_cm: number | null; training_location: string; primary_goal: string; training_days_per_week: number | null };
-type AccountMode = 'login' | 'signup' | 'recovery' | 'dashboard';
-type AccountTab = 'profile' | 'orders' | 'materials' | 'plan' | 'premium';
-type ToastKind = 'success' | 'error' | 'info';
-type ToastMessage = { id: number; message: string; kind: ToastKind };
-type LegalKind = 'terms' | 'privacy';
-
-const emptyProfile = (): Profile => ({ first_name: '', gender: '', weight_kg: null, height_cm: null, training_location: '', primary_goal: '', training_days_per_week: null });
-const passwordChecks = (value: string) => [
-  { label: 'Minimum 8 znaków', ok: value.length >= 8 },
-  { label: 'Wielka litera (A–Z)', ok: /[A-Z]/.test(value) },
-  { label: 'Mała litera (a–z)', ok: /[a-z]/.test(value) },
-  { label: 'Cyfra (0–9)', ok: /[0-9]/.test(value) },
-  { label: 'Znak specjalny (!@#$…)', ok: /[^A-Za-z0-9\s]/.test(value) },
-  { label: 'Maksimum 128 znaków', ok: value.length > 0 && value.length <= 128 },
-];
-const isStrongPassword = (value: string) => passwordChecks(value).every((item) => item.ok);
+type Product = { id: string; product_key: string; title: string; description: string; product_type: string; price_amount: number; currency: string; is_free: number; is_published?: number; checkout_url?: string | null; original_filename?: string | null; created_at?: string };
+type Entitlement = { id: string; product_key: string; product_title: string; product_type: string; access_status: string; created_at: string };
+type Order = { id: string; order_number: string; status: string; total_amount: number; currency: string; created_at: string };
+type Overview = { orders: Order[]; entitlements: Entitlement[]; planRequests: Array<{ id: string; status: string; created_at: string }> };
+type Exercise = { name: string; sets: number; reps: number; weight_kg: number | null };
+type Workout = { id: string; title: string; performed_on: string; notes: string; exercises_json: string; created_at: string };
+type Checkin = { id: string; week_start: string; training_count: number; regularity: number; notes: string; created_at: string };
+type PlanDay = { day_key: 'A' | 'B' | 'C'; title: string; exercises: Exercise[]; updated_at?: string };
+type Tab = 'home' | 'profile' | 'orders' | 'materials' | 'plan' | 'training' | 'progress' | 'premium' | 'admin';
+type Notice = { message: string; kind: 'success' | 'error' | 'info' };
 
 const LOGO = '/2F1E20BF-50D5-450A-99FB-4408BA767302.png';
-
-const categories: Category[] = [
-  { key: 'wyzwania', number: '01', label: 'Wyzwania treningowe', shortLabel: 'Wyzwania', headline: 'KONKRETNY CEL. OKREŚLONY CZAS.', intro: 'Gotowe programy treningowe zaprojektowane wokół jednego celu i jasno określonego czasu trwania.', summary: 'Gotowe programy z celem i czasem trwania.', icon: Flame, stage: 'KATALOG W PRZYGOTOWANIU', items: [
-    { title: 'Duża klata w domu', type: 'WYZWANIE TRENINGOWE', description: 'Koncepcja programu ukierunkowanego na trening klatki piersiowej w warunkach domowych.', meta: '12 TYGODNI', icon: Dumbbell, details: ['Trening w domu jako główne założenie programu.', 'Jasno określony czas trwania: 12 tygodni.', 'Harmonogram i zawartość wymagają przygotowania przed sprzedażą.'] },
-    { title: '30 dni regularności', type: 'WYZWANIE TRENINGOWE', description: 'Program pomagający zbudować nawyk regularnego podejmowania aktywności.', meta: '30 DNI', icon: Flame, details: ['Główny cel: wypracowanie regularności.', 'Czas trwania: 30 dni.', 'Treningi i materiały wymagają uzupełnienia.'] },
-    { title: 'Budowanie siły', type: 'WYZWANIE TRENINGOWE', description: 'Program nastawiony na rozwijanie siły w uporządkowanym cyklu.', meta: '8 TYGODNI', icon: Dumbbell, details: ['Główny cel: rozwój siły.', 'Czas trwania: 8 tygodni.', 'Dobór ćwiczeń i progresja wymagają dopracowania.'] },
-  ] },
-  { key: 'produkty', number: '02', label: 'Produkty cyfrowe', shortLabel: 'Produkty cyfrowe', headline: 'WIEDZA, DO KTÓREJ WRACASZ.', intro: 'E-booki, poradniki i materiały cyfrowe sprzedawane niezależnie od wyzwań i subskrypcji.', summary: 'E-booki, poradniki i materiały cyfrowe.', icon: BookOpen, stage: 'KATALOG W PRZYGOTOWANIU', items: [
-    { title: 'E-booki treningowe', type: 'PRODUKT CYFROWY', description: 'Materiały do samodzielnego wykorzystania, dostępne po zakupie na określonych zasadach.', meta: 'DO POBRANIA', icon: BookOpen, details: ['Osobna kategoria, niezależna od wyzwań.', 'Po wdrożeniu zakupów produkt będzie przypisany do konta.', 'Tytuły, pliki i ceny trzeba uzupełnić przed sprzedażą.'] },
-    { title: 'Poradniki i materiały', type: 'PRODUKT CYFROWY', description: 'Materiały edukacyjne, które nie muszą stanowić pełnego programu treningowego.', meta: 'DOSTĘP PO ZAKUPIE', icon: FileText, details: ['Poradniki pozostają oddzielone od programów treningowych.', 'Dostęp do zakupionych osobno materiałów nie będzie zależeć od Premium, zgodnie z warunkami zakupu.', 'Lista materiałów wymaga uzupełnienia.'] },
-  ] },
-  { key: 'plan', number: '03', label: 'Indywidualny plan treningowy', shortLabel: 'Plan indywidualny', headline: 'PLAN DOPASOWANY DO CIEBIE.', intro: 'Jednorazowa usługa przygotowania planu — z zamówieniem, ankietą i realizacją po zakupie.', summary: 'Jednorazowa usługa przygotowywana dla klienta.', icon: ClipboardList, stage: 'PROCES DO WDROŻENIA', items: [
-    { title: 'Twój indywidualny plan', type: 'USŁUGA INDYWIDUALNA', description: 'Klient składa zamówienie, opłaca usługę i wypełnia ankietę. Plan jest następnie przygotowywany indywidualnie.', meta: 'PLAN PRZYGOTOWYWANY INDYWIDUALNIE', icon: ClipboardList, details: ['Zamówienie i płatność po integracji operatora.', 'Ankieta klienta po zakupie.', 'Status: oczekuje na ankietę, w przygotowaniu, gotowy, anulowany lub zwrócony.', 'Gotowy plan przypisany do konta klienta.'] },
-  ] },
-  { key: 'prowadzenie', number: '04', label: 'Prowadzenie online', shortLabel: 'Prowadzenie online', headline: 'WSPÓŁPRACA, NIE TYLKO PLAN.', intro: 'Osobna usługa zdalnego prowadzenia. Zakres, czas trwania i sposób kontaktu trzeba opisać przed startem.', summary: 'Osobna usługa zdalnej współpracy.', icon: Headphones, stage: 'ZAKRES DO USTALENIA', items: [
-    { title: 'Prowadzenie online', type: 'USŁUGA WSPÓŁPRACY', description: 'Dłuższa współpraca zdalna, oddzielona od jednorazowego przygotowania planu.', meta: 'SZCZEGÓŁY WKRÓTCE', icon: Headphones, details: ['To osobna usługa, a nie inna nazwa indywidualnego planu.', 'Zakres kontaktu, czas trwania, aktualizacje i cena wymagają określenia.', 'System docelowo będzie obsługiwać status aktywnej współpracy.'] },
-  ] },
-  { key: 'program', number: '05', label: 'Program Systemu Formy', shortLabel: 'Program Systemu Formy', headline: 'FLAGOWA OFERTA SYSTEMU FORMY.', intro: 'Osobny program o wyższej wartości, pozycjonowany jako główna, rozbudowana oferta marki.', summary: 'Flagowy produkt o wyższej wartości.', icon: Crown, stage: 'OFERTA DO OPRACOWANIA', items: [
-    { title: 'Program Systemu Formy', type: 'OFERTA FLAGOWA', description: 'Wyróżniony produkt marki z własnym zakresem, ceną i ścieżką klienta.', meta: 'OFERTA ROZBUDOWANA', icon: Crown, details: ['Program jest odrębnym produktem, a nie subskrypcją Premium.', 'Zakres, długość i cena nie zostały jeszcze określone.', 'Po zatwierdzeniu założeń oferta otrzyma własną ścieżkę zakupu.'] },
-  ] },
-  { key: 'premium', number: '06', label: 'Premium', shortLabel: 'Premium', headline: 'SUBSKRYPCJA. DODATKOWE MOŻLIWOŚCI.', intro: 'Abonament dający dostęp do określonych funkcji i materiałów Premium. Nie zastępuje zakupionych produktów jednorazowych.', summary: 'Subskrypcja do funkcji i treści Premium.', icon: LockKeyhole, stage: 'ZAKRES DO USTALENIA', items: [
-    { title: 'Dostęp Premium', type: 'SUBSKRYPCJA', description: 'Odnawialny dostęp do funkcji i materiałów objętych subskrypcją, zgodnie z jej warunkami.', meta: 'MODEL SUBSKRYPCYJNY', icon: LockKeyhole, details: ['Lista funkcji Premium wymaga określenia.', 'Po zakończeniu subskrypcji wygaśnie dostęp do elementów zależnych od Premium.', 'Produkty kupione osobno pozostaną dostępne według warunków zakupu.'] },
-  ] },
-];
+const emptyProfile = (): Profile => ({ first_name: '', gender: '', weight_kg: null, height_cm: null, training_location: '', primary_goal: '', training_days_per_week: null });
+const passwordRules = (v: string) => [
+  ['Minimum 8 znaków', v.length >= 8], ['Wielka litera', /[A-Z]/.test(v)], ['Mała litera', /[a-z]/.test(v)],
+  ['Cyfra', /[0-9]/.test(v)], ['Znak specjalny', /[^A-Za-z0-9\s]/.test(v)], ['Maksymalnie 128 znaków', v.length > 0 && v.length <= 128],
+] as Array<[string, boolean]>;
+const strongPassword = (v: string) => passwordRules(v).every((r) => r[1]);
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
+  const multipart = typeof FormData !== 'undefined' && init.body instanceof FormData;
   headers.set('Accept', 'application/json');
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (init.body && !multipart && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const response = await fetch(path, { ...init, headers, credentials: 'same-origin' });
   let data: unknown = {};
   try { data = await response.json(); } catch { data = {}; }
@@ -70,258 +41,310 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   return data as T;
 }
+const formatDate = (value: string) => {
+  const d = new Date(value + (value.length === 10 ? 'T12:00:00' : ''));
+  return Number.isNaN(d.getTime()) ? value : new Intl.DateTimeFormat('pl-PL', { dateStyle: 'medium' }).format(d);
+};
+const localDay = (d: Date) => [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
+const monday = (d: Date) => { const v = new Date(d.getFullYear(), d.getMonth(), d.getDate()); v.setDate(v.getDate() - ((v.getDay() + 6) % 7)); return localDay(v); };
+const parseExercises = (v: string): Exercise[] => { try { const x: unknown = JSON.parse(v); return Array.isArray(x) ? x as Exercise[] : []; } catch { return []; } };
+const productType = (v: string) => ({ ebook: 'E-book / PDF', training_plan: 'Plan treningowy', guide: 'Poradnik', bundle: 'Pakiet', other: 'Materiał cyfrowy' } as Record<string, string>)[v] ?? v;
+const goalLabel = (v: string) => ({ muscle: 'Budowanie mięśni', fat_loss: 'Redukcja', strength: 'Większa siła', consistency: 'Regularność', health: 'Sprawność i zdrowie' } as Record<string, string>)[v] ?? 'Nie wybrano celu';
+const locationLabel = (v: string) => ({ gym: 'Na siłowni', home: 'W domu', both: 'W domu i na siłowni' } as Record<string, string>)[v] ?? 'Nie wybrano miejsca';
 
-function Brand() {
-  return <a className="brand" href="#top" aria-label="System Formy — strona główna"><img className="brand-logo" src={LOGO} alt="" /><span className="brand-tagline">TRENING <i>·</i> KONSEKWENCJA <i>·</i> PROGRES</span></a>;
-}
-
-function formatDate(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat('pl-PL', { dateStyle: 'medium' }).format(date);
-}
-function formatPrice(value: number, currency: string): string {
-  return new Intl.NumberFormat('pl-PL', { style: 'currency', currency: currency || 'PLN' }).format(value);
-}
+const offerSections = [
+  { n: '01', key: 'wyzwania', label: 'Wyzwania', heading: 'ZACZNIJ OD KONKRETU.', description: 'Jasny cel i określony czas zamiast przypadkowych treningów.', icon: Flame, items: ['Zbuduj nawyk', 'Trenuj w domu', 'Wejdź poziom wyżej'] },
+  { n: '02', key: 'produkty', label: 'Produkty cyfrowe', heading: 'WIEDZA, DO KTÓREJ WRACASZ.', description: 'E-booki, poradniki i gotowe plany do samodzielnej pracy.', icon: BookOpen, items: ['E-booki treningowe', 'Poradniki', 'Gotowe plany'] },
+  { n: '03', key: 'plan', label: 'Plan indywidualny', heading: 'PLAN DOPASOWANY DO CIEBIE.', description: 'Indywidualny plan i protokoły opracowane pod Twoją sytuację.', icon: ClipboardList, items: ['Indywidualny plan treningowy'] },
+  { n: '04', key: 'prowadzenie', label: 'Prowadzenie online', heading: 'WSPÓŁPRACA, NIE TYLKO PLAN.', description: 'Wsparcie i monitoring procesu treningowego.', icon: Dumbbell, items: ['Prowadzenie online'] },
+  { n: '05', key: 'program', label: 'Program Systemu Formy', heading: 'FLAGOWA OFERTA SYSTEMU FORMY.', description: 'Rozbudowany program dla osób, które chcą uporządkować cały proces.', icon: Crown, items: ['Program Systemu Formy'] },
+  { n: '06', key: 'premium', label: 'Premium', heading: 'DODATKOWE MOŻLIWOŚCI.', description: 'Oddzielny dostęp do funkcji i materiałów objętych Premium.', icon: LockKeyhole, items: ['Dostęp Premium'] },
+];
 
 export default function App() {
-  const [activeCategory, setActiveCategory] = useState<CategoryKey>('wyzwania');
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [showAccount, setShowAccount] = useState(false);
-  const [selectedOffer, setSelectedOffer] = useState<{ item: OfferItem; category: Category } | null>(null);
-  const [legalPage, setLegalPage] = useState<LegalKind | null>(null);
-  const [accountMode, setAccountMode] = useState<AccountMode>('login');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [activeAccountTab, setActiveAccountTab] = useState<AccountTab>('profile');
-  const [profile, setProfile] = useState<Profile>(emptyProfile);
-  const [profileLoading, setProfileLoading] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'signup' | 'recovery'>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [passwordAgain, setPasswordAgain] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [category, setCategory] = useState('wyzwania');
+  const [activeTab, setActiveTab] = useState<Tab>('home');
+  const [profile, setProfile] = useState<Profile>(emptyProfile());
+  const [profileSaved, setProfileSaved] = useState(false);
+  const [profileEditing, setProfileEditing] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
-  const [profileLoadError, setProfileLoadError] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newPasswordAgain, setNewPasswordAgain] = useState('');
   const [passwordSaving, setPasswordSaving] = useState(false);
-  const [toast, setToast] = useState<ToastMessage | null>(null);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [passwordAgain, setPasswordAgain] = useState('');
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [authReady, setAuthReady] = useState(false);
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [workouts, setWorkouts] = useState<Workout[]>([]);
+  const [checkins, setCheckins] = useState<Checkin[]>([]);
+  const [planDays, setPlanDays] = useState<PlanDay[]>([]);
+  const [activePlanDay, setActivePlanDay] = useState<'A' | 'B' | 'C'>('A');
+  const [planTitle, setPlanTitle] = useState('Dzień A');
+  const [planExercises, setPlanExercises] = useState<Exercise[]>([{ name: '', sets: 3, reps: 10, weight_kg: null }]);
+  const [planSaving, setPlanSaving] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminProducts, setAdminProducts] = useState<Product[]>([]);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [workTitle, setWorkTitle] = useState('');
+  const [workDate, setWorkDate] = useState(localDay(new Date()));
+  const [workNotes, setWorkNotes] = useState('');
+  const [exercises, setExercises] = useState<Exercise[]>([{ name: '', sets: 3, reps: 10, weight_kg: null }]);
+  const [checkinCount, setCheckinCount] = useState('3');
+  const [regularity, setRegularity] = useState('4');
+  const [checkinNotes, setCheckinNotes] = useState('');
+  const [adminError, setAdminError] = useState('');
+  const [savingProduct, setSavingProduct] = useState(false);
+  const [savingGrant, setSavingGrant] = useState(false);
+  const [savingProductSettings, setSavingProductSettings] = useState<string | null>(null);
+  const [legalPage, setLegalPage] = useState<'terms' | 'privacy' | null>(null);
 
-  const profileReminderRef = useRef(false);
-  profileReminderRef.current = Boolean(profile.first_name.trim() && profile.training_location && profile.primary_goal);
+  function notify(message: string, kind: Notice['kind'] = 'info') { setNotice({ message, kind }); window.setTimeout(() => setNotice((old) => old?.message === message ? null : old), 6500); }
+  function openAccount() { setAccountOpen(true); setAuthMode(currentUser ? 'login' : 'login'); setAuthError(''); setPassword(''); setPasswordAgain(''); setRememberMe(false); setActiveTab(currentUser ? 'home' : 'profile'); setMenuOpen(false); }
+  function closeAccount() { setAccountOpen(false); setAuthError(''); setLegalPage(null); }
 
-  const active = useMemo(() => categories.find((category) => category.key === activeCategory) ?? categories[0], [activeCategory]);
-  const ActiveIcon = active.icon;
-
+  async function loadProducts() {
+    try { const r = await api<{ products: Product[] }>('/api/products'); setProducts(r.products ?? []); }
+    catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się pobrać katalogu.', 'error'); }
+  }
+  async function loadDashboard() {
+    if (!currentUser) return;
+    setDashboardLoading(true);
+    try {
+      const [o, p, w, c, planResult] = await Promise.all([
+        api<Overview>('/api/account/overview'), api<{ profile: Profile; has_profile?: boolean }>('/api/account/profile'),
+        api<{ sessions: Workout[] }>('/api/training/sessions'), api<{ checkins: Checkin[] }>('/api/training/checkins'),
+        api<{ days: PlanDay[] }>('/api/training/plan'),
+      ]);
+      setOverview(o); setProfile({ ...emptyProfile(), ...p.profile });
+      const saved = Boolean(p.has_profile ?? (p.profile?.first_name || p.profile?.training_location || p.profile?.primary_goal || p.profile?.weight_kg !== null || p.profile?.height_cm !== null));
+      setProfileSaved(saved); setProfileEditing(!saved); setWorkouts(w.sessions ?? []); setCheckins(c.checkins ?? []); setPlanDays((planResult.days ?? []).map((day) => ({ ...day, exercises: Array.isArray(day.exercises) ? day.exercises : [] })));
+    } catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się wczytać konta.', 'error'); }
+    try { const a = await api<{ isAdmin: boolean }>('/api/admin/me'); setIsAdmin(Boolean(a.isAdmin)); } catch { setIsAdmin(false); }
+    setDashboardLoading(false);
+  }
+  async function loadAdminProducts() {
+    try { const r = await api<{ products: Product[] }>('/api/admin/products'); setAdminProducts(r.products ?? []); setAdminError(''); }
+    catch (e) { setAdminError(e instanceof Error ? e.message : 'Nie udało się pobrać produktów.'); }
+  }
   useEffect(() => {
-    let alive = true;
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('auth') === 'verified') notify('Adres e-mail został potwierdzony.', 'success');
-    api<{ user: User | null }>('/api/auth/me').then((result) => {
-      if (alive && result.user) { setCurrentUser(result.user); setAccountMode('dashboard'); }
-    }).catch((e: unknown) => {
-      if (alive) notify(e instanceof Error ? e.message : 'Nie udało się sprawdzić sesji.', 'error');
-    }).finally(() => { if (alive) setAuthReady(true); });
-    return () => { alive = false; };
+    let active = true;
+    api<{ user: User | null }>('/api/auth/me').then((r) => { if (active && r.user) { setCurrentUser(r.user); setAccountOpen(false); } })
+      .catch((e) => { if (active && e instanceof Error) notify(e.message, 'error'); })
+      .finally(() => { if (active) setAuthReady(true); });
+    void loadProducts();
+    return () => { active = false; };
   }, []);
-
+  useEffect(() => { if (currentUser) void loadDashboard(); else { setOverview(null); setWorkouts([]); setCheckins([]); setPlanDays([]); setProfile(emptyProfile()); setProfileSaved(false); setProfileEditing(false); setIsAdmin(false); } }, [currentUser?.id]);
   useEffect(() => {
-    let alive = true;
-    if (currentUser) {
-      setOverview(null);
-      api<Overview>('/api/account/overview').then((data) => { if (alive) setOverview(data); })
-        .catch(() => { if (alive) setOverview({ orders: [], entitlements: [], planRequests: [] }); });
-    } else setOverview(null);
-    return () => { alive = false; };
-  }, [currentUser]);
-
-  useEffect(() => {
-    let alive = true;
-    if (!currentUser) { setProfile(emptyProfile()); setProfileLoading(false); setProfileLoadError(''); return () => { alive = false; }; }
-    setProfileLoading(true); setProfileLoadError('');
-    api<{ profile: Profile }>('/api/account/profile').then((result) => { if (alive) setProfile({ ...emptyProfile(), ...result.profile }); })
-      .catch((e: unknown) => {
-        if (alive) {
-          const message = e instanceof Error ? e.message : 'Nie udało się pobrać profilu.';
-          setProfileLoadError(message); notify(message, 'error');
+    if (!currentUser) return;
+    let lastPing = Date.now();
+    const onActivity = () => {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastPing < 60_000) return;
+      lastPing = now;
+      void api<{ user: User | null }>('/api/auth/me').then((result) => {
+        if (!result.user) {
+          setCurrentUser(null);
+          setAccountOpen(false);
+          notify('Sesja wygasła. Zaloguj się ponownie.', 'info');
         }
-      }).finally(() => { if (alive) setProfileLoading(false); });
-    return () => { alive = false; };
-  }, [currentUser]);
+      }).catch(() => {});
+    };
+    window.addEventListener('pointerdown', onActivity, { passive: true });
+    window.addEventListener('keydown', onActivity);
+    window.addEventListener('scroll', onActivity, { passive: true });
+    window.addEventListener('touchstart', onActivity, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', onActivity);
+      window.removeEventListener('keydown', onActivity);
+      window.removeEventListener('scroll', onActivity);
+      window.removeEventListener('touchstart', onActivity);
+    };
+  }, [currentUser?.id]);
+  useEffect(() => { if (activeTab === 'admin' && isAdmin) void loadAdminProducts(); }, [activeTab, isAdmin]);
 
-  useEffect(() => {
-    if (!toast) return;
-    const timeout = window.setTimeout(() => setToast(null), 9000);
-    return () => window.clearTimeout(timeout);
-  }, [toast]);
-
-  function notify(message: string, kind: ToastKind = 'info') {
-    setToast({ id: Date.now(), message, kind });
-  }
-
-  function openAccount() {
-    setMenuOpen(false); setSelectedOffer(null); setLegalPage(null); setShowAccount(true);
-    setAccountMode(currentUser ? 'dashboard' : 'login'); setActiveAccountTab('profile'); setError(''); setMessage('');
-    setPassword(''); setPasswordAgain(''); setCurrentPassword(''); setNewPassword(''); setNewPasswordAgain('');
-  }
-  function switchMode(mode: AccountMode) {
-    setAccountMode(mode); setError(''); setMessage(''); setPassword(''); setPasswordAgain('');
-  }
-
-  async function submitAuth(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setError(''); setMessage(''); setBusy(true);
+  async function submitAuth(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setBusy(true); setAuthError('');
     try {
-      if (accountMode === 'login') {
-        const result = await api<{ user: User }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
-        setCurrentUser(result.user); setAccountMode('dashboard'); setActiveAccountTab('profile'); setPassword('');
-        notify('Zalogowano pomyślnie.', 'success');
-      } else if (accountMode === 'signup') {
+      if (authMode === 'signup') {
         if (password !== passwordAgain) throw new Error('Podane hasła nie są takie same.');
-        if (!isStrongPassword(password)) throw new Error('Hasło musi mieć minimum 8 znaków, wielką i małą literę, cyfrę oraz znak specjalny.');
-        const result = await api<{ user: User }>('/api/auth/register', { method: 'POST', body: JSON.stringify({ email, password }) });
-        setCurrentUser(result.user); setAccountMode('dashboard'); setActiveAccountTab('profile'); setPassword(''); setPasswordAgain('');
-        notify('Konto zostało utworzone.', 'success');
-        window.setTimeout(() => { if (!profileReminderRef.current) notify('Uzupełnij dane w zakładce „Moje dane”, aby przygotować profil treningowy.', 'info'); }, 9300);
+        if (!strongPassword(password)) throw new Error('Hasło musi mieć minimum 8 znaków, wielką i małą literę, cyfrę oraz znak specjalny.');
+        const r = await api<{ user: User }>('/api/auth/register', { method: 'POST', body: JSON.stringify({ email, password }) });
+        setCurrentUser(r.user); setAccountOpen(true); setActiveTab('home'); notify('Konto zostało utworzone.', 'success');
+      } else if (authMode === 'login') {
+        const r = await api<{ user: User }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password, rememberMe }) });
+        setCurrentUser(r.user); setAccountOpen(true); setActiveTab('home'); setPassword(''); notify('Zalogowano pomyślnie.', 'success');
+      } else {
+        throw new Error('Odzyskiwanie hasła jest obecnie obsługiwane przez kontakt z administratorem.');
       }
-    } catch (e) {
-      const text = e instanceof Error ? e.message : 'Nie udało się wykonać operacji.';
-      setError(text); notify(text, 'error');
-    } finally { setBusy(false); }
+    } catch (e) { const m = e instanceof Error ? e.message : 'Nie udało się zalogować.'; setAuthError(m); notify(m, 'error'); }
+    finally { setBusy(false); }
   }
-
   async function signOut() {
-    setBusy(true); setError('');
-    try {
-      await api<{ ok: boolean }>('/api/auth/logout', { method: 'POST', body: '{}' });
-      setCurrentUser(null); setOverview(null); setProfile(emptyProfile()); setAccountMode('login'); setPassword('');
-      notify('Wylogowano.', 'success');
-    } catch (e) {
-      const text = e instanceof Error ? e.message : 'Nie udało się wylogować.';
-      setError(text); notify(text, 'error');
-    } finally { setBusy(false); }
+    setBusy(true);
+    try { await api('/api/auth/logout', { method: 'POST', body: '{}' }); setCurrentUser(null); setOverview(null); setAccountOpen(false); setAuthMode('login'); setRememberMe(false); setPassword(''); notify('Wylogowano.', 'success'); }
+    catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się wylogować.', 'error'); }
+    finally { setBusy(false); }
   }
-
-  async function saveProfile(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setProfileSaving(true); setProfileLoadError('');
-    try {
-      const result = await api<{ profile: Profile }>('/api/account/profile', { method: 'PUT', body: JSON.stringify(profile) });
-      setProfile({ ...emptyProfile(), ...result.profile });
-      notify('Dane profilu zostały zapisane.', 'success');
-    } catch (e) {
-      const text = e instanceof Error ? e.message : 'Nie udało się zapisać profilu.';
-      notify(text, 'error');
-    } finally { setProfileSaving(false); }
+  async function saveProfile(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setProfileSaving(true);
+    try { const r = await api<{ profile: Profile }>('/api/account/profile', { method: 'PUT', body: JSON.stringify(profile) }); setProfile({ ...emptyProfile(), ...r.profile }); setProfileSaved(true); setProfileEditing(false); notify('Dane profilu zostały zapisane.', 'success'); }
+    catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się zapisać profilu.', 'error'); }
+    finally { setProfileSaving(false); }
   }
-
-  async function changePassword(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (newPassword !== newPasswordAgain) { notify('Nowe hasła nie są takie same.', 'error'); return; }
-    if (!isStrongPassword(newPassword)) { notify('Nowe hasło musi spełniać wszystkie wymagania bezpieczeństwa.', 'error'); return; }
+  async function changePassword(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); if (newPassword !== newPasswordAgain) { notify('Nowe hasła nie są takie same.', 'error'); return; }
+    if (!strongPassword(newPassword)) { notify('Nowe hasło nie spełnia wymagań bezpieczeństwa.', 'error'); return; }
     setPasswordSaving(true);
-    try {
-      await api<{ ok: boolean }>('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) });
-      setCurrentPassword(''); setNewPassword(''); setNewPasswordAgain('');
-      notify('Hasło zostało zmienione.', 'success');
-    } catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się zmienić hasła.', 'error'); }
+    try { await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }); setCurrentUser(null); setProfile(emptyProfile()); setProfileSaved(false); setCurrentPassword(''); setNewPassword(''); setNewPasswordAgain(''); setPassword(''); setAuthMode('login'); setActiveTab('profile'); notify('Hasło zmienione. Zaloguj się ponownie nowym hasłem.', 'success'); }
+    catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się zmienić hasła.', 'error'); }
     finally { setPasswordSaving(false); }
   }
+  async function claimProduct(product: Product) {
+    if (!currentUser) { openAccount(); notify('Zaloguj się lub utwórz konto, aby przypisać darmowy materiał.', 'info'); return; }
+    try { await api('/api/products/' + encodeURIComponent(product.product_key) + '/claim', { method: 'POST', body: '{}' }); notify('Materiał przypisany do konta. Pobieranie rozpocznie się za chwilę.', 'success'); window.location.assign('/api/products/' + encodeURIComponent(product.product_key) + '/download'); }
+    catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się odblokować produktu.', 'error'); }
+  }
+  useEffect(() => {
+    const savedDay = planDays.find((day) => day.day_key === activePlanDay);
+    setPlanTitle(savedDay?.title || `Dzień ${activePlanDay}`);
+    setPlanExercises(savedDay?.exercises?.length ? savedDay.exercises.map((x) => ({ ...x, weight_kg: null })) : [{ name: '', sets: 3, reps: 10, weight_kg: null }]);
+  }, [activePlanDay, planDays]);
+  async function savePlanDay(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const list = planExercises.filter((x) => x.name.trim()).map((x) => ({ name: x.name.trim(), sets: Number(x.sets), reps: Number(x.reps) }));
+    if (!list.length) { notify('Dodaj co najmniej jedno ćwiczenie do planu.', 'error'); return; }
+    setPlanSaving(true);
+    try {
+      await api('/api/training/plan', { method: 'PUT', body: JSON.stringify({ day_key: activePlanDay, title: planTitle, exercises: list }) });
+      notify(`Plan dla dnia ${activePlanDay} został zapisany.`, 'success');
+      await loadDashboard();
+    } catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się zapisać planu.', 'error'); }
+    finally { setPlanSaving(false); }
+  }
+  function usePlanForWorkout() {
+    const savedDay = planDays.find((day) => day.day_key === activePlanDay);
+    if (!savedDay?.exercises.length) { notify('Najpierw zapisz plan tego dnia.', 'error'); return; }
+    setWorkTitle(`${savedDay.title || `Dzień ${activePlanDay}`} — trening`);
+    setWorkDate(localDay(new Date()));
+    setWorkNotes('Trening rozpoczęty na podstawie zapisanego planu. Uzupełnij rzeczywiste ciężary i wyniki.');
+    setExercises(savedDay.exercises.map((x) => ({ name: x.name, sets: x.sets, reps: x.reps, weight_kg: null })));
+    setActiveTab('training');
+    notify('Plan przeniesiony do dziennika. Uzupełnij rzeczywiste ciężary i zapisz trening.', 'info');
+  }
+  function changePlanExercise(i: number, key: 'name' | 'sets' | 'reps', value: string) {
+    setPlanExercises((old) => old.map((x, index) => index !== i ? x : { ...x, [key]: key === 'name' ? value : Number(value) }));
+  }
+  async function saveWorkout(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); const list = exercises.filter((x) => x.name.trim()).map((x) => ({ ...x, name: x.name.trim() }));
+    if (!list.length) { notify('Dodaj przynajmniej jedno ćwiczenie.', 'error'); return; }
+    setBusy(true);
+    try { await api('/api/training/sessions', { method: 'POST', body: JSON.stringify({ title: workTitle, performed_on: workDate, notes: workNotes, exercises: list }) }); setWorkTitle(''); setWorkNotes(''); setExercises([{ name: '', sets: 3, reps: 10, weight_kg: null }]); notify('Trening zapisany.', 'success'); await loadDashboard(); }
+    catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się zapisać treningu.', 'error'); }
+    finally { setBusy(false); }
+  }
+  async function saveCheckin(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setBusy(true);
+    try { await api('/api/training/checkins', { method: 'POST', body: JSON.stringify({ week_start: monday(new Date()), training_count: Number(checkinCount), regularity: Number(regularity), notes: checkinNotes }) }); setCheckinNotes(''); notify('Podsumowanie tygodnia zapisane.', 'success'); await loadDashboard(); }
+    catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się zapisać podsumowania.', 'error'); }
+    finally { setBusy(false); }
+  }
+  async function addProduct(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setSavingProduct(true); setAdminError('');
+    try { const form = new FormData(e.currentTarget); await api('/api/admin/products', { method: 'POST', body: form }); e.currentTarget.reset(); notify('Produkt dodany do katalogu.', 'success'); await loadAdminProducts(); await loadProducts(); }
+    catch (e) { setAdminError(e instanceof Error ? e.message : 'Nie udało się dodać produktu.'); }
+    finally { setSavingProduct(false); }
+  }
+  async function saveProductSettings(e: FormEvent<HTMLFormElement>, product: Product) {
+    e.preventDefault(); setSavingProductSettings(product.product_key); setAdminError('');
+    const form = new FormData(e.currentTarget);
+    try {
+      await api('/api/admin/products/' + encodeURIComponent(product.product_key), {
+        method: 'PATCH',
+        body: JSON.stringify({
+          price_amount: Number(form.get('price_amount') || 0),
+          is_free: form.get('is_free') === 'true',
+          is_published: form.get('is_published') === 'true',
+          checkout_url: String(form.get('checkout_url') || '').trim(),
+        }),
+      });
+      notify('Ustawienia produktu zapisane.', 'success');
+      await loadAdminProducts(); await loadProducts();
+    } catch (e) { setAdminError(e instanceof Error ? e.message : 'Nie udało się zapisać ustawień produktu.'); }
+    finally { setSavingProductSettings(null); }
+  }
+  async function grantAccess(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setSavingGrant(true); setAdminError(''); const form = new FormData(e.currentTarget);
+    try { await api('/api/admin/grant-access', { method: 'POST', body: JSON.stringify({ email: String(form.get('email') || ''), product_key: String(form.get('product_key') || '') }) }); e.currentTarget.reset(); notify('Dostęp został przypisany po potwierdzeniu płatności.', 'success'); await loadDashboard(); await loadAdminProducts(); }
+    catch (e) { setAdminError(e instanceof Error ? e.message : 'Nie udało się przypisać dostępu.'); }
+    finally { setSavingGrant(false); }
+  }
+  function changeExercise(i: number, key: keyof Exercise, value: string) { setExercises((old) => old.map((x, index) => index !== i ? x : { ...x, [key]: key === 'name' ? value : value === '' && key === 'weight_kg' ? null : Number(value) })); }
+  const owned = useMemo(() => (overview?.entitlements ?? []).filter((x) => x.access_status === 'active'), [overview]);
+  const bars = useMemo(() => Array.from({ length: 4 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - (3 - i) * 7); const start = localDay(d); const e = new Date(d); e.setDate(e.getDate() + 7); const end = localDay(e); return { label: d.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }), count: workouts.filter((x) => x.performed_on >= start && x.performed_on < end).length }; }), [workouts]);
+  const maxBar = Math.max(1, ...bars.map((x) => x.count));
 
-  const accountTitle = accountMode === 'signup' ? 'UTWÓRZ KONTO.' : accountMode === 'recovery' ? 'ODZYSKAJ DOSTĘP.' : 'DOBRZE CIĘ WIDZIEĆ.';
-  const closeOverlay = () => { setShowAccount(false); setSelectedOffer(null); setLegalPage(null); setError(''); };
+  const tabItems: Array<{ key: Tab; label: string; icon: typeof LayoutDashboard }> = [
+    { key: 'home', label: 'Centrum', icon: LayoutDashboard }, { key: 'profile', label: 'Moje dane', icon: UserRound },
+    { key: 'orders', label: 'Zamówienia', icon: ShoppingBag }, { key: 'materials', label: 'Materiały', icon: BookOpen },
+    { key: 'plan', label: 'Plan', icon: ClipboardList }, { key: 'training', label: 'Dziennik', icon: Dumbbell }, { key: 'progress', label: 'Postępy', icon: TrendingUp },
+    { key: 'premium', label: 'Premium', icon: Crown }, ...(isAdmin ? [{ key: 'admin' as const, label: 'Administrator', icon: ShieldCheck }] : []),
+  ];
 
   return <main className="site-shell" id="top">
-    <header className="topbar">
-      <Brand />
-      <nav className="desktop-nav" aria-label="Główna nawigacja"><a href="#oferta">OFERTA</a><a href="#jak-dziala">JAK TO DZIAŁA</a></nav>
-      <div className="header-actions">
-        {!menuOpen && <button className="account-button" onClick={openAccount}><UserRound size={16} /><span>{currentUser ? 'MOJE KONTO' : 'ZALOGUJ SIĘ'}</span><ArrowUpRight size={15} /></button>}
-        <button className="menu-button" onClick={() => setMenuOpen((open) => !open)} aria-label={menuOpen ? 'Zamknij menu' : 'Otwórz menu'} aria-expanded={menuOpen}>{menuOpen ? <X size={20} /> : <Menu size={20} />}</button>
-      </div>
-      {menuOpen && <nav className="mobile-menu" aria-label="Menu mobilne"><a href="#oferta" onClick={() => setMenuOpen(false)}>Oferta</a><a href="#jak-dziala" onClick={() => setMenuOpen(false)}>Jak to działa</a><button onClick={openAccount}><UserRound size={16} />{currentUser ? 'Moje konto' : 'Zaloguj się'}</button>{!currentUser && <button onClick={() => { openAccount(); setAccountMode('signup'); }}><CheckCircle2 size={16} />Utwórz konto</button>}</nav>}
+    <header className="topbar"><a className="brand" href="#top"><img src={LOGO} alt="System Formy"/><span>TRENING <i>·</i> KONSEKWENCJA <i>·</i> PROGRES</span></a>
+      <nav className="desktop-nav"><a href="#oferta">OFERTA</a><a href="#sklep">PRODUKTY</a><a href="#jak-dziala">JAK TO DZIAŁA</a></nav>
+      <div className="header-actions"><button className="account-button" onClick={openAccount}><UserRound size={16}/>{currentUser ? 'MOJE KONTO' : 'ZALOGUJ SIĘ'}<ArrowUpRight size={15}/></button><button className="menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Otwórz menu">{menuOpen ? <X size={19}/> : <Menu size={19}/>}</button></div>
+      {menuOpen && <nav className="mobile-menu"><a href="#oferta" onClick={() => setMenuOpen(false)}>Oferta</a><a href="#sklep" onClick={() => setMenuOpen(false)}>Produkty</a><a href="#jak-dziala" onClick={() => setMenuOpen(false)}>Jak to działa</a><button onClick={openAccount}>Moje konto / logowanie</button></nav>}
     </header>
-
-    <section className="hero" aria-labelledby="hero-title">
-      <div className="hero-content"><div className="eyebrow"><span className="eyebrow-dot" /> TWOJA DROGA. TWÓJ SYSTEM.</div><h1 id="hero-title">FORMA NIE ROBI SIĘ <span>SAMA.</span></h1><p className="hero-copy">Mniej chaosu. Więcej konsekwencji. Wybierz rozwiązanie, które pasuje do Twojego celu — od gotowego wyzwania po indywidualną współpracę.</p><a className="primary-button" href="#oferta">POZNAJ MOŻLIWOŚCI <ArrowUpRight size={17} /></a><p className="hero-footnote">JASNY KIERUNEK <i>·</i> REALNY PLAN <i>·</i> SYSTEMATYCZNOŚĆ</p></div>
-      <div className="hero-art" aria-hidden="true"><div className="art-ring art-ring-one" /><div className="art-ring art-ring-two" /><div className="art-crosshair">+</div><img src={LOGO} alt="" className="hero-logo" /><div className="art-caption">BUILT WITH<br />DISCIPLINE</div><div className="art-line" /></div>
+    <section className="hero"><div className="hero-content"><p className="eyebrow"><span/> TWOJA DROGA. TWÓJ SYSTEM.</p><h1>FORMA NIE ROBI SIĘ <span>SAMA.</span></h1><p className="hero-copy">Mniej chaosu. Więcej konsekwencji. Wybierz rozwiązanie, które pasuje do Twojego celu — od darmowego materiału po plan treningowy i dalszą współpracę.</p><a className="primary-button" href="#oferta">POZNAJ MOŻLIWOŚCI <ArrowUpRight size={17}/></a><p className="hero-footnote">JASNY KIERUNEK <i>·</i> REALNY PLAN <i>·</i> SYSTEMATYCZNOŚĆ</p></div><div className="hero-art"><div className="art-ring one"/><div className="art-ring two"/><img src={LOGO} alt=""/><span>BUILT WITH<br/>DISCIPLINE</span></div></section>
+    <section className="offer-section" id="oferta"><div className="section-heading"><p className="eyebrow muted">SYSTEM FORMY / OFERTA</p><h2>JEDEN CEL. <span>WŁAŚCIWY NASTĘPNY KROK.</span></h2><p>Wybierz obszar, który najbardziej odpowiada Twoim aktualnym potrzebom.</p></div><div className="category-list">{offerSections.map((item) => { const Icon = item.icon; return <button key={item.key} className={category === item.key ? 'category is-active' : 'category'} onClick={() => setCategory(item.key)}><span>{item.n}</span><Icon size={18}/><strong>{item.label}</strong><ChevronRight size={16}/></button>; })}</div><div className="offer-detail"><p className="eyebrow muted">OBSZAR / {offerSections.find((x) => x.key === category)?.n}</p><h3>{offerSections.find((x) => x.key === category)?.heading}</h3><p>{offerSections.find((x) => x.key === category)?.description}</p><div className="offer-items">{offerSections.find((x) => x.key === category)?.items.map((item) => <div key={item}><CheckCircle2 size={16}/>{item}</div>)}</div><a className="text-link" href={category === 'produkty' ? '#sklep' : category === 'premium' ? '#sklep' : '#jak-dziala'}>{category === 'produkty' ? 'ZOBACZ PRODUKTY' : 'JAK TO DZIAŁA'} <ArrowRight size={15}/></a></div></section>
+    <section className="journey-section" id="jak-dziala"><div><p className="eyebrow muted">PROCES SYSTEMU FORMY</p><h2>OD WYBORU<br/>DO <span>DZIAŁANIA.</span></h2><p>Produkty, historia zamówień, plan treningowy i postępy — w jednej strefie klienta.</p></div><div className="journey-steps"><div><span>01</span><section><h3>Wybierasz materiał</h3><p>Bezpłatny e-book lub płatny produkt z katalogu.</p></section><ChevronRight size={18}/></div><div><span>02</span><section><h3>Otrzymujesz dostęp</h3><p>Darmowy plik odblokujesz na koncie; płatny po potwierdzeniu zakupu.</p></section><ChevronRight size={18}/></div><div><span>03</span><section><h3>Realizujesz plan</h3><p>Zapisujesz treningi, wyniki i cotygodniowe podsumowania.</p></section><ChevronRight size={18}/></div></div></section>
+    <section className="store-section" id="sklep"><div className="section-heading"><p className="eyebrow muted">SYSTEM FORMY / KATALOG</p><h2>WYBIERZ SWÓJ <span>MATERIAŁ.</span></h2><p>E-booki, poradniki i plany. Produkty, które opublikujesz w panelu administratora, pojawią się tutaj automatycznie.</p></div>
+      {products.length === 0 ? <p className="empty-catalog">Katalog jest gotowy na Twoje produkty. Dodasz je z poziomu konta administratora.</p> : <div className="product-grid">{products.map((p) => <article className="product-card" key={p.id}><div className="product-icon">{p.is_free ? <BookOpen size={22}/> : <FileText size={22}/>}</div><p className="eyebrow muted">{productType(p.product_type)}</p><h3>{p.title}</h3><p>{p.description}</p><div className="product-bottom"><strong>{p.is_free ? 'BEZPŁATNIE' : new Intl.NumberFormat('pl-PL', { style: 'currency', currency: p.currency || 'PLN' }).format(p.price_amount)}</strong>{owned.some((x) => x.product_key === p.product_key) ? <button className="outline-button" onClick={() => window.location.assign('/api/products/' + encodeURIComponent(p.product_key) + '/download')}><Download size={15}/> Pobierz</button> : p.is_free ? <button className="outline-button" onClick={() => void claimProduct(p)}><ArrowDownToLine size={15}/> Pobierz za darmo</button> : p.checkout_url ? <a className="solid-button" href={p.checkout_url} target="_blank" rel="noreferrer">Przejdź do zakupu <ArrowUpRight size={15}/></a> : <span className="coming-soon">WKRÓTCE</span>}</div></article>)}</div>}
     </section>
+    <section className="closing-cta"><div><p className="eyebrow"><span/> ZACZNIJ OD DOBREGO WYBORU</p><h2>TWÓJ SYSTEM.<br/><span>TWOJE TEMPO.</span></h2></div><button className="secondary-button" onClick={openAccount}>OTWÓRZ STREFĘ KLIENTA <ArrowUpRight size={16}/></button></section>
+    <footer className="footer"><a className="brand" href="#top"><img src={LOGO} alt="System Formy"/><span>TRENING · KONSEKWENCJA · PROGRES</span></a><p>RUSZAJ. BUDUJ. POWTARZAJ.</p><nav><button onClick={() => setLegalPage('terms')}>Regulamin</button><span>·</span><button onClick={() => setLegalPage('privacy')}>Polityka prywatności</button></nav><small>© {new Date().getFullYear()} SYSTEM FORMY</small></footer>
 
-    <section className="catalog-section" id="oferta" aria-live="polite">
-      <div className="section-heading"><div><p className="eyebrow muted">SYSTEM FORMY / OFERTA</p><h2>JEDNA MARKA.<br /><span>SZEŚĆ DRÓG.</span></h2></div><p className="section-intro">Każda forma współpracy ma inne zadanie. Wybierz kategorię i poznaj jej założenia — bez przeskakiwania do innego miejsca na stronie.</p></div>
-      <div className="category-strip" role="tablist" aria-label="Kategorie oferty">{categories.map((category) => { const Icon = category.icon; const selected = category.key === activeCategory; return <button key={category.key} role="tab" aria-selected={selected} className={`category-tab${selected ? ' is-active' : ''}`} onClick={() => setActiveCategory(category.key)}><span className="category-tab-number">{category.number}</span><Icon size={18} /><span>{category.shortLabel}</span><ArrowUpRight className="tab-arrow" size={14} /></button>; })}</div>
-      <div className="offer-panel" role="tabpanel"><div className="offer-heading"><div className="offer-title-icon"><ActiveIcon size={22} /></div><div className="offer-title-copy"><p className="eyebrow muted">KATEGORIA {active.number} / 06</p><h2>{active.headline}</h2><p className="offer-intro">{active.intro}</p></div><span className="stage-label"><span className="stage-dot" />{active.stage}</span></div>
-        <div className={`offer-grid offer-count-${active.items.length}`}>{active.items.map((item, index) => { const Icon = item.icon; return <article className="offer-card" key={item.title}><div className="offer-card-top"><span>{active.number}.{String(index + 1).padStart(2, '0')}</span><Icon size={20} /></div><span className="offer-type">{item.type}</span><h3>{item.title}</h3><p className="offer-description">{item.description}</p><div className="offer-card-bottom"><span className="offer-meta">{item.meta}</span><button className="text-action" onClick={() => setSelectedOffer({ item, category: active })}>POZNAJ OFERTĘ <ArrowRight size={15} /></button></div></article>; })}</div>
-        <p className="stage-note"><LockKeyhole size={14} /> Katalog i opisy są przygotowane koncepcyjnie. Zakupy, płatności i aktywacja produktów wymagają osobnego wdrożenia.</p>
-      </div>
-    </section>
-
-    <section className="manifesto-strip" aria-label="Założenia Systemu Formy"><span><CheckCircle2 size={15} /> WYBIERZ SWÓJ CEL</span><span><CheckCircle2 size={15} /> DZIAŁAJ WEDŁUG PLANU</span><span><CheckCircle2 size={15} /> BUDUJ KONSEKWENCJĘ</span></section>
-
-    <section className="journey-section" id="jak-dziala"><div className="journey-copy"><p className="eyebrow muted">JAK TO MA DZIAŁAĆ</p><h2>OD WYBORU<br />DO <span>DZIAŁANIA.</span></h2><p>Docelowo zakupy, indywidualna współpraca i zakupione materiały będą uporządkowane w jednym miejscu.</p></div><div className="journey-steps"><div className="journey-step"><span>01</span><div><h3>Wybierasz</h3><p>Wyzwanie, materiał cyfrowy albo usługę dopasowaną do celu.</p></div><ChevronRight size={18} /></div><div className="journey-step"><span>02</span><div><h3>Realizujesz</h3><p>Po wdrożeniu zakupów otrzymasz właściwą instrukcję i dostęp.</p></div><ChevronRight size={18} /></div><div className="journey-step"><span>03</span><div><h3>Masz wszystko w jednym miejscu</h3><p>Strefa klienta uporządkuje dane konta, zamówienia, plany i przypisane materiały.</p></div><ChevronRight size={18} /></div></div></section>
-
-    <section className="closing-cta"><div><p className="eyebrow"><span className="eyebrow-dot" /> ZACZNIJ OD DOBREGO WYBORU</p><h2>TWÓJ SYSTEM.<br /><span>TWOJE TEMPO.</span></h2></div><a className="secondary-button" href="#oferta">WYBIERZ KATEGORIĘ <ArrowDownRight size={18} /></a></section>
-    <footer className="footer"><Brand /><p className="footer-motto">RUSZAJ. BUDUJ. POWTARZAJ.</p><nav className="footer-legal" aria-label="Dokumenty prawne"><button onClick={() => setLegalPage('terms')}>Regulamin</button><span>·</span><button onClick={() => setLegalPage('privacy')}>Polityka prywatności</button></nav><span className="footer-copy">© {new Date().getFullYear()} SYSTEM FORMY</span></footer>
-
-    {(showAccount || selectedOffer || legalPage) && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeOverlay(); }}><section className={`detail-modal${showAccount ? ' account-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="modal-title"><button className="modal-close" onClick={closeOverlay} aria-label="Zamknij okno"><X size={20} /></button>
-      {selectedOffer && <><p className="eyebrow muted">{selectedOffer.category.label.toUpperCase()}</p><span className="modal-type">{selectedOffer.item.type}</span><h2 id="modal-title">{selectedOffer.item.title}</h2><p className="modal-description">{selectedOffer.item.description}</p><div className="modal-divider" /><p className="modal-subhead">ZAŁOŻENIA</p><ul className="detail-list">{selectedOffer.item.details.map((detail) => <li key={detail}><span />{detail}</li>)}</ul><div className="modal-notice"><LockKeyhole size={17} /><span>Ta oferta nie jest jeszcze dostępna do zakupu. To opis założeń, a nie aktywna usługa.</span></div><button className="modal-done" onClick={closeOverlay}>ROZUMIEM <ArrowUpRight size={16} /></button></>}
-      {legalPage && <><p className="eyebrow muted">SYSTEM FORMY / INFORMACJE</p><h2 id="modal-title">{legalPage === 'terms' ? <>REGULAMIN<span>.</span></> : <>POLITYKA PRYWATNOŚCI<span>.</span></>}</h2><p className="modal-description">{legalPage === 'terms' ? 'Treść regulaminu jest w przygotowaniu. Przed uruchomieniem sprzedaży należy opublikować pełne zasady zakupów, płatności, dostępu do produktów, odstąpienia od umowy i reklamacji.' : 'Treść polityki prywatności jest w przygotowaniu. Przed uruchomieniem rejestracji i sprzedaży należy opisać administratora danych, cele i podstawy przetwarzania, okresy przechowywania, prawa użytkownika oraz używane usługi.'}</p><div className="modal-notice"><ShieldCheck size={17} /><span>To tymczasowy komunikat informacyjny, a nie dokument prawny. Nie uruchamiaj płatnej sprzedaży przed uzupełnieniem treści.</span></div><button className="modal-done" onClick={closeOverlay}>ZAMKNIJ <ArrowUpRight size={16} /></button></>}
-      {showAccount && <><div className="account-modal-heading"><p className="eyebrow muted">SYSTEM FORMY / STREFA KLIENTA</p><div className="modal-account-icon">{accountMode === 'recovery' ? <Mail size={24} /> : accountMode === 'dashboard' ? <UserRound size={24} /> : <LockKeyhole size={24} />}</div><h2 id="modal-title">{accountMode === 'dashboard' ? <>TWOJE KONTO<span>.</span></> : <>{accountTitle.split('.')[0]}<span>.</span></>}</h2><p className="modal-description">{accountMode === 'dashboard' ? `Zalogowano jako ${currentUser?.email ?? 'użytkownik'}.` : accountMode === 'signup' ? 'Utwórz konto, aby w przyszłości mieć w jednym miejscu swoje materiały i statusy usług.' : accountMode === 'recovery' ? 'Ze względów bezpieczeństwa zmiana hasła jest obsługiwana ręcznie przez właściciela Systemu Formy.' : 'Zaloguj się, aby przejść do swojej strefy klienta.'}</p></div>
-        {accountMode === 'dashboard' && currentUser ? <div className="customer-dashboard">
-          <div className="account-toolbar"><div><span className="dashboard-label">STATUS SESJI</span><strong><span className="online-dot" /> ZALOGOWANO</strong></div><button className="signout-button" onClick={() => void signOut()} disabled={busy}><LogOut size={15} /> WYLOGUJ</button></div>
-          <div className="account-tabs" role="tablist" aria-label="Sekcje konta">
-            {[
-              { key: 'profile' as const, label: 'Moje dane', icon: UserRound },
-              { key: 'orders' as const, label: 'Moje zamówienia', icon: ShoppingBag },
-              { key: 'materials' as const, label: 'Zakupione materiały', icon: BookOpen },
-              { key: 'plan' as const, label: 'Indywidualny plan', icon: ClipboardList },
-              { key: 'premium' as const, label: 'Premium', icon: Crown },
-            ].map((tab) => { const Icon = tab.icon; return <button key={tab.key} className={`account-tab${activeAccountTab === tab.key ? ' is-active' : ''}`} role="tab" aria-selected={activeAccountTab === tab.key} onClick={() => setActiveAccountTab(tab.key)}><Icon size={16} /><span>{tab.label}</span></button>; })}
-          </div>
-          {activeAccountTab === 'profile' && <div className="account-tab-panel">
-            <div className="profile-panel-heading"><div><p className="eyebrow muted">DANE I PREFERENCJE</p><h3>MOJE DANE</h3><p className="panel-subtitle">Uzupełnij tylko te informacje, które chcesz przekazać. Dane profilu pomagają przygotować przyszłe funkcje treningowe.</p></div><div className="profile-completion"><strong>{[profile.first_name.trim(), profile.gender, profile.weight_kg !== null, profile.height_cm !== null, profile.training_location, profile.primary_goal, profile.training_days_per_week !== null].filter(Boolean).length}/7</strong><span>UZUPEŁNIONYCH PÓL</span></div></div>
-            <div className="profile-email-row"><span className="dashboard-label">ADRES E-MAIL</span><strong>{currentUser.email}</strong><span>Adres logowania. Zmiana e-maila będzie wymagała osobnej weryfikacji.</span></div>
-            {!profileLoading && !profileLoadError && !profileReminderRef.current && <div className="profile-reminder"><CheckCircle2 size={17} /><span><strong>Uzupełnij profil treningowy.</strong> Podaj imię, miejsce treningu i główny cel, aby przygotować konto pod przyszłe funkcje.</span></div>}
-            {profileLoading ? <p className="dashboard-loading">Ładowanie danych profilu…</p> : profileLoadError ? <div className="modal-notice"><ShieldCheck size={17} /><span>Nie udało się wczytać profilu. Sprawdź komunikat powiadomienia i spróbuj odświeżyć stronę.</span></div> : <form className="profile-form" onSubmit={(event) => void saveProfile(event)}>
-              <label className="field-label">IMIĘ<input name="first_name" autoComplete="given-name" maxLength={80} placeholder="Jak mamy się do Ciebie zwracać?" value={profile.first_name} onChange={(event) => setProfile((old) => ({ ...old, first_name: event.target.value }))} /></label>
-              <label className="field-label">PŁEĆ (OPCJONALNIE)<select name="gender" value={profile.gender} onChange={(event) => setProfile((old) => ({ ...old, gender: event.target.value }))}><option value="">Nie podano</option><option value="female">Kobieta</option><option value="male">Mężczyzna</option><option value="other">Inna / wolę opisać inaczej</option><option value="prefer_not_to_say">Wolę nie podawać</option></select></label>
-              <label className="field-label">WAGA W KG (OPCJONALNIE)<input name="weight_kg" type="number" min={20} max={400} step="0.1" placeholder="np. 78.5" value={profile.weight_kg ?? ''} onChange={(event) => setProfile((old) => ({ ...old, weight_kg: event.target.value === '' ? null : Number(event.target.value) }))} /></label>
-              <label className="field-label">WZROST W CM (OPCJONALNIE)<input name="height_cm" type="number" min={80} max={260} step="1" placeholder="np. 180" value={profile.height_cm ?? ''} onChange={(event) => setProfile((old) => ({ ...old, height_cm: event.target.value === '' ? null : Number(event.target.value) }))} /></label>
-              <label className="field-label">GDZIE TRENUJESZ?<select name="training_location" value={profile.training_location} onChange={(event) => setProfile((old) => ({ ...old, training_location: event.target.value }))}><option value="">Wybierz miejsce</option><option value="gym">Na siłowni</option><option value="home">W domu</option><option value="both">W obu miejscach</option></select></label>
-              <label className="field-label">GŁÓWNY CEL<select name="primary_goal" value={profile.primary_goal} onChange={(event) => setProfile((old) => ({ ...old, primary_goal: event.target.value }))}><option value="">Wybierz cel (opcjonalnie)</option><option value="muscle">Budowanie mięśni</option><option value="fat_loss">Redukcja tkanki tłuszczowej</option><option value="strength">Zwiększenie siły</option><option value="consistency">Regularność i nawyki</option><option value="health">Ogólna sprawność</option></select></label>
-              <label className="field-label">TRENINGI W TYGODNIU (OPCJONALNIE)<select name="training_days_per_week" value={profile.training_days_per_week ?? ''} onChange={(event) => setProfile((old) => ({ ...old, training_days_per_week: event.target.value === '' ? null : Number(event.target.value) }))}><option value="">Nie określono</option>{[1,2,3,4,5,6,7].map((day) => <option key={day} value={day}>{day} {day === 1 ? 'dzień' : day < 5 ? 'dni' : 'dni'} w tygodniu</option>)}</select></label>
-              <div className="profile-form-footer"><p className="privacy-note"><ShieldCheck size={13} /> Dane są opcjonalne poza adresem konta. Możesz wrócić i zmienić je później.</p><button className="auth-submit" type="submit" disabled={profileSaving}><Save size={16} /> {profileSaving ? 'ZAPISYWANIE…' : 'ZAPISZ DANE'}</button></div>
-            </form>}
-            <section className="dashboard-section password-settings"><div className="dashboard-section-heading"><KeyRound size={18} /><h3>ZMIANA HASŁA</h3></div><p className="panel-subtitle">Wybierz nowe, mocne hasło. Zostaniesz poproszony o obecne hasło, aby potwierdzić zmianę.</p><form className="profile-form password-change-form" onSubmit={(event) => void changePassword(event)}>
-              <label className="field-label">OBECNE HASŁO<input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
-              <label className="field-label">NOWE HASŁO<input type="password" autoComplete="new-password" minLength={8} maxLength={128} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label>
-              <div className="password-rules" aria-live="polite">{passwordChecks(newPassword).map((rule) => <span key={rule.label} className={rule.ok ? 'password-rule is-met' : 'password-rule'}><CheckCircle2 size={13} />{rule.label}</span>)}</div>
-              <label className="field-label">POWTÓRZ NOWE HASŁO<input type="password" autoComplete="new-password" minLength={8} maxLength={128} value={newPasswordAgain} onChange={(event) => setNewPasswordAgain(event.target.value)} required /></label>
-              <button className="auth-submit" type="submit" disabled={passwordSaving}><KeyRound size={16} /> {passwordSaving ? 'ZMIENIANIE…' : 'ZMIEN HASŁO'}</button>
-            </form></section>
-          </div>}
-          {activeAccountTab === 'orders' && <div className="account-tab-panel"><div className="dashboard-section-heading"><ShoppingBag size={18} /><h3>MOJE ZAMÓWIENIA</h3></div>{overview === null ? <p className="dashboard-loading">Ładowanie zamówień…</p> : overview.orders.length ? <div className="account-list">{overview.orders.map((order) => <div className="account-list-row" key={order.id}><div><strong>{order.order_number}</strong><span>{formatDate(order.created_at)} · {order.status}</span></div><b>{formatPrice(order.total_amount, order.currency)}</b></div>)}</div> : <p className="empty-state">Nie ma jeszcze zamówień na tym koncie. Płatności nie są jeszcze podłączone.</p>}</div>}
-          {activeAccountTab === 'materials' && <div className="account-tab-panel"><div className="dashboard-section-heading"><BookOpen size={18} /><h3>ZAKUPIONE MATERIAŁY</h3></div>{overview === null ? <p className="dashboard-loading">Ładowanie materiałów…</p> : overview.entitlements.length ? <div className="account-list">{overview.entitlements.map((entry) => <div className="account-list-row" key={entry.id}><div><strong>{entry.product_title}</strong><span>{entry.product_type} · {entry.access_status}</span></div><span className="entitlement-date">{formatDate(entry.created_at)}</span></div>)}</div> : <p className="empty-state">Zakupione materiały pojawią się tu po wdrożeniu płatności i przypisywania produktów.</p>}</div>}
-          {activeAccountTab === 'plan' && <div className="account-tab-panel"><div className="dashboard-section-heading"><ClipboardList size={18} /><h3>INDYWIDUALNY PLAN</h3></div>{overview === null ? <p className="dashboard-loading">Ładowanie statusu planu…</p> : overview.planRequests.length ? <div className="account-list">{overview.planRequests.map((entry) => <div className="account-list-row" key={entry.id}><div><strong>Indywidualny plan</strong><span>Dodano: {formatDate(entry.created_at)}</span></div><span className="status-pill">{entry.status}</span></div>)}</div> : <p className="empty-state">Status realizacji planu pojawi się tutaj po wdrożeniu zamówienia i ankiety.</p>}</div>}
-          {activeAccountTab === 'premium' && <div className="account-tab-panel premium-panel"><div className="dashboard-section-heading"><Crown size={18} /><h3>PREMIUM</h3></div>{overview === null ? <p className="dashboard-loading">Sprawdzanie dostępu…</p> : overview.entitlements.some((entry) => entry.product_key.toLowerCase() === 'premium' && entry.access_status === 'active') ? <div className="premium-status is-active"><CheckCircle2 size={20} /><div><strong>Masz aktywny dostęp Premium.</strong><span>Status pobrany z uprawnień przypisanych do konta.</span></div></div> : <div className="premium-status"><Crown size={20} /><div><strong>Brak aktywnej subskrypcji.</strong><span>Zakładka Premium jest dostępna dla każdego konta. Zakupy i płatności nie zostały jeszcze uruchomione.</span></div></div>}<button className="secondary-button premium-learn-more" onClick={() => { setShowAccount(false); setActiveCategory('premium'); document.getElementById('oferta')?.scrollIntoView({ behavior: 'smooth' }); }}>POZNAJ OFERTĘ PREMIUM <ArrowUpRight size={16} /></button></div>}
-        </div> : accountMode === 'recovery' ? <div className="auth-form recovery-contact">
-          <div className="modal-notice"><Mail size={18} /><span>Nie możesz samodzielnie zmienić hasła przez stronę. Napisz do właściciela Systemu Formy z adresu e-mail przypisanego do konta. Po ręcznej weryfikacji otrzymasz dalsze instrukcje.</span></div>
-          <a className="auth-submit recovery-mail-link" href="mailto:Jakub.gabriel2002@gmail.com?subject=System%20Formy%20%E2%80%94%20pro%C5%9Bba%20o%20odzyskanie%20dost%C4%99pu&body=Cze%C5%9B%C4%87%2C%20prosz%C4%99%20o%20pomoc%20w%20odzyskaniu%20dost%C4%99pu%20do%20konta%20Systemu%20Formy.%0AAdres%20e-mail%20konta%3A%20">NAPISZ E-MAIL <ArrowUpRight size={16} /></a>
-          <p className="recovery-address">Adres kontaktowy: <a href="mailto:Jakub.gabriel2002@gmail.com">Jakub.gabriel2002@gmail.com</a></p>
-          <p className="privacy-note"><ShieldCheck size={13} /> Nigdy nie wysyłaj hasła w wiadomości e-mail. Podaj tylko adres konta i opisz problem.</p>
-          <div className="auth-links"><button type="button" onClick={() => switchMode('login')}>Wróć do logowania</button></div>
-        </div> : <form className="auth-form" onSubmit={(event) => void submitAuth(event)}>
-          <label className="field-label">ADRES E-MAIL<input type="email" name="email" autoComplete="email" placeholder="ty@przyklad.pl" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-          {(accountMode === 'login' || accountMode === 'signup') && <label className="field-label">HASŁO<input type="password" name="password" autoComplete={accountMode === 'login' ? 'current-password' : 'new-password'} placeholder="Minimum 8 znaków" minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>}
-          {accountMode === 'signup' && <div className="password-rules" aria-live="polite">{passwordChecks(password).map((rule) => <span key={rule.label} className={rule.ok ? 'password-rule is-met' : 'password-rule'}><CheckCircle2 size={13} />{rule.label}</span>)}</div>}
-          {accountMode === 'signup' && <label className="field-label">POWTÓRZ HASŁO<input type="password" name="passwordAgain" autoComplete="new-password" placeholder="Wpisz hasło ponownie" minLength={8} maxLength={128} value={passwordAgain} onChange={(event) => setPasswordAgain(event.target.value)} required /></label>}
-          <button className="auth-submit" type="submit" disabled={busy || !authReady}>{busy ? 'CHWILA…' : accountMode === 'login' ? 'ZALOGUJ SIĘ' : 'UTWÓRZ KONTO'} <ArrowUpRight size={16} /></button>
-          <div className="auth-links">{accountMode === 'login' ? <><button type="button" onClick={() => switchMode('recovery')}>Nie pamiętam hasła</button><button type="button" onClick={() => switchMode('signup')}>Utwórz konto</button></> : <button type="button" onClick={() => switchMode('login')}>Wróć do logowania</button>}</div>
-          <p className="privacy-note"><LockKeyhole size={13} /> Hasła są haszowane po stronie Workera. Sesję przechowuje bezpieczne ciasteczko HttpOnly.</p>
+    {accountOpen && <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) closeAccount(); }}><section className="account-modal" role="dialog" aria-modal="true" aria-label="Strefa klienta"><button className="modal-close" onClick={closeAccount} aria-label="Zamknij"><X size={20}/></button>
+      {!currentUser ? <><div className="auth-heading"><p className="eyebrow muted">SYSTEM FORMY / KONTO</p><h2>{authMode === 'signup' ? 'UTWÓRZ KONTO.' : authMode === 'recovery' ? 'ODZYSKAJ DOSTĘP.' : 'DOBRZE CIĘ WIDZIEĆ.'}</h2><p>{authMode === 'signup' ? 'Załóż konto, aby zapisywać materiały i treningi.' : authMode === 'recovery' ? 'W celu odzyskania dostępu napisz do administratora konta.' : 'Zaloguj się, aby otworzyć swoją strefę klienta.'}</p></div>
+        {authMode === 'recovery' ? <div className="auth-form"><p>Samodzielne odzyskiwanie hasła nie zostało jeszcze uruchomione. Skontaktuj się z administratorem z adresu przypisanego do konta.</p><a className="solid-button" href="mailto:jakub.gabriel2002@gmail.com?subject=System%20Formy%20%E2%80%94%20odzyskanie%20dost%C4%99pu">Napisz e-mail <Mail size={15}/></a><button className="quiet-button" onClick={() => setAuthMode('login')}>Wróć do logowania</button></div> : <form className="auth-form" onSubmit={(e) => void submitAuth(e)}><label>E-MAIL<input type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ty@przyklad.pl"/></label><label>HASŁO<input type="password" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} minLength={8} maxLength={128} required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Hasło"/></label>
+          {authMode === 'login' && <label className="remember-option"><input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)}/><span><strong>Nie wylogowuj mnie</strong><small>Sesja do 7 dni; termin odnawia się przy korzystaniu ze strony.</small></span></label>}
+          {authMode === 'signup' && <><div className="password-rules">{passwordRules(password).map(([label, ok]) => <span key={label} className={ok ? 'ok' : ''}><CheckCircle2 size={13}/>{label}</span>)}</div><label>POWTÓRZ HASŁO<input type="password" autoComplete="new-password" minLength={8} maxLength={128} required value={passwordAgain} onChange={(e) => setPasswordAgain(e.target.value)}/></label></>}
+          {authError && <p className="form-error" role="alert">{authError}</p>}<button className="solid-button full-width" disabled={busy || !authReady}>{busy ? 'CHWILA…' : authMode === 'login' ? 'ZALOGUJ SIĘ' : 'UTWÓRZ KONTO'} <ArrowUpRight size={16}/></button><div className="auth-links">{authMode === 'login' ? <><button type="button" onClick={() => setAuthMode('recovery')}>Nie pamiętam hasła</button><button type="button" onClick={() => { setAuthMode('signup'); setAuthError(''); }}>Utwórz konto</button></> : <button type="button" onClick={() => { setAuthMode('login'); setAuthError(''); }}>Wróć do logowania</button>}</div><small className="privacy-note"><LockKeyhole size={13}/> Hasła są haszowane po stronie serwera, a sesję przechowuje ciasteczko HttpOnly.</small>
         </form>}
+      </> : <><div className="account-heading"><div><p className="eyebrow muted">SYSTEM FORMY / STREFA KLIENTA</p><h2>TWOJE KONTO<span>.</span></h2><p>Zalogowano jako {currentUser.email}</p></div><button className="signout-button" disabled={busy} onClick={() => void signOut()}><LogOut size={15}/> WYLOGUJ</button></div>
+        <div className="premium-near-logout"><Crown size={16}/><div><strong>System Formy Premium</strong><small>Dodatkowe możliwości i materiały dla użytkowników.</small></div><button onClick={() => setActiveTab('premium')}>Poznaj Premium</button></div>
+        <nav className="account-tabs">{tabItems.map((t) => { const I = t.icon; return <button key={t.key} className={activeTab === t.key ? 'is-active' : ''} onClick={() => setActiveTab(t.key)}><I size={15}/>{t.label}</button>; })}</nav>
+        {dashboardLoading ? <p className="loading-text">Ładowanie konta…</p> : <div className="account-content">
+          {activeTab === 'home' && <><div className="dashboard-welcome"><p className="eyebrow muted">CENTRUM SYSTEMU FORMY</p><h3>TWÓJ SYSTEM. <span>TWOJE WYNIKI.</span></h3><p>Tu znajdziesz kupione materiały, treningi i historię postępów.</p></div><div className="stat-grid"><article><span>AKTYWNE MATERIAŁY</span><strong>{owned.length}</strong><small>Pliki dostępne na koncie</small></article><article><span>ZAPISANE TRENINGI</span><strong>{workouts.length}</strong><small>Sesje treningowe</small></article><article><span>ZAMÓWIENIA</span><strong>{overview?.orders.length ?? 0}</strong><small>Historia zakupów</small></article></div><div className="content-card"><h3>NAJBLIŻSZY KROK</h3><p>Dodaj trening i zapisz ćwiczenia, serie, powtórzenia oraz ciężary. Materiały pobierzesz z zakładki „Materiały”.</p><button className="outline-button" onClick={() => setActiveTab('training')}>Zapisz trening <ArrowRight size={15}/></button></div><div className="content-card"><h3>OSTATNIE TRENINGI</h3>{workouts.slice(0,3).map((w) => <div className="list-row" key={w.id}><div><strong>{w.title}</strong><small>{formatDate(w.performed_on)}</small></div><span>{parseExercises(w.exercises_json).length} ćwiczeń</span></div>)}{workouts.length === 0 && <p className="muted-text">Nie ma jeszcze zapisanych treningów.</p>}</div></>}
+          {activeTab === 'profile' && <><div className="content-heading"><div><p className="eyebrow muted">DANE I PREFERENCJE</p><h3>MOJE DANE</h3></div><p>Adres konta: <strong>{currentUser.email}</strong></p></div>{profileSaved && !profileEditing ? <div className="saved-profile"><div><p className="eyebrow muted">PROFIL ZAPISANY</p><h3>{profile.first_name || 'Twój profil'}</h3><p>{locationLabel(profile.training_location)} · {goalLabel(profile.primary_goal)}</p><small>Waga: {profile.weight_kg ?? '—'} kg · Wzrost: {profile.height_cm ?? '—'} cm · Treningi w tygodniu: {profile.training_days_per_week ?? '—'}</small></div><button className="profile-update-button" onClick={() => setProfileEditing(true)}><Save size={15}/> Zaktualizuj dane</button></div> : <form className="form-grid" onSubmit={(e) => void saveProfile(e)}><label>IMIĘ<input value={profile.first_name} maxLength={80} onChange={(e) => setProfile((x) => ({ ...x, first_name: e.target.value }))} placeholder="Jak mamy się do Ciebie zwracać?"/></label><label>PŁEĆ (OPCJONALNIE)<select value={profile.gender} onChange={(e) => setProfile((x) => ({ ...x, gender: e.target.value }))}><option value="">Nie podano</option><option value="female">Kobieta</option><option value="male">Mężczyzna</option><option value="other">Inna / wolę opisać inaczej</option><option value="prefer_not_to_say">Wolę nie podawać</option></select></label><label>WAGA (KG)<input type="number" min="20" max="400" step="0.1" value={profile.weight_kg ?? ''} onChange={(e) => setProfile((x) => ({ ...x, weight_kg: e.target.value === '' ? null : Number(e.target.value) }))}/></label><label>WZROST (CM)<input type="number" min="80" max="260" value={profile.height_cm ?? ''} onChange={(e) => setProfile((x) => ({ ...x, height_cm: e.target.value === '' ? null : Number(e.target.value) }))}/></label><label>GDZIE TRENUJESZ?<select value={profile.training_location} onChange={(e) => setProfile((x) => ({ ...x, training_location: e.target.value }))}><option value="">Wybierz miejsce</option><option value="gym">Na siłowni</option><option value="home">W domu</option><option value="both">W obu miejscach</option></select></label><label>GŁÓWNY CEL<select value={profile.primary_goal} onChange={(e) => setProfile((x) => ({ ...x, primary_goal: e.target.value }))}><option value="">Wybierz cel</option><option value="muscle">Budowanie mięśni</option><option value="fat_loss">Redukcja</option><option value="strength">Zwiększenie siły</option><option value="consistency">Regularność i nawyki</option><option value="health">Ogólna sprawność</option></select></label><label>TRENINGI W TYGODNIU<select value={profile.training_days_per_week ?? ''} onChange={(e) => setProfile((x) => ({ ...x, training_days_per_week: e.target.value === '' ? null : Number(e.target.value) }))}><option value="">Nie określono</option>{[1,2,3,4,5,6,7].map((n) => <option key={n} value={n}>{n}</option>)}</select></label><div className="form-submit-row"><small>Dane możesz później zmienić. Pola poza adresem e-mail są opcjonalne.</small><button className="solid-button" disabled={profileSaving}><Save size={15}/>{profileSaving ? 'ZAPISYWANIE…' : profileSaved ? 'ZAPISZ ZMIANY' : 'ZAPISZ DANE'}</button></div></form>}
+            {profileSaved && profileEditing && <div className="edit-profile-overlay"><section className="edit-profile-modal"><button className="modal-close" onClick={() => setProfileEditing(false)}><X size={18}/></button><p className="eyebrow muted">EDYCJA PROFILU</p><h3>AKTUALIZUJ DANE.</h3><form className="form-grid" onSubmit={(e) => void saveProfile(e)}><label>IMIĘ<input value={profile.first_name} maxLength={80} onChange={(e) => setProfile((x) => ({ ...x, first_name: e.target.value }))}/></label><label>PŁEĆ<select value={profile.gender} onChange={(e) => setProfile((x) => ({ ...x, gender: e.target.value }))}><option value="">Nie podano</option><option value="female">Kobieta</option><option value="male">Mężczyzna</option><option value="other">Inna</option><option value="prefer_not_to_say">Wolę nie podawać</option></select></label><label>WAGA (KG)<input type="number" min="20" max="400" step="0.1" value={profile.weight_kg ?? ''} onChange={(e) => setProfile((x) => ({ ...x, weight_kg: e.target.value === '' ? null : Number(e.target.value) }))}/></label><label>WZROST (CM)<input type="number" min="80" max="260" value={profile.height_cm ?? ''} onChange={(e) => setProfile((x) => ({ ...x, height_cm: e.target.value === '' ? null : Number(e.target.value) }))}/></label><label>MIEJSCE TRENINGU<select value={profile.training_location} onChange={(e) => setProfile((x) => ({ ...x, training_location: e.target.value }))}><option value="">Wybierz</option><option value="gym">Siłownia</option><option value="home">Dom</option><option value="both">Oba</option></select></label><label>CEL<select value={profile.primary_goal} onChange={(e) => setProfile((x) => ({ ...x, primary_goal: e.target.value }))}><option value="">Wybierz</option><option value="muscle">Mięśnie</option><option value="fat_loss">Redukcja</option><option value="strength">Siła</option><option value="consistency">Regularność</option><option value="health">Zdrowie</option></select></label><label>TRENINGI W TYGODNIU<select value={profile.training_days_per_week ?? ''} onChange={(e) => setProfile((x) => ({ ...x, training_days_per_week: e.target.value === '' ? null : Number(e.target.value) }))}><option value="">Nie określono</option>{[1,2,3,4,5,6,7].map((n) => <option key={n} value={n}>{n}</option>)}</select></label><div className="form-submit-row"><button type="button" className="quiet-button" onClick={() => setProfileEditing(false)}>Anuluj</button><button className="solid-button" disabled={profileSaving}><Save size={15}/>Zapisz zmiany</button></div></form></section></div>}
+            <section className="content-card"><h3><KeyRound size={17}/> ZMIANA HASŁA</h3><p>Po zmianie hasła wszystkie sesje zostaną unieważnione i trzeba będzie zalogować się ponownie.</p><form className="form-grid" onSubmit={(e) => void changePassword(e)}><label>OBECNE HASŁO<input type="password" autoComplete="current-password" required value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)}/></label><label>NOWE HASŁO<input type="password" minLength={8} maxLength={128} required value={newPassword} onChange={(e) => setNewPassword(e.target.value)}/></label><label>POWTÓRZ NOWE HASŁO<input type="password" minLength={8} maxLength={128} required value={newPasswordAgain} onChange={(e) => setNewPasswordAgain(e.target.value)}/></label><div className="form-submit-row"><span className="password-rules">{passwordRules(newPassword).filter((x) => x[1]).length}/6 wymagań spełnionych</span><button className="solid-button" disabled={passwordSaving}>{passwordSaving ? 'ZMIENIANIE…' : 'ZMIEŃ HASŁO'} <KeyRound size={15}/></button></div></form></section>
+          </>}
+          {activeTab === 'orders' && <section className="content-card"><h3><ShoppingBag size={18}/> MOJE ZAMÓWIENIA</h3>{overview?.orders.length ? overview.orders.map((o) => <div className="list-row" key={o.id}><div><strong>{o.order_number}</strong><small>{formatDate(o.created_at)} · {o.status}</small></div><b>{new Intl.NumberFormat('pl-PL', { style: 'currency', currency: o.currency || 'PLN' }).format(o.total_amount)}</b></div>) : <p className="muted-text">Nie masz jeszcze zamówień.</p>}</section>}
+          {activeTab === 'materials' && <section className="content-card"><h3><BookOpen size={18}/> MOJE MATERIAŁY</h3>{owned.length ? owned.map((x) => <div className="list-row" key={x.id}><div><strong>{x.product_title}</strong><small>{productType(x.product_type)} · odblokowano {formatDate(x.created_at)}</small></div><button className="outline-button" onClick={() => window.location.assign('/api/products/' + encodeURIComponent(x.product_key) + '/download')}><Download size={15}/> Pobierz</button></div>) : <p className="muted-text">Materiały pojawią się tutaj po pobraniu darmowego e-booka lub potwierdzeniu zakupu. Wróć do katalogu na stronie głównej, aby zobaczyć ofertę.</p>}</section>}
+          {activeTab === 'plan' && <div className="plan-layout"><section className="content-card"><p className="eyebrow muted">TWÓJ PLAN</p><h3><ClipboardList size={18}/> DNI TRENINGOWE</h3><p className="muted-text">Ułóż własny plan A, B i C. Wpisz ćwiczenia, serie i docelowe powtórzenia. Plan jest prywatny i możesz wracać do niego później.</p><div className="plan-day-nav">{(['A', 'B', 'C'] as const).map((day) => { const saved = planDays.some((x) => x.day_key === day); return <button type="button" key={day} className={activePlanDay === day ? 'is-active' : ''} onClick={() => setActivePlanDay(day)}>Dzień {day}<small>{saved ? 'ZAPISANY' : 'PUSTY'}</small></button>; })}</div><div className="plan-preview-list">{planDays.filter((x) => x.day_key === activePlanDay).flatMap((x) => x.exercises).map((x, i) => <div key={i}><span>{x.name}</span><strong>{x.sets} × {x.reps}</strong></div>)}{!planDays.some((x) => x.day_key === activePlanDay) && <p className="muted-text">Ten dzień nie ma jeszcze zapisanego planu.</p>}</div></section><form className="content-card" onSubmit={(e) => void savePlanDay(e)}><p className="eyebrow muted">EDYCJA DNIA {activePlanDay}</p><h3>{`PLAN TRENINGOWY — DZIEŃ ${activePlanDay}`}</h3><label>NAZWA DNIA<input value={planTitle} onChange={(e) => setPlanTitle(e.target.value)} maxLength={120} required /></label><div className="exercise-heading"><strong>ĆWICZENIA / SERIE / POWTÓRZENIA</strong><button type="button" className="quiet-button" onClick={() => setPlanExercises((old) => [...old, { name: '', sets: 3, reps: 10, weight_kg: null }])}><Plus size={14}/> Dodaj</button></div>{planExercises.map((x, i) => <div className="exercise-fields plan-exercise-fields" key={i}><label>ĆWICZENIE<input value={x.name} onChange={(e) => changePlanExercise(i, 'name', e.target.value)} placeholder="np. Wyciskanie" maxLength={100}/></label><label>SERIE<input type="number" min="1" max="20" value={x.sets} onChange={(e) => changePlanExercise(i, 'sets', e.target.value)}/></label><label>POWTÓRZENIA<input type="number" min="1" max="100" value={x.reps} onChange={(e) => changePlanExercise(i, 'reps', e.target.value)}/></label>{planExercises.length > 1 && <button type="button" className="remove-exercise" onClick={() => setPlanExercises((old) => old.filter((_, j) => j !== i))} aria-label="Usuń ćwiczenie"><X size={13}/></button>}</div>)}<div className="plan-actions"><button className="solid-button" disabled={planSaving}>{planSaving ? 'ZAPISYWANIE…' : 'ZAPISZ PLAN DNIA'}</button><button type="button" className="outline-button" onClick={usePlanForWorkout}>PRZEJDŹ DO TRENINGU <ArrowRight size={15}/></button></div><p className="muted-text">Po przejściu do dziennika możesz wpisać rzeczywiste ciężary i zapisać wykonany trening. Wyniki trafią do historii progresu.</p></form></div>}
+          {activeTab === 'training' && <div className="two-columns"><form className="content-card" onSubmit={(e) => void saveWorkout(e)}><h3><Dumbbell size={18}/> ZAPISZ TRENING</h3><label>NAZWA TRENINGU<input required maxLength={120} value={workTitle} onChange={(e) => setWorkTitle(e.target.value)} placeholder="np. Dzień A"/></label><label>DATA<input type="date" required value={workDate} onChange={(e) => setWorkDate(e.target.value)}/></label><div className="exercise-heading"><strong>ĆWICZENIA</strong><button type="button" className="quiet-button" onClick={() => setExercises((x) => [...x, { name: '', sets: 3, reps: 10, weight_kg: null }])}><Plus size={14}/> Dodaj</button></div>{exercises.map((x, i) => <div className="exercise-fields" key={i}><label>Ćwiczenie<input value={x.name} onChange={(e) => changeExercise(i, 'name', e.target.value)} placeholder="np. Przysiad"/></label><label>Serie<input type="number" min="1" max="20" value={x.sets} onChange={(e) => changeExercise(i, 'sets', e.target.value)}/></label><label>Powtórzenia<input type="number" min="1" max="100" value={x.reps} onChange={(e) => changeExercise(i, 'reps', e.target.value)}/></label><label>Ciężar kg<input type="number" min="0" max="1000" step="0.5" value={x.weight_kg ?? ''} onChange={(e) => changeExercise(i, 'weight_kg', e.target.value)}/></label>{exercises.length > 1 && <button type="button" className="remove-exercise" onClick={() => setExercises((old) => old.filter((_, j) => j !== i))} aria-label="Usuń ćwiczenie"><X size={13}/></button>}</div>)}<label>NOTATKI<textarea maxLength={1000} value={workNotes} onChange={(e) => setWorkNotes(e.target.value)}/></label><button className="solid-button" disabled={busy}>{busy ? 'ZAPISYWANIE…' : 'ZAPISZ TRENING'}</button></form><section className="content-card"><h3><TrendingUp size={18}/> OSTATNIE TRENINGI</h3>{workouts.slice(0,25).map((w) => <details className="workout-item" key={w.id}><summary><span><strong>{w.title}</strong><small>{formatDate(w.performed_on)}</small></span><ChevronRight size={15}/></summary><div>{parseExercises(w.exercises_json).map((x, i) => <p key={i}>{x.name} — {x.sets} × {x.reps}{x.weight_kg !== null ? ` · ${x.weight_kg} kg` : ''}</p>)}{w.notes && <small>{w.notes}</small>}</div></details>)}{workouts.length === 0 && <p className="muted-text">Zapisz pierwszy trening, aby zacząć śledzić regularność.</p>}</section></div>}
+          {activeTab === 'progress' && <div className="two-columns"><section className="content-card"><h3><BarChart3 size={18}/> TRENINGI — OSTATNIE TYGODNIE</h3><div className="progress-bars">{bars.map((b) => <div key={b.label}><strong>{b.count}</strong><div><i style={{ height: `${(b.count / maxBar) * 100}%` }}/></div><small>{b.label}</small></div>)}</div><p className="muted-text">Wykres korzysta z treningów zapisanych w Systemie Formy.</p></section><form className="content-card" onSubmit={(e) => void saveCheckin(e)}><h3><CheckCircle2 size={18}/> PODSUMOWANIE TYGODNIA</h3><p className="muted-text">Tydzień od {formatDate(monday(new Date()))}. Możesz nadpisać podsumowanie dla bieżącego tygodnia.</p><label>WYKONANE TRENINGI<select value={checkinCount} onChange={(e) => setCheckinCount(e.target.value)}>{Array.from({ length: 15 }, (_, i) => <option key={i} value={i}>{i}</option>)}</select></label><label>REGULARNOŚĆ (1–5)<select value={regularity} onChange={(e) => setRegularity(e.target.value)}>{[1,2,3,4,5].map((n) => <option key={n} value={n}>{n}/5</option>)}</select></label><label>CO POSZŁO DOBRZE / CO PRZESZKADZAŁO?<textarea maxLength={1000} value={checkinNotes} onChange={(e) => setCheckinNotes(e.target.value)}/></label><button className="solid-button" disabled={busy}>ZAPISZ PODSUMOWANIE</button></form><section className="content-card full-width"><h3><FileText size={18}/> HISTORIA PODSUMOWAŃ</h3>{checkins.length ? checkins.map((c) => <div className="list-row" key={c.id}><div><strong>Tydzień od {formatDate(c.week_start)}</strong><small>{c.training_count} treningów · regularność {c.regularity}/5</small>{c.notes && <small>{c.notes}</small>}</div></div>) : <p className="muted-text">Podsumowania pojawią się po zapisaniu pierwszego tygodnia.</p>}</section></div>}
+          {activeTab === 'premium' && <section className="content-card premium-card"><Crown size={24}/><h3>SYSTEM FORMY PREMIUM</h3><p>Premium będzie rozwijane jako osobny dostęp do funkcji i materiałów. Produkty kupione jednorazowo pozostają niezależne od subskrypcji.</p><p className="muted-text">Płatności za Premium nie zostały jeszcze podłączone do automatycznego checkoutu.</p></section>}
+          {activeTab === 'admin' && isAdmin && <div className="two-columns"><form className="content-card" onSubmit={(e) => void addProduct(e)}><h3><Upload size={18}/> DODAJ PRODUKT</h3><p className="muted-text">Dodaj opis, cenę i plik. PDF i XLSX będą przechowywane w prywatnym R2.</p><label>NAZWA<input name="title" required maxLength={140} placeholder="np. Zacznij trenować"/></label><label>KLUCZ (MAŁE LITERY / MYŚLNIKI)<input name="product_key" required pattern="[a-z0-9-]+" maxLength={100} placeholder="np. zacznij-trenowac"/></label><label>OPIS<textarea name="description" required maxLength={2000}/></label><div className="form-grid"><label>RODZAJ<select name="product_type" defaultValue="ebook"><option value="ebook">E-book / PDF</option><option value="training_plan">Plan treningowy</option><option value="guide">Poradnik</option><option value="bundle">Pakiet</option><option value="other">Inny materiał</option></select></label><label>CENA (PLN)<input type="number" name="price_amount" min="0" step="0.01" defaultValue="0" required/></label></div><label className="check-row"><input name="is_free" type="checkbox" value="true"/> Produkt bezpłatny</label><label>LINK DO ZAKUPU HTTPS (OPCJONALNIE)<input name="checkout_url" type="url" placeholder="https://…"/></label><label>PLIK (PDF, XLSX, DOCX, ZIP, CSV, TXT; DO 25 MB)<input name="file" type="file" accept=".pdf,.xlsx,.docx,.zip,.csv,.txt" required/></label><label className="check-row"><input name="is_published" type="checkbox" value="true" defaultChecked/> Opublikuj w katalogu</label><button className="solid-button" disabled={savingProduct}>{savingProduct ? 'DODAWANIE…' : 'DODAJ PRODUKT'}</button>{adminError && <p className="form-error">{adminError}</p>}</form><div className="content-card"><form onSubmit={(e) => void grantAccess(e)}><h3><ShieldCheck size={18}/> POTWIERDŹ ZAKUP</h3><p className="muted-text">Tego formularza użyj dopiero po sprawdzeniu płatności w operatorze. Na tym etapie odblokowanie płatnych produktów wymaga ręcznego potwierdzenia.</p><label>E-MAIL KUPUJĄCEGO<input type="email" name="email" required placeholder="klient@przyklad.pl"/></label><label>PRODUKT<select name="product_key" required defaultValue="">{adminProducts.filter((p) => !p.is_free).map((p) => <option key={p.id} value={p.product_key}>{p.title}</option>)}</select></label><button className="outline-button" disabled={savingGrant}>{savingGrant ? 'PRZYPISYWANIE…' : 'PRZYPISZ DOSTĘP'}</button>{adminError && <p className="form-error">{adminError}</p>}</form><div className="admin-product-list"><h4>KATALOG I PUBLIKACJA</h4>{adminProducts.map((p) => <details className="admin-product-item" key={p.id}><summary><span><strong>{p.title}</strong><small>{p.product_key} · {p.is_free ? 'Darmowy' : (p.price_amount > 0 ? p.price_amount.toFixed(2) + ' zł' : 'Cena nieustawiona')} · {p.is_published ? 'Opublikowany' : 'Szkic / ukryty'}</small><small>Plik: {p.original_filename || 'brak nazwy pliku'}</small></span><ChevronRight size={16}/></summary><form className="admin-product-settings" onSubmit={(e) => void saveProductSettings(e, p)}><label>CENA (PLN)<input name="price_amount" type="number" min="0" max="100000" step="0.01" defaultValue={p.price_amount}/></label><label>LINK DO ZAKUPU (HTTPS)<input name="checkout_url" type="url" defaultValue={p.checkout_url || ''} placeholder="https://… (opcjonalnie)"/></label><label className="check-row"><input name="is_free" type="checkbox" value="true" defaultChecked={Boolean(p.is_free)}/> Materiał bezpłatny</label><label className="check-row"><input name="is_published" type="checkbox" value="true" defaultChecked={Boolean(p.is_published)}/> Publikuj w katalogu</label><button className="outline-button" disabled={savingProductSettings === p.product_key}>{savingProductSettings === p.product_key ? 'ZAPISYWANIE…' : 'ZAPISZ USTAWIENIA'}</button></form></details>)}{adminProducts.length === 0 && <p className="muted-text">Nie dodano jeszcze produktów. Uruchom skrypt seedowania w README-ADMIN-R2.md albo dodaj produkt formularzem powyżej.</p>}</div></div></div>}
+        </div>}
       </>}
     </section></div>}
-    {toast && <div key={toast.id} className={`toast-message toast-${toast.kind}`} role={toast.kind === 'error' ? 'alert' : 'status'} aria-live={toast.kind === 'error' ? 'assertive' : 'polite'}><div className="toast-icon">{toast.kind === 'success' ? <CheckCircle2 size={20} /> : toast.kind === 'error' ? <ShieldCheck size={20} /> : <Mail size={20} />}</div><span className="toast-text">{toast.message}</span><button type="button" className="toast-close" aria-label="Zamknij powiadomienie" onClick={() => setToast(null)}><X size={16} /></button><span className="toast-progress" /></div>}
+    {legalPage && <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setLegalPage(null); }}><section className="legal-modal"><button className="modal-close" onClick={() => setLegalPage(null)}><X size={18}/></button><p className="eyebrow muted">SYSTEM FORMY / INFORMACJE</p><h2>{legalPage === 'terms' ? 'REGULAMIN.' : 'POLITYKA PRYWATNOŚCI.'}</h2><p>{legalPage === 'terms' ? 'Przed uruchomieniem płatnej sprzedaży należy opublikować pełny regulamin obejmujący zakupy, płatności, dostęp do plików, odstąpienie od umowy i reklamacje.' : 'Przed uruchomieniem sprzedaży należy uzupełnić informacje o administratorze danych, podstawach i celach przetwarzania, okresach przechowywania, prawach użytkownika i używanych usługach.'}</p><button className="outline-button" onClick={() => setLegalPage(null)}>ZAMKNIJ</button></section></div>}
+    {notice && <div className={'toast toast-' + notice.kind} role={notice.kind === 'error' ? 'alert' : 'status'}><span>{notice.kind === 'success' ? <CheckCircle2 size={18}/> : notice.kind === 'error' ? <ShieldCheck size={18}/> : <Mail size={18}/>}</span><p>{notice.message}</p><button onClick={() => setNotice(null)} aria-label="Zamknij"><X size={15}/></button></div>}
   </main>;
 }
