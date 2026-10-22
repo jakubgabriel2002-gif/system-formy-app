@@ -1,3 +1,4 @@
+import { handleV2Api } from './v2';
 interface PlatformEnv { DB: D1Database; PRODUCT_FILES?: R2Bucket; ADMIN_EMAIL?: string; STRIPE_SECRET_KEY?: string; STRIPE_WEBHOOK_SECRET?: string; }
 type Session = { id: string; email: string };
 type Body = Record<string, unknown>;
@@ -28,6 +29,8 @@ async function verifyStripeSignature(raw: string, header: string | null, secret:
  return false;
 }
 export async function handlePlatformApi(request:Request,env:PlatformEnv):Promise<Response|null>{
+ const v2Response = await handleV2Api(request, env);
+ if (v2Response) return v2Response;
  const path=new URL(request.url).pathname,method=request.method.toUpperCase();
   if(path==='/api/stripe/webhook' && method==='POST') {
    if(!env.STRIPE_WEBHOOK_SECRET)return reply({error:'Webhook Stripe nie jest skonfigurowany.'},503);
@@ -55,7 +58,7 @@ export async function handlePlatformApi(request:Request,env:PlatformEnv):Promise
    const stmts:D1PreparedStatement[]=[
     env.DB.prepare('INSERT INTO stripe_webhook_events (event_id,event_type,received_at) VALUES (?,?,?)').bind(eventId,eventType,now),
     env.DB.prepare("INSERT INTO orders (id,user_id,order_number,status,total_amount,currency,created_at,updated_at) VALUES (?,?,?,'paid',?,?,?,?)").bind(orderId,userId,`STRIPE-${sessionId}`,amount/100,currency,now,now),
-    env.DB.prepare('INSERT INTO order_items (id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES (?,?,?,?,?,1,?,?)').bind(crypto.randomUUID(),orderId,key,item.title,item.product_type,amount/100,now)
+    env.DB.prepare('INSERT INTO order_items (id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES (?,?,?,?,?,1,?,?)').bind(crypto.randomUUID(),orderId,key,item.title,item.product_type,amount/100,now,now)
    ];
    if(!entitlement)stmts.push(env.DB.prepare("INSERT INTO user_entitlements (id,user_id,order_id,product_key,product_title,product_type,access_status,created_at) VALUES (?,?,?,?,?,?,'active',?)").bind(crypto.randomUUID(),userId,orderId,key,item.title,item.product_type,now));
    await env.DB.batch(stmts);return reply({received:true,paid:true});
