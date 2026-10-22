@@ -212,8 +212,10 @@ export async function handleSitePageLock(request: Request, env: { DB: D1Database
   const path = url.pathname;
   // The ACP shell is deliberately available so the admin can authenticate and turn the lock off.
   // Authorization is still enforced in each admin API endpoint.
-  const isAdminShell = path === '/acp' || path.startsWith('/acp/') || path === '/login' || path === '/rejestracja';
   const isMaintenancePage = path === '/maintenance';
+  // Public login/registration are also gated. Only allow login when explicitly coming to ACP.
+  const isAdminLogin = path === '/login' && ((url.searchParams.get('next') || '') === '/acp' || (url.searchParams.get('next') || '').startsWith('/acp/'));
+  const isAdminShell = path === '/acp' || path.startsWith('/acp/') || isAdminLogin;
   const isStaticAsset = /\.(?:js|mjs|css|map|png|jpe?g|webp|avif|svg|ico|woff2?|ttf)$/i.test(path) || path.startsWith('/assets/');
   // Site-lock API and authentication routes are checked before the gate; other API calls receive JSON 423.
   const isUnlockEndpoint = path === '/api/v2/site-lock/unlock' && request.method.toUpperCase() === 'POST';
@@ -224,12 +226,15 @@ export async function handleSitePageLock(request: Request, env: { DB: D1Database
   const config = await env.DB.prepare("SELECT setting_key,setting_value FROM app_settings WHERE setting_key IN ('site_lock_enabled','site_lock_password_hash','maintenance_message','maintenance_until')").all<{setting_key:string;setting_value:string}>().catch(() => null);
   const values: Record<string,string> = {};
   for (const row of config?.results || []) values[row.setting_key] = row.setting_value;
-  if (values.site_lock_enabled !== 'true' || !values.site_lock_password_hash) return null;
+  if (!isMaintenancePage && (values.site_lock_enabled !== 'true' || !values.site_lock_password_hash)) return null;
 
   // Unlock tokens are short-lived HMACs. Never place the password hash itself in a browser cookie.
   const cookieHeader = request.headers.get('Cookie') || '';
   const token = cookieHeader.split(';').map(x => x.trim()).find(x => x.startsWith('sf_site_unlock='))?.slice('sf_site_unlock='.length) || '';
-  if (token && await verifySiteUnlockToken(values.site_lock_password_hash, token)) return null;
+  if (token && values.site_lock_password_hash && await verifySiteUnlockToken(values.site_lock_password_hash, token)) {
+    if (isMaintenancePage) return Response.redirect(new URL('/', url).toString(), 302);
+    return null;
+  }
 
   // API consumers need JSON responses, not HTML. Public document routes redirect to
   // one dedicated maintenance URL so visitors never see the application behind the lock.
