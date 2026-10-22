@@ -77,3 +77,13 @@
 }
 /* Dodatkowe CTA na karcie produktu */
 .sf-product-more{margin:0 17px 17px;width:calc(100% - 34px);}
+
+/* ACP: pełny edytor użytkownika otwierany po kliknięciu w konto */
+.sf-user-editor-overlay{position:fixed;inset:0;z-index:120;display:flex;align-items:center;justify-content:center;padding:clamp(10px,3vw,28px);background:rgba(5,9,7,.78);backdrop-filter:blur(7px);}
+.sf-user-editor-modal{width:min(1120px,100%);max-height:min(92vh,1000px);overflow:auto;border:1px solid rgba(191,255,77,.22);border-radius:22px;background:var(--sf-bg,#101410);box-shadow:0 24px 90px rgba(0,0,0,.48);padding:clamp(12px,2vw,24px);}
+.sf-user-editor-modal .sf-user-detail{margin:0 0 14px;}
+.sf-user-editor-modal>.sf-panel{margin-top:14px;}
+.sf-user-editor-modal .sf-panel-heading{position:sticky;top:0;z-index:2;background:var(--sf-panel,#141a15);padding:8px 0;}
+.sf-user-editor-modal .sf-form-stack{gap:14px;}
+.sf-user-editor-modal .sf-two-col{align-items:start;}
+@media(max-width:680px){.sf-user-editor-overlay{padding:6px;align-items:flex-start}.sf-user-editor-modal{max-height:96vh;padding:10px;border-radius:15px}.sf-user-editor-modal .sf-two-col{grid-template-columns:1fr}.sf-user-editor-modal table{min-width:520px}}
