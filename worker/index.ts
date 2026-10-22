@@ -104,11 +104,7 @@ function requirePasswordPepper(env: Env): string {
 }
 function safeFailure(error: unknown): Response {
   if (error instanceof HttpError) return json({ error: error.message }, error.status);
-  const diagnostic = error instanceof Error ? error.message : String(error);
   console.error('System Formy API error:', error);
-  if (/no such table:\s*auth_rate_limit_events/i.test(diagnostic)) {
-    return json({ error: 'Brakuje tabeli auth_rate_limit_events w bazie D1. Uruchom osobny SQL naprawczy z instrukcji wdrożenia, a następnie spróbuj ponownie.' }, 503);
-  }
   return json({ error: 'Wystąpił błąd serwera. Sprawdź konfigurację i spróbuj ponownie.' }, 500);
 }
 async function applyRateLimit(request: Request, db: D1Database, route: string, limit: number): Promise<void> {

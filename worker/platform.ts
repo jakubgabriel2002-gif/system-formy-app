@@ -210,42 +210,43 @@ export async function handlePlatformApi(request:Request,env:PlatformEnv):Promise
 export async function handleSitePageLock(request: Request, env: { DB: D1Database }): Promise<Response | null> {
   const url = new URL(request.url);
   const path = url.pathname;
-  // The ACP shell is deliberately available so the admin can authenticate and turn the lock off.
-  // Authorization is still enforced in each admin API endpoint.
-  const isMaintenancePage = path === '/maintenance';
-  // Public login/registration are also gated. Only allow login when explicitly coming to ACP.
-  const isAdminLogin = path === '/login' && ((url.searchParams.get('next') || '') === '/acp' || (url.searchParams.get('next') || '').startsWith('/acp/'));
-  const isAdminShell = path === '/acp' || path.startsWith('/acp/') || isAdminLogin;
+  // ACP is not a public bypass. Only the configured administrator may open its shell.
+  // The admin login page for /acp remains available so the administrator can authenticate.
+  const isAcpPath = path === '/acp' || path.startsWith('/acp/');
+  const next = url.searchParams.get('next') || '';
+  const isAcpLogin = path === '/login' && (next === '/acp' || next.startsWith('/acp/'));
   const isStaticAsset = /\.(?:js|mjs|css|map|png|jpe?g|webp|avif|svg|ico|woff2?|ttf)$/i.test(path) || path.startsWith('/assets/');
   // Site-lock API and authentication routes are checked before the gate; other API calls receive JSON 423.
   const isUnlockEndpoint = path === '/api/v2/site-lock/unlock' && request.method.toUpperCase() === 'POST';
   const isLockStatusEndpoint = path === '/api/v2/site-lock/status' && request.method.toUpperCase() === 'GET';
   const isAuthOrAdminApi = path.startsWith('/api/v2/admin/') || path === '/api/auth/login' || path === '/api/auth/logout' || path === '/api/auth/me' || path === '/api/auth/register' || path === '/api/admin/me' || path === '/api/v2/presence/heartbeat';
-  if (isAdminShell || isStaticAsset || isUnlockEndpoint || isLockStatusEndpoint || isAuthOrAdminApi) return null;
+
+  if (isAcpLogin) return null;
+  if (!isAcpPath && (isStaticAsset || isUnlockEndpoint || isLockStatusEndpoint || isAuthOrAdminApi)) return null;
+  if (isAcpPath) {
+    const adminSession = await sessionFor(request, env as PlatformEnv).catch(() => null);
+    if (isAdmin(adminSession, env as PlatformEnv)) return null;
+  }
 
   const config = await env.DB.prepare("SELECT setting_key,setting_value FROM app_settings WHERE setting_key IN ('site_lock_enabled','site_lock_password_hash','maintenance_message','maintenance_until')").all<{setting_key:string;setting_value:string}>().catch(() => null);
   const values: Record<string,string> = {};
   for (const row of config?.results || []) values[row.setting_key] = row.setting_value;
-  if (!isMaintenancePage && (values.site_lock_enabled !== 'true' || !values.site_lock_password_hash)) return null;
+  if (isAcpPath && (values.site_lock_enabled !== 'true' || !values.site_lock_password_hash)) {
+    return Response.redirect(new URL('/login?next=%2Facp', url.origin).toString(), 302);
+  }
+  if (values.site_lock_enabled !== 'true' || !values.site_lock_password_hash) return null;
 
   // Unlock tokens are short-lived HMACs. Never place the password hash itself in a browser cookie.
   const cookieHeader = request.headers.get('Cookie') || '';
   const token = cookieHeader.split(';').map(x => x.trim()).find(x => x.startsWith('sf_site_unlock='))?.slice('sf_site_unlock='.length) || '';
-  if (token && values.site_lock_password_hash && await verifySiteUnlockToken(values.site_lock_password_hash, token)) {
-    if (isMaintenancePage) return Response.redirect(new URL('/', url).toString(), 302);
-    return null;
-  }
+  if (token && await verifySiteUnlockToken(values.site_lock_password_hash, token)) return null;
 
-  // API consumers need JSON responses, not HTML. Public document routes redirect to
-  // one dedicated maintenance URL so visitors never see the application behind the lock.
+  // API consumers need JSON responses, not a 200 HTML page that breaks app boot after login.
   if (path.startsWith('/api/')) {
     return new Response(JSON.stringify({ error: 'Witryna jest zablokowana. Wprowadź hasło na stronie konserwacji, aby kontynuować.', site_locked: true }), {
       status: 423,
       headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
     });
-  }
-  if (!isMaintenancePage) {
-    return Response.redirect(new URL('/maintenance', url).toString(), 302);
   }
 
   const esc = (value: string) => value.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c] || c));
