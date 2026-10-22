@@ -202,7 +202,12 @@ export default function AppV2() {
   useEffect(() => {
     const onPop = () => setRoute(window.location.pathname + window.location.search);
     window.addEventListener('popstate', onPop);
-    api<{ user: User | null }>('/api/auth/me').then((r) => setUser(r.user)).catch(() => setUser(null)).finally(() => setAuthReady(true));
+    api<{ user: User | null }>('/api/auth/me').then((r) => {
+      // Do not keep the previous logged-out adminReady=true state while loading an existing session.
+      if (r.user) setAdminReady(false);
+      else { setAdmin(false); setAdminReady(true); }
+      setUser(r.user);
+    }).catch(() => { setAdmin(false); setAdminReady(true); setUser(null); }).finally(() => setAuthReady(true));
     void loadCatalog();
     const searchParams = new URLSearchParams(window.location.search);
     if (searchParams.get('payment') === 'cancelled') notify('Zakup został anulowany. Nie pobrano płatności.', 'info');
@@ -349,7 +354,14 @@ export default function AppV2() {
       // Check administrator rights before changing the route; when site lock is active,
       // perform a full navigation so the Worker serves the maintenance page immediately.
       if (safeNext === '/acp' || safeNext.startsWith('/acp/')) {
-        const permission = await api<{ isAdmin: boolean }>('/api/admin/me').catch(() => ({ isAdmin: false }));
+        // A failed permission request is not proof that the user is not an administrator.
+        // Surface the verification error instead of incorrectly sending an admin to maintenance.
+        let permission: { isAdmin: boolean };
+        try {
+          permission = await api<{ isAdmin: boolean }>('/api/admin/me');
+        } catch {
+          throw new Error('Nie udało się zweryfikować uprawnień administratora. Spróbuj ponownie.');
+        }
         if (!permission.isAdmin) {
           const lock = await api<{ enabled: boolean; unlocked: boolean }>('/api/v2/site-lock/status').catch(() => ({ enabled: false, unlocked: false }));
           setPassword(''); setPasswordAgain('');
@@ -357,12 +369,18 @@ export default function AppV2() {
             window.location.replace('/maintenance');
             return;
           }
-          setUser(result.user);
+          setAdmin(false); setAdminReady(false); setUser(result.user);
           go('/app', true);
           notify('Ten panel jest dostępny wyłącznie dla administratora.', 'error');
           return;
         }
+        // Critical fix: mark the user as an admin before routing to /acp.
+        // Otherwise the route guard sees the stale admin=false state and redirects to maintenance.
+        setAdmin(true);
       }
+      // Require a fresh admin check for this newly authenticated session.
+      // This prevents adminReady=true from the logged-out state leaking into the next render.
+      setAdminReady(false);
       setUser(result.user); setPassword(''); setPasswordAgain(''); notify(authMode === 'signup' ? 'Konto zostało utworzone.' : 'Zalogowano pomyślnie.', 'success');
       go(safeNext, true);
     } catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się wykonać operacji.', 'error'); }
