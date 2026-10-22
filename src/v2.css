@@ -75,3 +75,5 @@
   .sf-set-header,.sf-set-row{grid-template-columns:24px minmax(0,1fr) minmax(0,1fr) 26px;gap:4px}
   .sf-set-header{font-size:7px}
 }
+/* Dodatkowe CTA na karcie produktu */
+.sf-product-more{margin:0 17px 17px;width:calc(100% - 34px);}
