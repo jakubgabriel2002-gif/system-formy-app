@@ -1,4 +1,4 @@
-import { handlePlatformApi } from './platform';
+import { handlePlatformApi, handleSitePageLock } from './platform';
 
 interface Env {
   ASSETS: Fetcher;
@@ -259,6 +259,8 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const lockedPage = await handleSitePageLock(request, env);
+    if (lockedPage) return lockedPage;
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     const platformResponse = await handlePlatformApi(request, env);

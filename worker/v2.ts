@@ -4,6 +4,7 @@ interface V2Env {
   ADMIN_EMAIL?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
+  AUTH_PASSWORD_PEPPER?: string;
 }
 type V2Session = { id: string; email: string };
 type V2Body = Record<string, unknown>;
@@ -28,6 +29,8 @@ async function v2Digest(value: string): Promise<string> {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, '0')).join('');
 }
+async function v2SitePasswordHash(password:string):Promise<string>{const saltBytes=crypto.getRandomValues(new Uint8Array(16));const salt=Array.from(saltBytes,b=>b.toString(16).padStart(2,'0')).join('');const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:saltBytes,iterations:150000,hash:'SHA-256'},key,256);const hash=Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('');return `${salt}:${hash}`;}
+async function v2SitePasswordMatches(password:string,stored:string):Promise<boolean>{const [salt,expected]=stored.split(':');if(!/^[a-f0-9]{32}$/.test(salt||'')||!/^[a-f0-9]{64}$/.test(expected||''))return false;const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);const saltBytes=Uint8Array.from((salt.match(/.{2}/g)||[]).map(x=>parseInt(x,16)));const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:saltBytes,iterations:150000,hash:'SHA-256'},key,256);const actual=Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('');return actual===expected;}
 async function v2Session(request: Request, env: V2Env): Promise<V2Session | null> {
   const token = v2Token(request); if (!token) return null;
   return env.DB.prepare('SELECT u.id,u.email FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? LIMIT 1').bind(await v2Digest(token), Date.now()).first<V2Session>();
@@ -224,7 +227,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     // Publiczny katalog, kategorie i szczegóły produktu.
     if (path === '/api/v2/products' && method === 'GET') {
       const [rows, cats] = await Promise.all([
-        env.DB.prepare("SELECT p.id,p.product_key,p.title,p.description,p.product_type,p.price_amount,p.currency,p.is_free,p.is_published,p.checkout_url,p.created_at,COALESCE(m.category_slug,'inne') AS category_slug,COALESCE(m.target_audience,'') AS target_audience,COALESCE(m.contents_json,'[]') AS contents_json,m.cover_key FROM products p LEFT JOIN product_metadata m ON m.product_key=p.product_key WHERE p.is_published=1 ORDER BY p.created_at DESC").all(),
+        env.DB.prepare("SELECT p.id,p.product_key,p.title,p.description,p.product_type,p.price_amount,p.currency,p.is_free,p.is_published,p.checkout_url,p.created_at,COALESCE(m.category_slug,'inne') AS category_slug,COALESCE(m.target_audience,'') AS target_audience,COALESCE(m.contents_json,'[]') AS contents_json,m.cover_key,d.discount_percent AS discount_percent,d.starts_at AS discount_starts_at,d.ends_at AS discount_ends_at,d.is_active AS discount_is_active FROM products p LEFT JOIN product_metadata m ON m.product_key=p.product_key LEFT JOIN product_discounts d ON d.product_key=p.product_key WHERE p.is_published=1 ORDER BY p.created_at DESC").all(),
         env.DB.prepare('SELECT slug,title,description FROM product_categories WHERE is_active=1 ORDER BY sort_order,title').all(),
       ]);
       return v2Reply({ products: rows.results, categories: cats.results });
@@ -240,7 +243,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     }
     const publicDetail = path.match(/^\/api\/v2\/products\/([a-z0-9-]+)$/);
     if (publicDetail && method === 'GET') {
-      const item = await env.DB.prepare("SELECT p.id,p.product_key,p.title,p.description,p.product_type,p.price_amount,p.currency,p.is_free,p.is_published,p.checkout_url,p.created_at,COALESCE(m.category_slug,'inne') AS category_slug,COALESCE(m.target_audience,'') AS target_audience,COALESCE(m.contents_json,'[]') AS contents_json,m.cover_key FROM products p LEFT JOIN product_metadata m ON m.product_key=p.product_key WHERE p.product_key=? AND p.is_published=1 LIMIT 1").bind(publicDetail[1]).first<Record<string, unknown>>();
+      const item = await env.DB.prepare("SELECT p.id,p.product_key,p.title,p.description,p.product_type,p.price_amount,p.currency,p.is_free,p.is_published,p.checkout_url,p.created_at,COALESCE(m.category_slug,'inne') AS category_slug,COALESCE(m.target_audience,'') AS target_audience,COALESCE(m.contents_json,'[]') AS contents_json,m.cover_key,d.discount_percent AS discount_percent,d.starts_at AS discount_starts_at,d.ends_at AS discount_ends_at,d.is_active AS discount_is_active FROM products p LEFT JOIN product_metadata m ON m.product_key=p.product_key LEFT JOIN product_discounts d ON d.product_key=p.product_key WHERE p.product_key=? AND p.is_published=1 LIMIT 1").bind(publicDetail[1]).first<Record<string, unknown>>();
       if (!item) return v2Reply({ error: 'Nie znaleziono produktu.' }, 404);
       const components = await env.DB.prepare('SELECT p.product_key,p.title,p.description,p.product_type FROM bundle_items b JOIN products p ON p.product_key=b.component_product_key WHERE b.bundle_key=? AND p.is_published=1 ORDER BY b.sort_order,p.title').bind(publicDetail[1]).all();
       let contents: unknown[] = []; try { const v = JSON.parse(String(item.contents_json || '[]')); if (Array.isArray(v)) contents = v; } catch { contents = []; }
@@ -261,6 +264,19 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       return v2Reply({ ok: true }, 201);
     }
 
+    if (path === '/api/v2/site-lock/status' && method === 'GET') {
+      const rows=await env.DB.prepare("SELECT setting_key,setting_value FROM app_settings WHERE setting_key IN ('site_lock_enabled','site_lock_password_hash')").all<{setting_key:string;setting_value:string}>(); const cfg:Record<string,string>={}; for(const r of rows.results)cfg[r.setting_key]=r.setting_value;
+      const cookie=(request.headers.get('Cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('sf_site_unlock='))?.slice('sf_site_unlock='.length);
+      const expected=cfg.site_lock_password_hash||''; const unlocked=Boolean(expected&&cookie&&cookie===expected);
+      return v2Reply({enabled:cfg.site_lock_enabled==='true'&&Boolean(expected),unlocked});
+    }
+    if (path === '/api/v2/site-lock/unlock' && method === 'POST') {
+      const b=await v2Body(request),password=v2Field(b,'password',200); const row=await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='site_lock_password_hash'").first<{setting_value:string}>();
+      if(!row?.setting_value)return v2Reply({error:'Blokada hasłem nie jest skonfigurowana.'},400);
+      if(!(await v2SitePasswordMatches(password,row.setting_value)))return v2Reply({error:'Nieprawidłowe hasło.'},401);
+      return v2Reply({ok:true},200,{ 'Set-Cookie':`sf_site_unlock=${row.setting_value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400; Secure` });
+    }
+
     // Złożenie zamówienia z walidacją ceny i kuponu po stronie serwera.
     if (path === '/api/v2/checkout/session' && method === 'POST') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
@@ -272,6 +288,13 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const entitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(gate.session!.id, key).first<{ id: string }>();
       if (entitlement) return v2Reply({ error: 'Masz już dostęp do tego materiału.' }, 409);
       let totalCents = Math.round(item.price_amount * 100), discountCents = 0, promo: V2PromoCandidate | null = null;
+      // Rabat bezpośredni produktu: daty i procent sprawdzane po stronie serwera.
+      const directDiscount = await env.DB.prepare('SELECT discount_percent,starts_at,ends_at,is_active FROM product_discounts WHERE product_key=? LIMIT 1').bind(key).first<{discount_percent:number;starts_at:string|null;ends_at:string|null;is_active:number}>().catch(()=>null);
+      const discountNow = Date.now();
+      if (directDiscount?.is_active && (!directDiscount.starts_at || Date.parse(directDiscount.starts_at) <= discountNow) && (!directDiscount.ends_at || Date.parse(directDiscount.ends_at) >= discountNow)) {
+        discountCents = Math.min(totalCents, Math.round(totalCents * Math.max(1, Math.min(99, Number(directDiscount.discount_percent))) / 100));
+        totalCents -= discountCents;
+      }
       if (code) {
         promo = await env.DB.prepare('SELECT id,code,discount_type,discount_value,max_uses,used_count,product_key FROM promotion_codes WHERE code=? COLLATE NOCASE AND is_active=1 LIMIT 1').bind(code).first<V2PromoCandidate>();
         if (!promo) return v2Reply({ error: 'Kod rabatowy jest nieprawidłowy lub nieaktywny.' }, 400);
@@ -281,8 +304,8 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         if (dates?.ends_at && Date.parse(dates.ends_at) < now) return v2Reply({ error: 'Ważność tego kodu rabatowego minęła.' }, 400);
         if (promo.max_uses !== null && promo.used_count >= promo.max_uses) return v2Reply({ error: 'Limit użyć tego kodu został wyczerpany.' }, 400);
         if (promo.product_key && promo.product_key !== key) return v2Reply({ error: 'Ten kod nie dotyczy wybranego produktu.' }, 400);
-        discountCents = promo.discount_type === 'percent' ? Math.round(totalCents * Math.min(100, promo.discount_value) / 100) : Math.round(promo.discount_value * 100);
-        discountCents = Math.min(totalCents, Math.max(0, discountCents)); totalCents -= discountCents;
+        const couponDiscount = promo.discount_type === 'percent' ? Math.round(totalCents * Math.min(100, promo.discount_value) / 100) : Math.round(promo.discount_value * 100);
+        const appliedCouponDiscount = Math.min(totalCents, Math.max(0, couponDiscount)); discountCents += appliedCouponDiscount; totalCents -= appliedCouponDiscount;
       }
       if (totalCents === 0) {
         const now = new Date().toISOString(), orderId = crypto.randomUUID(), number = `PROMO-${crypto.randomUUID().slice(0, 12).toUpperCase()}`;
@@ -582,6 +605,9 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         }
         return v2Reply({ ok: true });
       }
+      if (path === '/api/v2/admin/product-discounts' && method === 'GET') { const gate=await v2Gate(request,env,true);if(gate.response)return gate.response; const rows=await env.DB.prepare('SELECT product_key,discount_percent,starts_at,ends_at,is_active,updated_at FROM product_discounts ORDER BY updated_at DESC').all();return v2Reply({discounts:rows.results}); }
+      const productDiscountMatch=path.match(/^\/api\/v2\/admin\/product-discounts\/([a-z0-9-]+)$/i);
+      if(productDiscountMatch && ['PUT','DELETE'].includes(method)){const gate=await v2Gate(request,env,true);if(gate.response)return gate.response;const key=productDiscountMatch[1];if(!(await v2Product(env,key)))return v2Reply({error:'Nie znaleziono produktu.'},404);if(method==='DELETE'){await env.DB.prepare('DELETE FROM product_discounts WHERE product_key=?').bind(key).run();return v2Reply({ok:true});}const b=await v2Body(request),percent=Number(b.discount_percent),starts=typeof b.starts_at==='string'?b.starts_at:'',ends=typeof b.ends_at==='string'?b.ends_at:'',active=b.is_active!==false;if(!Number.isInteger(percent)||percent<1||percent>99||(starts&&Number.isNaN(Date.parse(starts)))||(ends&&Number.isNaN(Date.parse(ends)))||(starts&&ends&&Date.parse(starts)>=Date.parse(ends)))return v2Reply({error:'Rabat musi wynosić 1–99%, a data końcowa musi być późniejsza niż początkowa.'},400);const now=new Date().toISOString();await env.DB.prepare('INSERT INTO product_discounts(product_key,discount_percent,starts_at,ends_at,is_active,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(product_key) DO UPDATE SET discount_percent=excluded.discount_percent,starts_at=excluded.starts_at,ends_at=excluded.ends_at,is_active=excluded.is_active,updated_at=excluded.updated_at').bind(key,percent,starts||null,ends||null,active?1:0,now,now).run();return v2Reply({ok:true});}
       if (path === '/api/v2/admin/categories' && method === 'POST') {
         const b = await v2Body(request), slug = v2Field(b, 'slug', 60).toLowerCase(), title = v2Field(b, 'title', 100), description = v2Field(b, 'description', 500);
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || title.length < 2) return v2Reply({ error: 'Nieprawidłowy klucz lub nazwa kategorii.' }, 400);
@@ -614,6 +640,50 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         ]);
         return v2Reply({ user, profile: profile || null, orders: orders.results, entitlements: entitlements.results, recent_workouts: workouts.results, tickets: tickets.results, items: items.results });
       }
+      // Zarządzanie kontem: edycja e-maila, reset hasła, nadawanie i odbieranie dostępu.
+      const userMutation = path.match(/^\/api\/v2\/admin\/users\/([a-f0-9-]+)$/i);
+      if (userMutation && ['PATCH','DELETE'].includes(method)) {
+        const gate = await v2Gate(request, env, true); if (gate.response) return gate.response;
+        const userId = userMutation[1];
+        const target = await env.DB.prepare('SELECT id,email FROM users WHERE id=? LIMIT 1').bind(userId).first<{id:string;email:string}>();
+        if (!target) return v2Reply({error:'Nie znaleziono użytkownika.'},404);
+        if (method === 'DELETE') {
+          if (target.email.trim().toLowerCase() === (env.ADMIN_EMAIL || '').trim().toLowerCase()) return v2Reply({error:'Nie można usunąć konta administratora.'},400);
+          const statements:D1PreparedStatement[]=[
+            env.DB.prepare('DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE user_id=?)').bind(userId),
+            env.DB.prepare('DELETE FROM order_display_numbers WHERE order_id IN (SELECT id FROM orders WHERE user_id=?)').bind(userId),
+            env.DB.prepare('DELETE FROM promotion_redemptions WHERE user_id=?').bind(userId),
+            env.DB.prepare('DELETE FROM orders WHERE user_id=?').bind(userId),
+            env.DB.prepare('DELETE FROM auth_sessions WHERE user_id=?').bind(userId),
+            env.DB.prepare('DELETE FROM user_entitlements WHERE user_id=?').bind(userId),
+            env.DB.prepare('DELETE FROM user_profiles WHERE user_id=?').bind(userId),
+            env.DB.prepare('DELETE FROM workout_sessions WHERE user_id=?').bind(userId),
+            env.DB.prepare('DELETE FROM workout_plans WHERE user_id=?').bind(userId),
+            env.DB.prepare('DELETE FROM support_tickets WHERE user_id=?').bind(userId),
+            env.DB.prepare('DELETE FROM product_analytics WHERE user_id=?').bind(userId),
+            env.DB.prepare('DELETE FROM users WHERE id=?').bind(userId)
+          ]; await env.DB.batch(statements);
+          return v2Reply({ok:true,deleted:true});
+        }
+        const b=await v2Body(request), email=v2Field(b,'email',254).toLowerCase(), password=v2Field(b,'new_password',200);
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return v2Reply({error:'Podaj prawidłowy adres e-mail.'},400);
+        if (password && (password.length<10 || !env.AUTH_PASSWORD_PEPPER)) return v2Reply({error:'Nowe hasło musi mieć co najmniej 10 znaków; sprawdź AUTH_PASSWORD_PEPPER.'},400);
+        if (email && email!==target.email.toLowerCase()) { const duplicate=await env.DB.prepare('SELECT id FROM users WHERE lower(email)=? AND id<>? LIMIT 1').bind(email,userId).first(); if(duplicate)return v2Reply({error:'Ten e-mail jest już używany.'},409); }
+        if(email) await env.DB.prepare('UPDATE users SET email=?,updated_at=? WHERE id=?').bind(email,new Date().toISOString(),userId).run();
+        if(password) { const saltBytes=crypto.getRandomValues(new Uint8Array(16)); const salt=btoa(String.fromCharCode(...saltBytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,''); const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(`${password}\u0000${env.AUTH_PASSWORD_PEPPER}`),'PBKDF2',false,['deriveBits']); const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:Uint8Array.from(atob(salt.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-salt.length%4)%4)),c=>c.charCodeAt(0)),iterations:100000,hash:'SHA-256'},key,256); const hash=btoa(String.fromCharCode(...new Uint8Array(bits))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,''); await env.DB.prepare('UPDATE users SET password_salt=?,password_hash=?,updated_at=? WHERE id=?').bind(salt,hash,new Date().toISOString(),userId).run(); await env.DB.prepare('DELETE FROM auth_sessions WHERE user_id=?').bind(userId).run(); }
+        return v2Reply({ok:true});
+      }
+      const accessMutation = path.match(/^\/api\/v2\/admin\/users\/([a-f0-9-]+)\/access$/i);
+      if(accessMutation && method==='POST') {
+        const gate=await v2Gate(request,env,true); if(gate.response)return gate.response;
+        const userId=accessMutation[1],b=await v2Body(request),key=v2Field(b,'product_key',100),active=b.active!==false;
+        const user=await env.DB.prepare('SELECT id FROM users WHERE id=?').bind(userId).first(); const item=await v2Product(env,key);
+        if(!user||!item)return v2Reply({error:'Nie znaleziono użytkownika lub produktu.'},404);
+        if(active) { const existing=await env.DB.prepare('SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? LIMIT 1').bind(userId,key).first<{id:string}>(); if(existing) await env.DB.prepare("UPDATE user_entitlements SET access_status='active' WHERE id=?").bind(existing.id).run(); else await env.DB.prepare("INSERT INTO user_entitlements(id,user_id,product_key,product_title,product_type,access_status,created_at) VALUES(?,?,?,?,?,'active',?)").bind(crypto.randomUUID(),userId,key,item.title,item.product_type,new Date().toISOString()).run(); }
+        else await env.DB.prepare("UPDATE user_entitlements SET access_status='revoked' WHERE user_id=? AND product_key=?").bind(userId,key).run();
+        return v2Reply({ok:true});
+      }
+
       if (path === '/api/v2/admin/users' && method === 'GET') {
         const q = (url.searchParams.get('q') || '').trim().slice(0, 180);
         const rows = await env.DB.prepare(`SELECT u.id,u.email,u.created_at,COUNT(DISTINCT o.id) AS order_count,COALESCE(SUM(CASE WHEN o.status IN ('paid','fulfilled','processing') THEN o.total_amount ELSE 0 END),0) AS paid_total,COUNT(DISTINCT e.id) AS access_count FROM users u LEFT JOIN orders o ON o.user_id=u.id LEFT JOIN user_entitlements e ON e.user_id=u.id WHERE (?='' OR lower(u.email) LIKE '%'||lower(?)||'%') GROUP BY u.id ORDER BY u.created_at DESC LIMIT 250`).bind(q,q).all();
@@ -636,7 +706,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       }
       if (path === '/api/v2/admin/promotions' && method === 'POST') {
         const b = await v2Body(request), code = v2Field(b, 'code', 80).replace(/\s+/g, '').toUpperCase(), type = v2Field(b, 'discount_type', 20), value = Number(b.discount_value), starts = v2Field(b, 'starts_at', 30), ends = v2Field(b, 'ends_at', 30), maxUses = b.max_uses == null || b.max_uses === '' ? null : Number(b.max_uses), productKey = v2Field(b, 'product_key', 100);
-        if (!/^[A-Z0-9_-]{3,80}$/.test(code) || !['percent', 'fixed'].includes(type) || !Number.isFinite(value) || value <= 0 || (type === 'percent' && value > 100) || (type === 'fixed' && value > 100000) || (maxUses !== null && (!Number.isInteger(maxUses) || maxUses < 1 || maxUses > 1000000)) || (starts && Number.isNaN(Date.parse(starts)) || ends && Number.isNaN(Date.parse(ends))) || (starts && ends && Date.parse(ends) <= Date.parse(starts))) return v2Reply({ error: 'Sprawdź kod, typ rabatu, wartość, daty oraz limit użyć. Data końca musi być późniejsza od daty początku.' }, 400);
+        if (!/^[A-Z0-9_-]{3,80}$/.test(code) || !['percent', 'fixed'].includes(type) || !Number.isFinite(value) || value <= 0 || (type === 'percent' && value > 100) || (type === 'fixed' && value > 100000) || (maxUses !== null && (!Number.isInteger(maxUses) || maxUses < 1 || maxUses > 1000000)) || (starts && Number.isNaN(Date.parse(starts)) || ends && Number.isNaN(Date.parse(ends)))) return v2Reply({ error: 'Sprawdź kod, typ rabatu, wartość, daty oraz limit użyć.' }, 400);
         if (productKey && !(await v2Product(env, productKey))) return v2Reply({ error: 'Nie znaleziono wskazanego produktu.' }, 404);
         const now = new Date().toISOString(), id = crypto.randomUUID();
         await env.DB.prepare('INSERT INTO promotion_codes(id,code,discount_type,discount_value,starts_at,ends_at,max_uses,used_count,product_key,is_active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,0,?,1,?,?)').bind(id, code, type, value, starts || null, ends || null, maxUses, productKey || null, now, now).run(); return v2Reply({ ok: true, id }, 201);
@@ -661,12 +731,13 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         return v2Reply({ events: events.results, popular_products: popular.results, funnel });
       }
       if (path === '/api/v2/admin/settings' && method === 'GET') {
-        const rows = await env.DB.prepare('SELECT setting_key,setting_value,updated_at FROM app_settings ORDER BY setting_key').all(); return v2Reply({ settings: rows.results });
+        const rows = await env.DB.prepare("SELECT setting_key,setting_value,updated_at FROM app_settings WHERE setting_key<>'site_lock_password_hash' ORDER BY setting_key").all(); return v2Reply({ settings: rows.results });
       }
       if (path === '/api/v2/admin/settings' && method === 'PUT') {
         const b = await v2Body(request), settings = b.settings;
         if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return v2Reply({ error: 'Nieprawidłowe ustawienia.' }, 400);
-        const allowed = ['support_email','store_notice','analytics_enabled']; const now = new Date().toISOString(), statements: D1PreparedStatement[] = [];
+        const allowed = ['support_email','store_notice','analytics_enabled','site_lock_enabled']; const now = new Date().toISOString(), statements: D1PreparedStatement[] = [];
+        const lockPassword=(settings as Record<string,unknown>).site_lock_password; const requestedLock=(settings as Record<string,unknown>).site_lock_enabled; if(requestedLock==='true' && lockPassword==='' ){ const currentHash=await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='site_lock_password_hash'").first<{setting_value:string}>(); if(!currentHash?.setting_value)return v2Reply({error:'Ustaw hasło blokady (minimum 8 znaków), zanim włączysz blokadę witryny.'},400); } if(lockPassword!==undefined){if(typeof lockPassword!=='string'||(lockPassword.length>0&&lockPassword.length<8)||lockPassword.length>200)return v2Reply({error:'Hasło blokady musi mieć co najmniej 8 znaków.'},400); if(lockPassword){const hash=await v2SitePasswordHash(lockPassword); statements.push(env.DB.prepare('INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES(?,?,?) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at').bind('site_lock_password_hash',hash,now));} else {statements.push(env.DB.prepare("DELETE FROM app_settings WHERE setting_key='site_lock_password_hash'"));}}
         for (const key of allowed) { const value = (settings as Record<string, unknown>)[key]; if (value === undefined) continue; if (typeof value !== 'string' || value.length > 1000) return v2Reply({ error: `Nieprawidłowa wartość ustawienia ${key}.` }, 400); statements.push(env.DB.prepare('INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES(?,?,?) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at').bind(key,value,now)); }
         if (statements.length) await env.DB.batch(statements); return v2Reply({ ok: true });
       }
