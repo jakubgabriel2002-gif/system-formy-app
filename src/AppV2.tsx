@@ -244,7 +244,14 @@ export default function AppV2() {
     if (!authReady) return;
     const privatePath = path === '/app' || path.startsWith('/app/');
     if (privatePath && !user && path !== '/login' && path !== '/rejestracja') go(`/login?next=${encodeURIComponent(route)}`, true);
-    if (path.startsWith('/acp') && user && adminReady && !admin) { notify('Ten panel jest dostępny wyłącznie dla administratora.', 'error'); go('/app', true); }
+    if (path.startsWith('/acp') && user && adminReady && !admin) {
+      void api<{ enabled: boolean; unlocked: boolean }>('/api/v2/site-lock/status')
+        .then(lock => {
+          if (lock.enabled && !lock.unlocked) window.location.replace('/maintenance');
+          else { notify('Ten panel jest dostępny wyłącznie dla administratora.', 'error'); go('/app', true); }
+        })
+        .catch(() => { notify('Ten panel jest dostępny wyłącznie dla administratora.', 'error'); go('/app', true); });
+    }
     if (path.startsWith('/acp') && !user && path !== '/login') go(`/login?next=${encodeURIComponent(route)}`, true);
   }, [authReady, user?.id, path, admin, adminReady, route, go, notify]);
 
@@ -336,8 +343,28 @@ export default function AppV2() {
       if (authMode === 'signup' && password !== passwordAgain) throw new Error('Hasła nie są identyczne.');
       if (authMode === 'signup' && (password.length < 8 || password.length > 128 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password) || !/[^A-Za-z0-9\s]/.test(password))) throw new Error('Hasło musi mieć minimum 8 znaków, wielką i małą literę, cyfrę oraz znak specjalny.');
       const result = await api<{ user: User }>(authMode === 'signup' ? '/api/auth/register' : '/api/auth/login', { method: 'POST', body: JSON.stringify({ email: email.trim().toLowerCase(), password, rememberMe: true }) });
+      const requestedNext = new URLSearchParams(route.split('?')[1] || '').get('next') || '/app';
+      const safeNext = requestedNext.startsWith('/') && !requestedNext.startsWith('//') ? requestedNext : '/app';
+      // Do not briefly render ACP for a regular account after client-side login.
+      // Check administrator rights before changing the route; when site lock is active,
+      // perform a full navigation so the Worker serves the maintenance page immediately.
+      if (safeNext === '/acp' || safeNext.startsWith('/acp/')) {
+        const permission = await api<{ isAdmin: boolean }>('/api/admin/me').catch(() => ({ isAdmin: false }));
+        if (!permission.isAdmin) {
+          const lock = await api<{ enabled: boolean; unlocked: boolean }>('/api/v2/site-lock/status').catch(() => ({ enabled: false, unlocked: false }));
+          setPassword(''); setPasswordAgain('');
+          if (lock.enabled && !lock.unlocked) {
+            window.location.replace('/maintenance');
+            return;
+          }
+          setUser(result.user);
+          go('/app', true);
+          notify('Ten panel jest dostępny wyłącznie dla administratora.', 'error');
+          return;
+        }
+      }
       setUser(result.user); setPassword(''); setPasswordAgain(''); notify(authMode === 'signup' ? 'Konto zostało utworzone.' : 'Zalogowano pomyślnie.', 'success');
-      const next = new URLSearchParams(route.split('?')[1] || '').get('next') || '/app'; go(next.startsWith('/') && !next.startsWith('//') ? next : '/app', true);
+      go(safeNext, true);
     } catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się wykonać operacji.', 'error'); }
     finally { setLoading(false); }
   }
