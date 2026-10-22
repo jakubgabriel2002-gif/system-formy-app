@@ -206,23 +206,55 @@ export async function handlePlatformApi(request:Request,env:PlatformEnv):Promise
  }catch(error){console.error('System Formy platform API error:',error);return reply({error:error instanceof Error?error.message:'Nie udało się wykonać operacji.'},500);}
 }
 
-/** Global password gate. The entrypoint must call this before API and ASSETS routing. */
+/** Global password gate. Called before API and ASSETS routing. */
 export async function handleSitePageLock(request: Request, env: { DB: D1Database }): Promise<Response | null> {
   const url = new URL(request.url);
-  // The administrator must still be able to reach the SPA, authenticate and use gated ACP APIs.
-  // This is not an authorization bypass: each /api/v2/admin endpoint still runs v2Gate(..., true).
   const path = url.pathname;
+  // The ACP shell is deliberately available so the admin can authenticate and turn the lock off.
+  // Authorization is still enforced in each admin API endpoint.
   const isAdminShell = path === '/acp' || path.startsWith('/acp/') || path === '/login' || path === '/rejestracja';
   const isStaticAsset = /\.(?:js|mjs|css|map|png|jpe?g|webp|avif|svg|ico|woff2?|ttf)$/i.test(path) || path.startsWith('/assets/');
-  const isAuthOrAdminApi = path.startsWith('/api/v2/site-lock/') || path.startsWith('/api/v2/admin/') || path === '/api/auth/login' || path === '/api/auth/logout' || path === '/api/auth/me' || path === '/api/auth/register' || path === '/api/admin/me' || path === '/api/v2/presence/heartbeat';
-  if (isAdminShell || isStaticAsset || isAuthOrAdminApi) return null;
-  const config = await env.DB.prepare("SELECT setting_key,setting_value FROM app_settings WHERE setting_key IN ('site_lock_enabled','site_lock_password_hash','maintenance_message','maintenance_until')").all<{setting_key:string;setting_value:string}>().catch(()=>null);
+  // Site-lock API and authentication routes are checked before the gate; other API calls receive JSON 423.
+  const isUnlockEndpoint = path === '/api/v2/site-lock/unlock' && request.method.toUpperCase() === 'POST';
+  const isLockStatusEndpoint = path === '/api/v2/site-lock/status' && request.method.toUpperCase() === 'GET';
+  const isAuthOrAdminApi = path.startsWith('/api/v2/admin/') || path === '/api/auth/login' || path === '/api/auth/logout' || path === '/api/auth/me' || path === '/api/auth/register' || path === '/api/admin/me' || path === '/api/v2/presence/heartbeat';
+  if (isAdminShell || isStaticAsset || isUnlockEndpoint || isLockStatusEndpoint || isAuthOrAdminApi) return null;
+
+  const config = await env.DB.prepare("SELECT setting_key,setting_value FROM app_settings WHERE setting_key IN ('site_lock_enabled','site_lock_password_hash','maintenance_message','maintenance_until')").all<{setting_key:string;setting_value:string}>().catch(() => null);
   const values: Record<string,string> = {};
   for (const row of config?.results || []) values[row.setting_key] = row.setting_value;
   if (values.site_lock_enabled !== 'true' || !values.site_lock_password_hash) return null;
-  const cookies = (request.headers.get('Cookie') || '').split(';').map(x=>x.trim());
-  const cookie = cookies.find(x=>x.startsWith('sf_site_unlock='))?.slice('sf_site_unlock='.length) || '';
-  if (cookie && cookie === values.site_lock_password_hash) return null;
-  const html = `<!doctype html><html lang="pl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>System Formy — dostęp chroniony</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#10120e;color:#f5f5f0;font:16px system-ui}main{width:min(420px,calc(100% - 40px));padding:32px;box-sizing:border-box;border:1px solid #383d31;border-radius:18px;background:#191c16}h1{font-size:25px}p{color:#b9bdb1;line-height:1.5}input,button{box-sizing:border-box;width:100%;padding:13px;border-radius:9px;font:inherit}input{background:#10120e;border:1px solid #4a5042;color:white;margin:8px 0 12px}button{border:0;background:#c5f36b;color:#11170a;font-weight:700;cursor:pointer}#err{color:#ffb1a7;min-height:24px}</style><main><h1>System Formy</h1><p>${(values.maintenance_message || 'Witryna jest tymczasowo chroniona hasłem. Wprowadź hasło, aby kontynuować.').replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c] || c))}</p>${values.maintenance_until ? `<p>Planowane zakończenie: ${values.maintenance_until.replace('T',' ').slice(0,16)}</p>` : ''}<form id="f"><label for="p">Hasło dostępu</label><input id="p" type="password" autocomplete="current-password" required autofocus><button>Odblokuj witrynę</button><p id="err" role="alert"></p></form><p style=\"margin-top:22px;text-align:center;font-size:13px\">Jesteś administratorem witryny?</p><a href=\"/login?next=%2Facp\" style=\"display:block;text-align:center;padding:12px;border:1px solid #59614e;border-radius:9px;color:#f5f5f0;text-decoration:none\">Zaloguj się jako administrator</a></main><script>document.getElementById('f').addEventListener('submit',async e=>{e.preventDefault();const err=document.getElementById('err');err.textContent='';try{const r=await fetch('/api/v2/site-lock/unlock',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({password:document.getElementById('p').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Nie udało się odblokować witryny.');location.reload()}catch(x){err.textContent=x.message||'Błąd połączenia.'}});</script></html>`;
-  return new Response(html, { status: 200, headers: { 'Content-Type':'text/html; charset=utf-8', 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff' } });
+
+  // Unlock tokens are short-lived HMACs. Never place the password hash itself in a browser cookie.
+  const cookieHeader = request.headers.get('Cookie') || '';
+  const token = cookieHeader.split(';').map(x => x.trim()).find(x => x.startsWith('sf_site_unlock='))?.slice('sf_site_unlock='.length) || '';
+  if (token && await verifySiteUnlockToken(values.site_lock_password_hash, token)) return null;
+
+  // API consumers need JSON responses, not a 200 HTML page that breaks app boot after login.
+  if (path.startsWith('/api/')) {
+    return new Response(JSON.stringify({ error: 'Witryna jest zablokowana. Wprowadź hasło na stronie konserwacji, aby kontynuować.', site_locked: true }), {
+      status: 423,
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
+    });
+  }
+
+  const esc = (value: string) => value.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c] || c));
+  const message = esc(values.maintenance_message || 'Witryna jest tymczasowo chroniona hasłem. Wprowadź hasło, aby kontynuować.');
+  const until = values.maintenance_until ? `<p>Planowane zakończenie: ${esc(values.maintenance_until.replace('T',' ').slice(0,16))}</p>` : '';
+  const html = `<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>System Formy — prace konserwacyjne</title><style>
+  :root{color-scheme:dark;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#10120e;color:#f5f5f0}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;background:radial-gradient(ellipse at top,#252b1c 0%,#10120e 60%)}main{width:min(460px,100%);padding:clamp(24px,6vw,38px);border:1px solid #383d31;border-radius:20px;background:#191c16;box-shadow:0 24px 80px #0006}.brand{display:flex;align-items:center;gap:10px;color:#c5f36b;font-size:12px;letter-spacing:2px;font-weight:800}.mark{display:grid;place-items:center;width:36px;height:36px;border-radius:9px;background:#c5f36b;color:#11170a;font-weight:900;letter-spacing:0}h1{font-size:clamp(26px,6vw,34px);line-height:1.1;margin:28px 0 12px}p{color:#b9bdb1;line-height:1.65;margin:10px 0 20px}label{display:block;font-size:13px;font-weight:650;margin-bottom:7px}input,button{width:100%;padding:14px;border-radius:10px;font:inherit}input{background:#10120e;border:1px solid #4a5042;color:#fff;margin:0 0 12px}input:focus{outline:2px solid #c5f36b;outline-offset:2px}button{border:0;background:#c5f36b;color:#11170a;font-weight:800;cursor:pointer}button:disabled{opacity:.6;cursor:wait}#err{color:#ffb1a7;min-height:24px;margin:10px 0 0;font-size:13px}.admin{display:block;text-align:center;margin-top:20px;padding:12px;border:1px solid #59614e;border-radius:10px;color:#f5f5f0;text-decoration:none;font-size:14px}.admin:hover{border-color:#c5f36b}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}</style></head><body><main><div class="brand"><span class="mark">SF</span><span>SYSTEM FORMY</span></div><h1>Trwają prace konserwacyjne</h1><p>${message}</p>${until}<form id="f"><label for="p">Hasło dostępu</label><input id="p" type="password" autocomplete="current-password" required autofocus maxlength="200"><button id="submit">Odblokuj witrynę</button><p id="err" role="alert" aria-live="polite"></p></form><a class="admin" href="/login?next=%2Facp">Jesteś administratorem? Zaloguj się do ACP</a></main><script>const form=document.getElementById('f'),err=document.getElementById('err'),button=document.getElementById('submit');form.addEventListener('submit',async e=>{e.preventDefault();err.textContent='';button.disabled=true;button.textContent='Sprawdzam…';try{const r=await fetch('/api/v2/site-lock/unlock',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({password:document.getElementById('p').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Nie udało się odblokować witryny.');location.replace('/')}catch(x){err.textContent=x instanceof Error?x.message:'Błąd połączenia.'}finally{button.disabled=false;button.textContent='Odblokuj witrynę'}});</script></body></html>`;
+  return new Response(html, { status: 200, headers: { 'Content-Type':'text/html; charset=utf-8', 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff', 'Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" } });
+}
+
+async function verifySiteUnlockToken(storedHash: string, token: string): Promise<boolean> {
+  const [expiresRaw, signature, extra] = token.split('.');
+  if (!expiresRaw || !signature || extra !== undefined || !/^\d{10,13}$/.test(expiresRaw) || !/^[a-f0-9]{64}$/.test(signature)) return false;
+  const expires = Number(expiresRaw);
+  if (!Number.isSafeInteger(expires) || expires <= Date.now() || expires > Date.now() + 24 * 60 * 60 * 1000 + 60_000) return false;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(storedHash), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const expected = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`system-formy-site-unlock:${expiresRaw}`));
+  const hex = Array.from(new Uint8Array(expected), b => b.toString(16).padStart(2,'0')).join('');
+  let diff = 0;
+  for (let i = 0; i < hex.length; i++) diff |= hex.charCodeAt(i) ^ signature.charCodeAt(i);
+  return diff === 0;
 }

@@ -31,6 +31,8 @@ async function v2Digest(value: string): Promise<string> {
 }
 async function v2SitePasswordHash(password:string):Promise<string>{const saltBytes=crypto.getRandomValues(new Uint8Array(16));const salt=Array.from(saltBytes,b=>b.toString(16).padStart(2,'0')).join('');const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:saltBytes,iterations:100000,hash:'SHA-256'},key,256);const hash=Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('');return `${salt}:${hash}`;}
 async function v2SitePasswordMatches(password:string,stored:string):Promise<boolean>{const [salt,expected]=stored.split(':');if(!/^[a-f0-9]{32}$/.test(salt||'')||!/^[a-f0-9]{64}$/.test(expected||''))return false;const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);const saltBytes=Uint8Array.from((salt.match(/.{2}/g)||[]).map(x=>parseInt(x,16)));const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:saltBytes,iterations:100000,hash:'SHA-256'},key,256);const actual=Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('');return actual===expected;}
+
+async function v2VerifySiteUnlockToken(storedHash:string,token:string):Promise<boolean>{const [expiresRaw,signature,extra]=token.split('.');if(!expiresRaw||!signature||extra!==undefined||!/^\d{10,13}$/.test(expiresRaw)||!/^[a-f0-9]{64}$/.test(signature))return false;const expires=Number(expiresRaw);if(!Number.isSafeInteger(expires)||expires<=Date.now()||expires>Date.now()+24*60*60*1000+60000)return false;const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(storedHash),{name:'HMAC',hash:'SHA-256'},false,['sign']);const bytes=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(`system-formy-site-unlock:${expiresRaw}`));const expected=Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');let diff=0;for(let i=0;i<expected.length;i++)diff|=expected.charCodeAt(i)^signature.charCodeAt(i);return diff===0;}
 async function v2Session(request: Request, env: V2Env): Promise<V2Session | null> {
   const token = v2Token(request); if (!token) return null;
   return env.DB.prepare('SELECT u.id,u.email FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? LIMIT 1').bind(await v2Digest(token), Date.now()).first<V2Session>();
@@ -276,15 +278,18 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
 
     if (path === '/api/v2/site-lock/status' && method === 'GET') {
       const rows=await env.DB.prepare("SELECT setting_key,setting_value FROM app_settings WHERE setting_key IN ('site_lock_enabled','site_lock_password_hash')").all<{setting_key:string;setting_value:string}>(); const cfg:Record<string,string>={}; for(const r of rows.results)cfg[r.setting_key]=r.setting_value;
-      const cookie=(request.headers.get('Cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('sf_site_unlock='))?.slice('sf_site_unlock='.length);
-      const expected=cfg.site_lock_password_hash||''; const unlocked=Boolean(expected&&cookie&&cookie===expected);
+      const cookie=(request.headers.get('Cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('sf_site_unlock='))?.slice('sf_site_unlock='.length)||'';
+      const expected=cfg.site_lock_password_hash||''; const unlocked=Boolean(expected&&cookie&&await v2VerifySiteUnlockToken(expected,cookie));
       return v2Reply({enabled:cfg.site_lock_enabled==='true'&&Boolean(expected),unlocked});
     }
     if (path === '/api/v2/site-lock/unlock' && method === 'POST') {
       const b=await v2Body(request),password=v2Field(b,'password',200); const row=await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='site_lock_password_hash'").first<{setting_value:string}>();
       if(!row?.setting_value)return v2Reply({error:'Blokada hasłem nie jest skonfigurowana.'},400);
       if(!(await v2SitePasswordMatches(password,row.setting_value)))return v2Reply({error:'Nieprawidłowe hasło.'},401);
-      return v2Reply({ok:true},200,{ 'Set-Cookie':`sf_site_unlock=${row.setting_value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400; Secure` });
+      const expires=Date.now()+24*60*60*1000, expiresRaw=String(expires), key=await crypto.subtle.importKey('raw',new TextEncoder().encode(row.setting_value),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+      const signatureBytes=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(`system-formy-site-unlock:${expiresRaw}`));
+      const signature=Array.from(new Uint8Array(signatureBytes),x=>x.toString(16).padStart(2,'0')).join('');
+      return v2Reply({ok:true},200,{ 'Set-Cookie':`sf_site_unlock=${expiresRaw}.${signature}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400; Secure` });
     }
 
     // Złożenie zamówienia z walidacją ceny i kuponu po stronie serwera.
