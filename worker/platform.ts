@@ -213,6 +213,7 @@ export async function handleSitePageLock(request: Request, env: { DB: D1Database
   // The ACP shell is deliberately available so the admin can authenticate and turn the lock off.
   // Authorization is still enforced in each admin API endpoint.
   const isAdminShell = path === '/acp' || path.startsWith('/acp/') || path === '/login' || path === '/rejestracja';
+  const isMaintenancePage = path === '/maintenance';
   const isStaticAsset = /\.(?:js|mjs|css|map|png|jpe?g|webp|avif|svg|ico|woff2?|ttf)$/i.test(path) || path.startsWith('/assets/');
   // Site-lock API and authentication routes are checked before the gate; other API calls receive JSON 423.
   const isUnlockEndpoint = path === '/api/v2/site-lock/unlock' && request.method.toUpperCase() === 'POST';
@@ -230,12 +231,16 @@ export async function handleSitePageLock(request: Request, env: { DB: D1Database
   const token = cookieHeader.split(';').map(x => x.trim()).find(x => x.startsWith('sf_site_unlock='))?.slice('sf_site_unlock='.length) || '';
   if (token && await verifySiteUnlockToken(values.site_lock_password_hash, token)) return null;
 
-  // API consumers need JSON responses, not a 200 HTML page that breaks app boot after login.
+  // API consumers need JSON responses, not HTML. Public document routes redirect to
+  // one dedicated maintenance URL so visitors never see the application behind the lock.
   if (path.startsWith('/api/')) {
     return new Response(JSON.stringify({ error: 'Witryna jest zablokowana. Wprowadź hasło na stronie konserwacji, aby kontynuować.', site_locked: true }), {
       status: 423,
       headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
     });
+  }
+  if (!isMaintenancePage) {
+    return Response.redirect(new URL('/maintenance', url).toString(), 302);
   }
 
   const esc = (value: string) => value.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c] || c));
