@@ -650,6 +650,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       }
       const userDetailMatch = path.match(/^\/api\/v2\/admin\/users\/([a-f0-9-]+)$/i);
       if (userDetailMatch && method === 'GET') {
+        const gate = await v2Gate(request, env, true); if (gate.response) return gate.response;
         const userId = userDetailMatch[1];
         const user = await env.DB.prepare('SELECT id,email,created_at,updated_at FROM users WHERE id=? LIMIT 1').bind(userId).first<{ id: string; email: string; created_at: string; updated_at: string }>();// No password hash or session token is returned.
         if (!user) return v2Reply({ error: 'Nie znaleziono użytkownika.' }, 404);
@@ -688,13 +689,25 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
           ]; await env.DB.batch(statements);
           return v2Reply({ok:true,deleted:true});
         }
-        const b=await v2Body(request), email=v2Field(b,'email',254).toLowerCase(), password=v2Field(b,'new_password',200);
+        const b=await v2Body(request), email=v2Field(b,'email',254).toLowerCase(), password=v2Field(b,'new_password',128);
+        const hasProfileFields=['first_name','gender','weight_kg','height_cm','training_location','primary_goal','training_days_per_week'].some(k=>Object.prototype.hasOwnProperty.call(b,k));
         if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return v2Reply({error:'Podaj prawidłowy adres e-mail.'},400);
-        if (password && (password.length<10 || !env.AUTH_PASSWORD_PEPPER)) return v2Reply({error:'Nowe hasło musi mieć co najmniej 10 znaków; sprawdź AUTH_PASSWORD_PEPPER.'},400);
+        if (password && (password.length<8 || password.length>128 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password) || !/[^A-Za-z0-9\s]/.test(password))) return v2Reply({error:'Hasło musi mieć 8–128 znaków oraz wielką i małą literę, cyfrę i znak specjalny.'},400);
+        if (password && (!env.AUTH_PASSWORD_PEPPER || env.AUTH_PASSWORD_PEPPER.length<32)) return v2Reply({error:'Reset hasła jest niedostępny: sprawdź sekret AUTH_PASSWORD_PEPPER w Cloudflare (minimum 32 znaki).'},503);
         if (email && email!==target.email.toLowerCase()) { const duplicate=await env.DB.prepare('SELECT id FROM users WHERE lower(email)=? AND id<>? LIMIT 1').bind(email,userId).first(); if(duplicate)return v2Reply({error:'Ten e-mail jest już używany.'},409); }
-        if(email) await env.DB.prepare('UPDATE users SET email=?,updated_at=? WHERE id=?').bind(email,new Date().toISOString(),userId).run();
-        if(password) { const saltBytes=crypto.getRandomValues(new Uint8Array(16)); const salt=btoa(String.fromCharCode(...saltBytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,''); const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(`${password}\u0000${env.AUTH_PASSWORD_PEPPER}`),'PBKDF2',false,['deriveBits']); const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:Uint8Array.from(atob(salt.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-salt.length%4)%4)),c=>c.charCodeAt(0)),iterations:100000,hash:'SHA-256'},key,256); const hash=btoa(String.fromCharCode(...new Uint8Array(bits))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,''); await env.DB.prepare('UPDATE users SET password_salt=?,password_hash=?,updated_at=? WHERE id=?').bind(salt,hash,new Date().toISOString(),userId).run(); await env.DB.prepare('DELETE FROM auth_sessions WHERE user_id=?').bind(userId).run(); }
-        await env.DB.prepare('INSERT INTO admin_audit_log(id,actor_user_id,actor_email,action,entity_type,entity_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),gate.session!.id,gate.session!.email,'update_user','user',userId,JSON.stringify({target_email:email||target.email,password_reset:Boolean(password)}),new Date().toISOString()).run().catch(()=>{});
+        const now=new Date().toISOString();
+        if(email) await env.DB.prepare('UPDATE users SET email=?,updated_at=? WHERE id=?').bind(email,now,userId).run();
+        if(password) { const saltBytes=crypto.getRandomValues(new Uint8Array(16)); const salt=btoa(String.fromCharCode(...saltBytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,''); const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(`${password}\u0000${env.AUTH_PASSWORD_PEPPER}`),'PBKDF2',false,['deriveBits']); const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:Uint8Array.from(atob(salt.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-salt.length%4)%4)),c=>c.charCodeAt(0)),iterations:100000,hash:'SHA-256'},key,256); const hash=btoa(String.fromCharCode(...new Uint8Array(bits))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,''); await env.DB.prepare('UPDATE users SET password_salt=?,password_hash=?,updated_at=? WHERE id=?').bind(salt,hash,now,userId).run(); await env.DB.prepare('DELETE FROM auth_sessions WHERE user_id=?').bind(userId).run(); }
+        if(hasProfileFields) {
+          const profile=await env.DB.prepare('SELECT user_id FROM user_profiles WHERE user_id=?').bind(userId).first<{user_id:string}>();
+          const firstName=v2Field(b,'first_name',80), gender=v2Field(b,'gender',30), trainingLocation=v2Field(b,'training_location',30), primaryGoal=v2Field(b,'primary_goal',30);
+          const num=(key:string,min:number,max:number)=>{const raw=b[key];if(raw===null||raw===''||raw===undefined)return null;const value=Number(raw);if(!Number.isFinite(value)||value<min||value>max)return NaN;return value;};
+          const weight=num('weight_kg',20,400), height=num('height_cm',80,260), days=num('training_days_per_week',1,7);
+          if(!['','female','male','other','prefer_not_to_say'].includes(gender)||!['','gym','home','both'].includes(trainingLocation)||!['','muscle','fat_loss','strength','consistency','health'].includes(primaryGoal)||Number.isNaN(weight)||Number.isNaN(height)||Number.isNaN(days)||(days!==null&&!Number.isInteger(days))) return v2Reply({error:'Sprawdź dane profilu: płeć, cel, miejsce treningu, wagę, wzrost i liczbę treningów (1–7).'},400);
+          if(profile) await env.DB.prepare('UPDATE user_profiles SET first_name=?,gender=?,weight_kg=?,height_cm=?,training_location=?,primary_goal=?,training_days_per_week=?,updated_at=? WHERE user_id=?').bind(firstName,gender,weight,height,trainingLocation,primaryGoal,days,now,userId).run();
+          else await env.DB.prepare('INSERT INTO user_profiles(user_id,first_name,gender,weight_kg,height_cm,training_location,primary_goal,training_days_per_week,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(userId,firstName,gender,weight,height,trainingLocation,primaryGoal,days,now,now).run();
+        }
+        await env.DB.prepare('INSERT INTO admin_audit_log(id,actor_user_id,actor_email,action,entity_type,entity_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),gate.session!.id,gate.session!.email,'update_user','user',userId,JSON.stringify({target_email:email||target.email,password_reset:Boolean(password),profile_updated:hasProfileFields}),now).run().catch(()=>{});
         return v2Reply({ok:true});
       }
       const accessMutation = path.match(/^\/api\/v2\/admin\/users\/([a-f0-9-]+)\/access$/i);
@@ -755,6 +768,22 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const funnel = await env.DB.prepare("SELECT COUNT(DISTINCT CASE WHEN event_type='product_view' THEN session_key END) AS product_visitors,COUNT(DISTINCT CASE WHEN event_type='checkout_started' THEN session_key END) AS checkout_starts,COUNT(DISTINCT CASE WHEN event_type='purchase_confirmed' THEN session_key END) AS confirmations FROM product_analytics WHERE created_at>=datetime('now','-30 days')").first();
         return v2Reply({ events: events.results, popular_products: popular.results, funnel });
       }
+      // Dedicated site-lock password endpoint: separates password hashing from general settings saves.
+      if (path === '/api/v2/admin/site-lock/password' && method === 'POST') {
+        const b = await v2Body(request);
+        const password = typeof b.password === 'string' ? b.password : '';
+        if (password.length < 8 || password.length > 200) {
+          return v2Reply({ error: 'Hasło blokady musi mieć od 8 do 200 znaków.' }, 400);
+        }
+        const now = new Date().toISOString();
+        const hash = await v2SitePasswordHash(password);
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES(?,?,?) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at').bind('site_lock_password_hash', hash, now),
+          env.DB.prepare('INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES(?,?,?) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at').bind('site_lock_enabled', 'true', now),
+        ]);
+        await env.DB.prepare('INSERT INTO admin_audit_log(id,actor_user_id,actor_email,action,entity_type,entity_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), gate.session!.id, gate.session!.email, 'set_site_lock_password', 'settings', 'site_lock', '{}', now).run().catch(() => {});
+        return v2Reply({ ok: true, enabled: true });
+      }
       if (path === '/api/v2/admin/settings' && method === 'GET') {
         const rows = await env.DB.prepare("SELECT setting_key,setting_value,updated_at FROM app_settings WHERE setting_key<>'site_lock_password_hash' ORDER BY setting_key").all(); return v2Reply({ settings: rows.results });
       }
@@ -762,7 +791,19 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const b = await v2Body(request), settings = b.settings;
         if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return v2Reply({ error: 'Nieprawidłowe ustawienia.' }, 400);
         const allowed = ['support_email','store_notice','analytics_enabled','site_lock_enabled','maintenance_message','maintenance_until']; const now = new Date().toISOString(), statements: D1PreparedStatement[] = [];
-        const lockPassword=(settings as Record<string,unknown>).site_lock_password; const requestedLock=(settings as Record<string,unknown>).site_lock_enabled; if(requestedLock==='true' && lockPassword==='' ){ const currentHash=await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='site_lock_password_hash'").first<{setting_value:string}>(); if(!currentHash?.setting_value)return v2Reply({error:'Ustaw hasło blokady (minimum 8 znaków), zanim włączysz blokadę witryny.'},400); } if(lockPassword!==undefined){if(typeof lockPassword!=='string'||(lockPassword.length>0&&lockPassword.length<8)||lockPassword.length>200)return v2Reply({error:'Hasło blokady musi mieć co najmniej 8 znaków.'},400); if(lockPassword){const hash=await v2SitePasswordHash(lockPassword); statements.push(env.DB.prepare('INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES(?,?,?) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at').bind('site_lock_password_hash',hash,now));} else {statements.push(env.DB.prepare("DELETE FROM app_settings WHERE setting_key='site_lock_password_hash'"));}}
+        const lockPassword=(settings as Record<string,unknown>).site_lock_password;
+        const requestedLock=(settings as Record<string,unknown>).site_lock_enabled;
+        // Blank password means "leave the current password unchanged"; it must never delete the stored hash.
+        if (requestedLock === 'true' && (typeof lockPassword !== 'string' || lockPassword.length === 0)) {
+          const currentHash = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='site_lock_password_hash'").first<{setting_value:string}>();
+          if (!currentHash?.setting_value) return v2Reply({error:'Najpierw ustaw hasło blokady przyciskiem „Ustaw hasło blokady”, a dopiero potem włącz blokadę.'},400);
+        }
+        if (lockPassword !== undefined && typeof lockPassword !== 'string') return v2Reply({error:'Nieprawidłowe hasło blokady.'},400);
+        if (typeof lockPassword === 'string' && lockPassword.length > 0) {
+          if (lockPassword.length < 8 || lockPassword.length > 200) return v2Reply({error:'Hasło blokady musi mieć od 8 do 200 znaków.'},400);
+          const hash = await v2SitePasswordHash(lockPassword);
+          statements.push(env.DB.prepare('INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES(?,?,?) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at').bind('site_lock_password_hash',hash,now));
+        }
         const maintenanceUntil=(settings as Record<string,unknown>).maintenance_until; if(maintenanceUntil!==undefined && maintenanceUntil!=='' && (typeof maintenanceUntil!=='string' || Number.isNaN(Date.parse(maintenanceUntil)))) return v2Reply({error:'Podaj prawidłowy termin zakończenia prac.'},400);
         for (const key of allowed) { const value = (settings as Record<string, unknown>)[key]; if (value === undefined) continue; if (typeof value !== 'string' || value.length > 1000) return v2Reply({ error: `Nieprawidłowa wartość ustawienia ${key}.` }, 400); statements.push(env.DB.prepare('INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES(?,?,?) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at').bind(key,value,now)); }
         if (statements.length) await env.DB.batch(statements);
