@@ -254,6 +254,16 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const settings: Record<string, string> = {}; for (const row of rows.results) settings[row.setting_key] = row.setting_value;
       return v2Reply({ support_email: settings.support_email || '', store_notice: settings.store_notice || '', analytics_enabled: settings.analytics_enabled !== 'false' });
     }
+    // Ephemeral presence: current activity only, no historical analytics timeline.
+    if (path === '/api/v2/presence/heartbeat' && method === 'POST') {
+      const body = await v2Body(request), sessionKey = v2Field(body, 'session_key', 100), page = v2Field(body, 'path', 400).slice(0, 400);
+      if (!/^[a-zA-Z0-9_-]{16,100}$/.test(sessionKey)) return v2Reply({ error: 'Nieprawidłowy identyfikator sesji.' }, 400);
+      const session = await v2Session(request, env), now = new Date().toISOString();
+      await env.DB.prepare('DELETE FROM live_visitors WHERE last_seen < ?').bind(new Date(Date.now() - 3 * 60 * 1000).toISOString()).run();
+      await env.DB.prepare('INSERT INTO live_visitors(session_key,user_id,path,first_seen,last_seen) VALUES(?,?,?,?,?) ON CONFLICT(session_key) DO UPDATE SET user_id=excluded.user_id,path=excluded.path,last_seen=excluded.last_seen').bind(sessionKey, session?.id || null, page || '/', now, now).run();
+      return v2Reply({ ok: true }, 200);
+    }
+
     if (path === '/api/v2/analytics' && method === 'POST') {
       const setting = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='analytics_enabled'").first<{ setting_value: string }>();
       if (setting?.setting_value === 'false') return v2Reply({ ok: false, disabled: true });
@@ -573,6 +583,19 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         if (statements.length) await env.DB.batch(statements);
         return v2Reply({ ok: true, already_active: Boolean(existing), bundle_components: componentCount }, existing ? 200 : 201);
       }
+      if (path === '/api/v2/admin/audit-log' && method === 'GET') {
+        const rows = await env.DB.prepare('SELECT id,actor_email,action,entity_type,entity_id,details_json,created_at FROM admin_audit_log ORDER BY created_at DESC LIMIT 100').all();
+        return v2Reply({ entries: rows.results });
+      }
+
+      if (path === '/api/v2/admin/live-users' && method === 'GET') {
+        const cutoff = new Date(Date.now() - 90 * 1000).toISOString();
+        await env.DB.prepare('DELETE FROM live_visitors WHERE last_seen < ?').bind(new Date(Date.now() - 3 * 60 * 1000).toISOString()).run();
+        const summary = await env.DB.prepare('SELECT COUNT(*) AS active_visitors,COUNT(DISTINCT user_id) AS active_users FROM live_visitors WHERE last_seen >= ?').bind(cutoff).first<{active_visitors:number;active_users:number}>();
+        const visitors = await env.DB.prepare('SELECT lv.session_key,lv.user_id,lv.path,lv.last_seen,u.email FROM live_visitors lv LEFT JOIN users u ON u.id=lv.user_id WHERE lv.last_seen >= ? ORDER BY lv.last_seen DESC LIMIT 100').bind(cutoff).all<{session_key:string;user_id:string|null;path:string;last_seen:string;email:string|null}>();
+        return v2Reply({ active_visitors: summary?.active_visitors || 0, active_users: summary?.active_users || 0, visitors: visitors.results.map(v => ({ email: v.email || null, path: v.path, last_seen: v.last_seen, authenticated: Boolean(v.user_id) })) });
+      }
+
       if (path === '/api/v2/admin/overview' && method === 'GET') {
         const [sales, orders, users, products, tickets, promos] = await Promise.all([
           env.DB.prepare("SELECT COUNT(*) AS count,COALESCE(SUM(total_amount),0) AS revenue FROM orders WHERE status IN ('paid','fulfilled','processing')").first(),
@@ -607,7 +630,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       }
       if (path === '/api/v2/admin/product-discounts' && method === 'GET') { const gate=await v2Gate(request,env,true);if(gate.response)return gate.response; const rows=await env.DB.prepare('SELECT product_key,discount_percent,starts_at,ends_at,is_active,updated_at FROM product_discounts ORDER BY updated_at DESC').all();return v2Reply({discounts:rows.results}); }
       const productDiscountMatch=path.match(/^\/api\/v2\/admin\/product-discounts\/([a-z0-9-]+)$/i);
-      if(productDiscountMatch && ['PUT','DELETE'].includes(method)){const gate=await v2Gate(request,env,true);if(gate.response)return gate.response;const key=productDiscountMatch[1];if(!(await v2Product(env,key)))return v2Reply({error:'Nie znaleziono produktu.'},404);if(method==='DELETE'){await env.DB.prepare('DELETE FROM product_discounts WHERE product_key=?').bind(key).run();return v2Reply({ok:true});}const b=await v2Body(request),percent=Number(b.discount_percent),starts=typeof b.starts_at==='string'?b.starts_at:'',ends=typeof b.ends_at==='string'?b.ends_at:'',active=b.is_active!==false;if(!Number.isInteger(percent)||percent<1||percent>99||(starts&&Number.isNaN(Date.parse(starts)))||(ends&&Number.isNaN(Date.parse(ends)))||(starts&&ends&&Date.parse(starts)>=Date.parse(ends)))return v2Reply({error:'Rabat musi wynosić 1–99%, a data końcowa musi być późniejsza niż początkowa.'},400);const now=new Date().toISOString();await env.DB.prepare('INSERT INTO product_discounts(product_key,discount_percent,starts_at,ends_at,is_active,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(product_key) DO UPDATE SET discount_percent=excluded.discount_percent,starts_at=excluded.starts_at,ends_at=excluded.ends_at,is_active=excluded.is_active,updated_at=excluded.updated_at').bind(key,percent,starts||null,ends||null,active?1:0,now,now).run();return v2Reply({ok:true});}
+      if(productDiscountMatch && ['PUT','DELETE'].includes(method)){const gate=await v2Gate(request,env,true);if(gate.response)return gate.response;const key=productDiscountMatch[1];if(!(await v2Product(env,key)))return v2Reply({error:'Nie znaleziono produktu.'},404);if(method==='DELETE'){await env.DB.prepare('DELETE FROM product_discounts WHERE product_key=?').bind(key).run();return v2Reply({ok:true});}const b=await v2Body(request),percent=Number(b.discount_percent),starts=typeof b.starts_at==='string'?b.starts_at:'',ends=typeof b.ends_at==='string'?b.ends_at:'',active=b.is_active!==false;if(!Number.isInteger(percent)||percent<1||percent>99||(starts&&Number.isNaN(Date.parse(starts)))||(ends&&Number.isNaN(Date.parse(ends)))||(starts&&ends&&Date.parse(starts)>=Date.parse(ends)))return v2Reply({error:'Rabat musi wynosić 1–99%, a data końcowa musi być późniejsza niż początkowa.'},400);const now=new Date().toISOString();await env.DB.prepare('INSERT INTO product_discounts(product_key,discount_percent,starts_at,ends_at,is_active,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(product_key) DO UPDATE SET discount_percent=excluded.discount_percent,starts_at=excluded.starts_at,ends_at=excluded.ends_at,is_active=excluded.is_active,updated_at=excluded.updated_at').bind(key,percent,starts||null,ends||null,active?1:0,now,now).run();await env.DB.prepare('INSERT INTO admin_audit_log(id,actor_user_id,actor_email,action,entity_type,entity_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),gate.session!.id,gate.session!.email,'update_product_discount','product_discount',key,JSON.stringify({discount_percent:percent,starts_at:starts||null,ends_at:ends||null,is_active:active}),now).run().catch(()=>{});return v2Reply({ok:true});}
       if (path === '/api/v2/admin/categories' && method === 'POST') {
         const b = await v2Body(request), slug = v2Field(b, 'slug', 60).toLowerCase(), title = v2Field(b, 'title', 100), description = v2Field(b, 'description', 500);
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || title.length < 2) return v2Reply({ error: 'Nieprawidłowy klucz lub nazwa kategorii.' }, 400);
@@ -671,6 +694,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         if (email && email!==target.email.toLowerCase()) { const duplicate=await env.DB.prepare('SELECT id FROM users WHERE lower(email)=? AND id<>? LIMIT 1').bind(email,userId).first(); if(duplicate)return v2Reply({error:'Ten e-mail jest już używany.'},409); }
         if(email) await env.DB.prepare('UPDATE users SET email=?,updated_at=? WHERE id=?').bind(email,new Date().toISOString(),userId).run();
         if(password) { const saltBytes=crypto.getRandomValues(new Uint8Array(16)); const salt=btoa(String.fromCharCode(...saltBytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,''); const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(`${password}\u0000${env.AUTH_PASSWORD_PEPPER}`),'PBKDF2',false,['deriveBits']); const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:Uint8Array.from(atob(salt.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-salt.length%4)%4)),c=>c.charCodeAt(0)),iterations:100000,hash:'SHA-256'},key,256); const hash=btoa(String.fromCharCode(...new Uint8Array(bits))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,''); await env.DB.prepare('UPDATE users SET password_salt=?,password_hash=?,updated_at=? WHERE id=?').bind(salt,hash,new Date().toISOString(),userId).run(); await env.DB.prepare('DELETE FROM auth_sessions WHERE user_id=?').bind(userId).run(); }
+        await env.DB.prepare('INSERT INTO admin_audit_log(id,actor_user_id,actor_email,action,entity_type,entity_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),gate.session!.id,gate.session!.email,'update_user','user',userId,JSON.stringify({target_email:email||target.email,password_reset:Boolean(password)}),new Date().toISOString()).run().catch(()=>{});
         return v2Reply({ok:true});
       }
       const accessMutation = path.match(/^\/api\/v2\/admin\/users\/([a-f0-9-]+)\/access$/i);
@@ -681,6 +705,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         if(!user||!item)return v2Reply({error:'Nie znaleziono użytkownika lub produktu.'},404);
         if(active) { const existing=await env.DB.prepare('SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? LIMIT 1').bind(userId,key).first<{id:string}>(); if(existing) await env.DB.prepare("UPDATE user_entitlements SET access_status='active' WHERE id=?").bind(existing.id).run(); else await env.DB.prepare("INSERT INTO user_entitlements(id,user_id,product_key,product_title,product_type,access_status,created_at) VALUES(?,?,?,?,?,'active',?)").bind(crypto.randomUUID(),userId,key,item.title,item.product_type,new Date().toISOString()).run(); }
         else await env.DB.prepare("UPDATE user_entitlements SET access_status='revoked' WHERE user_id=? AND product_key=?").bind(userId,key).run();
+        await env.DB.prepare('INSERT INTO admin_audit_log(id,actor_user_id,actor_email,action,entity_type,entity_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),gate.session!.id,gate.session!.email,active?'grant_user_access':'revoke_user_access','user_entitlement',userId,JSON.stringify({product_key:key,active}),new Date().toISOString()).run().catch(()=>{});
         return v2Reply({ok:true});
       }
 
@@ -736,10 +761,13 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (path === '/api/v2/admin/settings' && method === 'PUT') {
         const b = await v2Body(request), settings = b.settings;
         if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return v2Reply({ error: 'Nieprawidłowe ustawienia.' }, 400);
-        const allowed = ['support_email','store_notice','analytics_enabled','site_lock_enabled']; const now = new Date().toISOString(), statements: D1PreparedStatement[] = [];
+        const allowed = ['support_email','store_notice','analytics_enabled','site_lock_enabled','maintenance_message','maintenance_until']; const now = new Date().toISOString(), statements: D1PreparedStatement[] = [];
         const lockPassword=(settings as Record<string,unknown>).site_lock_password; const requestedLock=(settings as Record<string,unknown>).site_lock_enabled; if(requestedLock==='true' && lockPassword==='' ){ const currentHash=await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='site_lock_password_hash'").first<{setting_value:string}>(); if(!currentHash?.setting_value)return v2Reply({error:'Ustaw hasło blokady (minimum 8 znaków), zanim włączysz blokadę witryny.'},400); } if(lockPassword!==undefined){if(typeof lockPassword!=='string'||(lockPassword.length>0&&lockPassword.length<8)||lockPassword.length>200)return v2Reply({error:'Hasło blokady musi mieć co najmniej 8 znaków.'},400); if(lockPassword){const hash=await v2SitePasswordHash(lockPassword); statements.push(env.DB.prepare('INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES(?,?,?) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at').bind('site_lock_password_hash',hash,now));} else {statements.push(env.DB.prepare("DELETE FROM app_settings WHERE setting_key='site_lock_password_hash'"));}}
+        const maintenanceUntil=(settings as Record<string,unknown>).maintenance_until; if(maintenanceUntil!==undefined && maintenanceUntil!=='' && (typeof maintenanceUntil!=='string' || Number.isNaN(Date.parse(maintenanceUntil)))) return v2Reply({error:'Podaj prawidłowy termin zakończenia prac.'},400);
         for (const key of allowed) { const value = (settings as Record<string, unknown>)[key]; if (value === undefined) continue; if (typeof value !== 'string' || value.length > 1000) return v2Reply({ error: `Nieprawidłowa wartość ustawienia ${key}.` }, 400); statements.push(env.DB.prepare('INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES(?,?,?) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at').bind(key,value,now)); }
-        if (statements.length) await env.DB.batch(statements); return v2Reply({ ok: true });
+        if (statements.length) await env.DB.batch(statements);
+        await env.DB.prepare('INSERT INTO admin_audit_log(id,actor_user_id,actor_email,action,entity_type,entity_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),gate.session!.id,gate.session!.email,'update_settings','settings','site',JSON.stringify({keys:Object.keys(settings as Record<string,unknown>).filter(k=>k!=='site_lock_password')}),now).run().catch(()=>{});
+        return v2Reply({ ok: true });
       }
       return v2Reply({ error: 'Nie znaleziono endpointu administracyjnego.' }, 404);
     }
