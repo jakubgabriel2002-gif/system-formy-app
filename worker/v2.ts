@@ -385,8 +385,8 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const days = await env.DB.prepare('SELECT id,day_key,title,sort_order FROM training_plan_days_v2 WHERE plan_id=? ORDER BY sort_order,day_key').bind(plan.id).all<{ id: string; day_key: string; title: string; sort_order: number }>();
         const dayOutput = [] as Array<Record<string, unknown>>;
         for (const day of days.results) {
-          const exercises = await env.DB.prepare('SELECT id,name,sort_order,target_sets,target_reps,target_weight_kg,notes FROM training_plan_exercises_v2 WHERE day_id=? ORDER BY sort_order').bind(day.id).all<{ id: string; name: string; sort_order: number; target_sets: number; target_reps: number; target_weight_kg: number | null; notes: string }>();
-          dayOutput.push({ ...day, exercises: exercises.results.map(ex => ({ id: ex.id, name: ex.name, sort_order: ex.sort_order, sets: ex.target_sets, reps: ex.target_reps, weight_kg: ex.target_weight_kg, notes: ex.notes })) });
+          const exercises = await env.DB.prepare('SELECT id,name,sort_order,target_sets,target_reps,target_weight_kg,notes,rest_seconds,transition_rest_seconds FROM training_plan_exercises_v2 WHERE day_id=? ORDER BY sort_order').bind(day.id).all<{ id: string; name: string; sort_order: number; target_sets: number; target_reps: number; target_weight_kg: number | null; notes: string; rest_seconds: number; transition_rest_seconds: number }>();
+          dayOutput.push({ ...day, exercises: exercises.results.map(ex => ({ id: ex.id, name: ex.name, sort_order: ex.sort_order, sets: ex.target_sets, reps: ex.target_reps, weight_kg: ex.target_weight_kg, notes: ex.notes, rest_seconds: ex.rest_seconds ?? 90, transition_rest_seconds: ex.transition_rest_seconds ?? 120 })) });
         }
         output.push({ ...plan, days: dayOutput });
       }
@@ -409,7 +409,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (method === 'DELETE') { await env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id IN (SELECT id FROM training_plan_days_v2 WHERE plan_id=?)').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plans_v2 WHERE id=? AND user_id=?').bind(plan.id, gate.session!.id).run(); return v2Reply({ ok: true }); }
       const b = await v2Body(request), name = v2Field(b, 'name', 120), description = v2Field(b, 'description', 1000), rawDays = Array.isArray(b.days) ? b.days : [];
       if (name.length < 2 || rawDays.length > 14) return v2Reply({ error: 'Sprawdź nazwę planu i liczbę dni (maksymalnie 14).' }, 400);
-      const normalized: Array<{ day_key: string; title: string; exercises: Array<{ name: string; sets: number; reps: number; weight_kg: number | null; notes: string }> }> = [];
+      const normalized: Array<{ day_key: string; title: string; exercises: Array<{ name: string; sets: number; reps: number; weight_kg: number | null; notes: string; rest_seconds: number; transition_rest_seconds: number }> }> = [];
       for (const raw of rawDays) {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return v2Reply({ error: 'Nieprawidłowy dzień planu.' }, 400);
         const d = raw as Record<string, unknown>, dayKey = typeof d.day_key === 'string' ? d.day_key.trim().slice(0, 30) : '', title = typeof d.title === 'string' ? d.title.trim().slice(0, 120) : '', rawExercises = Array.isArray(d.exercises) ? d.exercises : [];
@@ -417,9 +417,9 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const exercises: Array<{ name: string; sets: number; reps: number; weight_kg: number | null; notes: string }> = [];
         for (const value of rawExercises) {
           if (!value || typeof value !== 'object' || Array.isArray(value)) return v2Reply({ error: 'Nieprawidłowe ćwiczenie.' }, 400);
-          const x = value as Record<string, unknown>, exerciseName = typeof x.name === 'string' ? x.name.trim() : '', sets = Number(x.sets ?? 3), reps = Number(x.reps ?? 10), weight = x.weight_kg === '' || x.weight_kg == null ? null : Number(x.weight_kg), notes = typeof x.notes === 'string' ? x.notes.slice(0, 500) : '';
-          if (!exerciseName || exerciseName.length > 120 || !Number.isInteger(sets) || sets < 1 || sets > 30 || !Number.isInteger(reps) || reps < 1 || reps > 200 || (weight !== null && (!Number.isFinite(weight) || weight < 0 || weight > 1000))) return v2Reply({ error: 'Sprawdź nazwę ćwiczenia, serie, powtórzenia i ciężar.' }, 400);
-          exercises.push({ name: exerciseName, sets, reps, weight_kg: weight, notes });
+          const x = value as Record<string, unknown>, exerciseName = typeof x.name === 'string' ? x.name.trim() : '', sets = Number(x.sets ?? 3), reps = Number(x.reps ?? 10), weight = x.weight_kg === '' || x.weight_kg == null ? null : Number(x.weight_kg), notes = typeof x.notes === 'string' ? x.notes.slice(0, 500) : '', restSeconds = Number(x.rest_seconds ?? 90), transitionRestSeconds = Number(x.transition_rest_seconds ?? 120);
+          if (!exerciseName || exerciseName.length > 120 || !Number.isInteger(sets) || sets < 1 || sets > 30 || !Number.isInteger(reps) || reps < 1 || reps > 200 || (weight !== null && (!Number.isFinite(weight) || weight < 0 || weight > 1000)) || !Number.isInteger(restSeconds) || restSeconds < 0 || restSeconds > 600 || !Number.isInteger(transitionRestSeconds) || transitionRestSeconds < 0 || transitionRestSeconds > 900) return v2Reply({ error: 'Sprawdź nazwę ćwiczenia, serie, powtórzenia i ciężar.' }, 400);
+          exercises.push({ name: exerciseName, sets, reps, weight_kg: weight, notes, rest_seconds: restSeconds, transition_rest_seconds: transitionRestSeconds });
         }
         normalized.push({ day_key: dayKey, title, exercises });
       }
@@ -430,7 +430,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (oldDays.results.length) { for (const day of oldDays.results) statements.push(env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id=?').bind(day.id)); statements.push(env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id)); }
       normalized.forEach((day, di) => {
         const dayId = crypto.randomUUID(); statements.push(env.DB.prepare('INSERT INTO training_plan_days_v2(id,plan_id,day_key,title,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').bind(dayId, plan.id, day.day_key, day.title, di, now, now));
-        day.exercises.forEach((ex, ei) => statements.push(env.DB.prepare('INSERT INTO training_plan_exercises_v2(id,day_id,name,sort_order,target_sets,target_reps,target_weight_kg,notes) VALUES(?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), dayId, ex.name, ei, ex.sets, ex.reps, ex.weight_kg, ex.notes)));
+        day.exercises.forEach((ex, ei) => statements.push(env.DB.prepare('INSERT INTO training_plan_exercises_v2(id,day_id,name,sort_order,target_sets,target_reps,target_weight_kg,notes,rest_seconds,transition_rest_seconds) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), dayId, ex.name, ei, ex.sets, ex.reps, ex.weight_kg, ex.notes, ex.rest_seconds, ex.transition_rest_seconds)));
       });
       if (statements.length) await env.DB.batch(statements);
       return v2Reply({ ok: true, updated_at: now });
@@ -464,12 +464,12 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         if (!name || name.length > 120) return v2Reply({ error: 'Każde ćwiczenie musi mieć nazwę.' }, 400);
         if (sets) {
           if (sets.length < 1 || sets.length > 40) return v2Reply({ error: 'Ćwiczenie musi mieć od 1 do 40 serii.' }, 400);
-          for (const sv of sets) { if (!sv || typeof sv !== 'object' || Array.isArray(sv)) return v2Reply({ error: 'Nieprawidłowa seria.' }, 400); const set = sv as Record<string, unknown>, reps = Number(set.reps), weight = set.weight_kg === '' || set.weight_kg == null ? null : Number(set.weight_kg); if (!Number.isInteger(reps) || reps < 1 || reps > 200 || (weight !== null && (!Number.isFinite(weight) || weight < 0 || weight > 1000))) return v2Reply({ error: 'Sprawdź powtórzenia i ciężar w serii.' }, 400); }
+          for (const sv of sets) { if (!sv || typeof sv !== 'object' || Array.isArray(sv)) return v2Reply({ error: 'Nieprawidłowa seria.' }, 400); const set = sv as Record<string, unknown>, reps = Number(set.reps), weight = set.weight_kg === '' || set.weight_kg == null ? null : Number(set.weight_kg); if (!Number.isInteger(reps) || reps < 1 || reps > 200 || (weight !== null && (!Number.isFinite(weight) || weight < 0 || weight > 1000)) || !Number.isInteger(restSeconds) || restSeconds < 0 || restSeconds > 600 || !Number.isInteger(transitionRestSeconds) || transitionRestSeconds < 0 || transitionRestSeconds > 900) return v2Reply({ error: 'Sprawdź powtórzenia i ciężar w serii.' }, 400); }
           const validSets = sets.map((sv) => { const set = sv as Record<string, unknown>; return { reps: Number(set.reps), weight_kg: set.weight_kg === '' || set.weight_kg == null ? null : Number(set.weight_kg) }; });
           exercises.push({ name, sets: validSets.length, reps: validSets[0]?.reps || 1, weight_kg: validSets[0]?.weight_kg ?? null, sets_detail: validSets });
         } else {
           const setCount = Number(x.sets), reps = Number(x.reps), weight = x.weight_kg == null ? null : Number(x.weight_kg);
-          if (!Number.isInteger(setCount) || setCount < 1 || setCount > 40 || !Number.isInteger(reps) || reps < 1 || reps > 200 || (weight !== null && (!Number.isFinite(weight) || weight < 0 || weight > 1000))) return v2Reply({ error: 'Sprawdź serie, powtórzenia i ciężar.' }, 400);
+          if (!Number.isInteger(setCount) || setCount < 1 || setCount > 40 || !Number.isInteger(reps) || reps < 1 || reps > 200 || (weight !== null && (!Number.isFinite(weight) || weight < 0 || weight > 1000)) || !Number.isInteger(restSeconds) || restSeconds < 0 || restSeconds > 600 || !Number.isInteger(transitionRestSeconds) || transitionRestSeconds < 0 || transitionRestSeconds > 900) return v2Reply({ error: 'Sprawdź serie, powtórzenia i ciężar.' }, 400);
           exercises.push({ name, sets: setCount, reps, weight_kg: weight });
         }
       }
