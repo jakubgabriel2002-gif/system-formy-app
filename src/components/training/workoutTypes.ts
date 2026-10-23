@@ -37,4 +37,5 @@ export type WorkoutDraft = {
   plan_id?: string;
   day_key?: string;
   started?: boolean;
+  started_at?: number | null;
 };
