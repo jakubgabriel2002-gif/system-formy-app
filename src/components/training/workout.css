@@ -132,3 +132,10 @@
   .sf-wm-finish-row .sf-wm-button { width: 100%; }
   .sf-wm-summary-stats { grid-template-columns: 1fr; }
 }
+
+/* Integracja z widokiem aplikacji */
+.sf-wm-session-meta { display: grid; grid-template-columns: minmax(0, 2fr) minmax(180px, 1fr); gap: 14px; margin: 0 0 16px; }
+.sf-wm-session-meta label { display: flex; flex-direction: column; gap: 7px; font-size: 13px; font-weight: 600; }
+.sf-wm-session-meta input { width: 100%; min-width: 0; border: 1px solid var(--sf-border, #d8dece); border-radius: 10px; padding: 11px 12px; background: var(--sf-card, #fff); color: inherit; font: inherit; }
+.sf-wm-error { margin: 12px 0; padding: 12px 14px; border: 1px solid #e9b6b6; border-radius: 10px; color: #9d2525; background: #fff5f5; }
+@media (max-width: 640px) { .sf-wm-session-meta { grid-template-columns: 1fr; } }
