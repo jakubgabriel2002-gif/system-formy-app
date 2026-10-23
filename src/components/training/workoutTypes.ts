@@ -8,6 +8,8 @@ export type WorkoutExercise = {
   name: string;
   sets_detail: WorkoutSet[];
   notes?: string;
+  rest_seconds?: number;
+  transition_rest_seconds?: number;
 };
 
 export type WorkoutPlanDay = {
@@ -19,6 +21,8 @@ export type WorkoutPlanDay = {
     reps: number;
     weight_kg?: number | null;
     notes?: string;
+    rest_seconds?: number;
+    transition_rest_seconds?: number;
   }>;
 };
 

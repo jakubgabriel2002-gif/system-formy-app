@@ -36,6 +36,8 @@ function exercisesForDay(day: WorkoutPlanDay): WorkoutExercise[] {
   return day.exercises.filter((exercise) => exercise.name.trim()).map((exercise) => ({
     name: exercise.name.trim(),
     notes: exercise.notes,
+    rest_seconds: Number(exercise.rest_seconds ?? 90),
+    transition_rest_seconds: Number(exercise.transition_rest_seconds ?? 120),
     sets_detail: Array.from({ length: Math.max(1, Math.min(30, Number(exercise.sets) || 3)) }, () => ({
       reps: Math.max(1, Math.min(200, Number(exercise.reps) || 10)),
       weight_kg: exercise.weight_kg ?? null,
@@ -271,7 +273,7 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
       </div>
       {error && <p role="alert" className="sf-wm-error">{error}</p>}
       <WorkoutSession
-        title={title} exercises={exercises} notes={notes} saving={saving}
+        title={title} elapsedLabel={formatDuration(elapsedSeconds)} exercises={exercises} notes={notes} saving={saving}
         onExercisesChange={setExercises} onNotesChange={setNotes}
         onFinish={() => void finish()} onCancel={() => void cancel()}
       />
