@@ -96,3 +96,64 @@
 @media(max-width:920px){.sf-dashboard-product-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.sf-dashboard-product-item:last-child:nth-child(odd){display:none}}
 @media(max-width:760px){.sf-dashboard{gap:14px}.sf-welcome-card{padding:21px;border-radius:20px}.sf-welcome-card h2{font-size:1.9rem}.sf-welcome-ring{width:94px;height:94px;flex-basis:94px}.sf-welcome-ring b{font-size:1.65rem}.sf-welcome-ring small{font-size:.53rem}.sf-welcome-actions{display:grid;grid-template-columns:1fr;max-width:100%}.sf-welcome-actions .sf-button{width:100%;justify-content:center}.sf-week-strip{align-items:stretch;flex-direction:column;gap:17px;padding:17px!important}.sf-week-strip-heading{min-width:0}.sf-week-days{width:100%;gap:4px}.sf-week-day-circle{width:34px;height:34px;font-size:.76rem}.sf-week-day-label{font-size:.61rem}.sf-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.sf-stat-card{padding:13px!important;border-radius:15px!important}.sf-stat-card>small{font-size:.59rem}.sf-stat-card>b{font-size:1.3rem}.sf-dashboard-product-grid{grid-template-columns:1fr}.sf-dashboard-product-item:last-child:nth-child(odd){display:block}.sf-dashboard-product-item .sf-product-card{display:grid;grid-template-columns:100px minmax(0,1fr);min-height:0}.sf-dashboard-product-item .sf-product-art,.sf-dashboard-product-item .sf-product-cover{min-height:100%;height:100%;width:100%}.sf-dashboard-product-item .sf-product-art{display:flex;flex-direction:column;justify-content:center;gap:8px;padding:9px}.sf-dashboard-product-item .sf-art-tag{position:static}.sf-dashboard-product-item .sf-product-copy{padding:12px;min-width:0}.sf-dashboard-product-item .sf-product-copy h3{font-size:.91rem}.sf-dashboard-product-item .sf-product-copy>p.sf-muted{font-size:.75rem;min-height:0;margin-bottom:8px}.sf-dashboard-product-item .sf-product-bottom{padding-top:7px}.sf-dashboard-product-item .sf-product-more{font-size:.73rem;padding:9px;margin-top:8px}.sf-section-heading{align-items:flex-start;gap:12px}.sf-section-heading>.sf-text-button{white-space:nowrap}.sf-section-heading h3{font-size:1.12rem}.sf-section-heading .sf-muted{font-size:.78rem}.sf-training-promo-grid,.sf-dashboard-feature-grid,.sf-dashboard-lower-grid{grid-template-columns:1fr;gap:10px}.sf-training-promo{padding:15px;border-radius:17px;grid-template-columns:38px minmax(0,1fr);gap:10px}.sf-training-promo-icon{width:36px;height:36px;border-radius:11px}.sf-training-promo>.sf-button{grid-column:1/-1;width:100%;justify-content:center;margin-top:5px}.sf-measurement-grid{gap:8px}.sf-measurement-grid>div{padding:12px}.sf-measurement-grid b{font-size:1.06rem}.sf-dashboard-library-list{padding:2px 12px}.sf-dashboard-library .sf-list-row{gap:9px}.sf-plan-launch{padding:16px!important}.sf-workout-form{padding:13px!important;gap:16px!important}.sf-exercise-card{padding:12px!important}.sf-set-header,.sf-set-row{gap:6px}.sf-set-row input{padding:8px 5px;font-size:.87rem}.sf-rest-panel{display:flex;flex-direction:column;align-items:stretch;gap:12px}.sf-rest-panel>div:last-child{display:flex;gap:7px}.sf-rest-panel>div:last-child .sf-button{flex:1}.sf-form-footer{align-items:stretch}.sf-form-footer>.sf-button{width:100%;justify-content:center}.sf-view:has(.sf-goal-card) .sf-two-col{grid-template-columns:1fr}.sf-view:has(.sf-goal-card)>.sf-panel{padding:14px!important}.sf-goal-details{grid-template-columns:1fr}.sf-week-chart{min-height:180px}}
 @media(prefers-reduced-motion:reduce){.sf-dashboard-product-item .sf-product-card,.sf-dashboard .sf-button,.sf-view .sf-button,.sf-week-day-circle{transition:none}}
+
+/* Uproszczony pulpit startowy klienta — kalendarz, najbliższy trening i dwie statystyki. */
+.sf-dashboard-main-card{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:28px;row-gap:25px;align-items:start;padding:clamp(22px,3vw,34px)}
+.sf-dashboard-main-card:after{right:-95px;top:-145px;bottom:auto}
+.sf-dashboard-week-area{min-width:0}
+.sf-dashboard-main-card h2{margin:8px 0 7px}
+.sf-dashboard-intro{margin:0 0 18px;color:#c3c7b9;line-height:1.6}
+.sf-dashboard-week-area .sf-week-days{width:100%;max-width:560px;gap:clamp(5px,1.4vw,17px);margin:18px 0 0}
+.sf-dashboard-week-count{display:flex;flex-direction:column;align-items:center;gap:10px;grid-column:2;grid-row:1;min-width:134px}
+.sf-dashboard-week-count .sf-welcome-ring{display:grid;place-items:center}
+.sf-week-count-caption{max-width:135px;text-align:center;color:#b7bdab;font-size:.72rem;line-height:1.4}
+.sf-dashboard-main-card .sf-welcome-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;max-width:560px;margin-top:23px}
+.sf-dashboard-main-card .sf-welcome-actions .sf-button{width:100%;justify-content:center;white-space:nowrap}
+.sf-next-workout{grid-column:1/-1;border-top:1px solid rgba(198,243,106,.16);padding-top:21px;min-width:0}
+.sf-next-workout-heading{display:flex;align-items:center;gap:12px}
+.sf-next-workout-heading .sf-stat-icon{flex:0 0 42px;width:42px;height:42px;display:grid;place-items:center;border-radius:13px;background:rgba(198,243,106,.1);color:var(--lime)}
+.sf-next-workout-heading h3{font-size:1.2rem;letter-spacing:-.025em;margin:2px 0 0}
+.sf-next-workout-plan{color:#b7bdab;font-size:.82rem;margin:12px 0}
+.sf-next-workout-exercises,.sf-last-workout-exercises{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 15px}
+.sf-next-workout-exercises span,.sf-last-workout-exercises span{display:inline-flex;align-items:center;padding:8px 11px;border:1px solid #343a2c;border-radius:10px;background:rgba(255,255,255,.025);font-size:.79rem;color:#e0e4d7}
+.sf-next-workout .sf-empty-inline{padding:10px 0 0}
+.sf-dashboard-feature-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:stretch}
+.sf-dashboard-feature-grid>.sf-panel{min-width:0;height:100%}
+.sf-last-workout-summary{display:flex;align-items:center;gap:12px;padding:14px 0 4px}
+.sf-last-workout-summary .sf-list-icon{flex:0 0 40px;width:40px;height:40px;display:grid;place-items:center;border-radius:12px;background:rgba(198,243,106,.09);color:var(--lime)}
+.sf-last-workout-summary>div{display:flex;flex-direction:column;gap:5px;min-width:0}
+.sf-last-workout-summary b{overflow-wrap:anywhere}
+.sf-last-workout-summary small{color:var(--muted);font-size:.77rem}
+.sf-dashboard-activity .sf-last-workout-exercises{margin:12px 0 0}
+@media(max-width:760px){
+ .sf-dashboard{gap:14px}
+ .sf-dashboard-main-card{grid-template-columns:minmax(0,1fr) auto;column-gap:10px;row-gap:20px;padding:18px}
+ .sf-dashboard-main-card h2{font-size:1.7rem}
+ .sf-dashboard-week-count{min-width:78px;gap:7px}
+ .sf-dashboard-week-count .sf-welcome-ring{width:78px;height:78px;flex-basis:78px}
+ .sf-dashboard-week-count .sf-welcome-ring b{font-size:1.45rem}
+ .sf-dashboard-week-count .sf-welcome-ring small{font-size:.46rem}
+ .sf-week-count-caption{font-size:.62rem;max-width:80px}
+ .sf-dashboard-week-area .sf-week-days{grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;margin-top:16px}
+ .sf-dashboard-week-area .sf-week-day-circle{width:31px;height:31px;font-size:.72rem}
+ .sf-dashboard-week-area .sf-week-day-label{font-size:.56rem}
+ .sf-dashboard-main-card .sf-welcome-actions{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:18px}
+ .sf-dashboard-main-card .sf-welcome-actions .sf-button{font-size:.73rem;padding:10px 7px;gap:5px;white-space:normal;line-height:1.25}
+ .sf-next-workout{padding-top:17px}
+ .sf-next-workout-heading h3{font-size:1.05rem}
+ .sf-dashboard-feature-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+ .sf-dashboard-feature-grid>.sf-panel{padding:13px!important}
+ .sf-dashboard-feature-grid .sf-panel-heading{gap:6px;align-items:flex-start}
+ .sf-dashboard-feature-grid .sf-panel-heading h3{font-size:.98rem}
+ .sf-dashboard-feature-grid .sf-eyebrow{font-size:.58rem}
+ .sf-measurement-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+ .sf-measurement-grid>div{padding:9px}
+ .sf-measurement-grid span{font-size:.68rem}
+ .sf-measurement-grid b{font-size:.94rem}
+ .sf-dashboard-feature-grid .sf-button{font-size:.72rem;padding:10px 8px;white-space:normal}
+ .sf-last-workout-summary{align-items:flex-start;gap:8px}
+ .sf-last-workout-summary .sf-list-icon{flex-basis:32px;width:32px;height:32px}
+ .sf-last-workout-summary b{font-size:.8rem}
+ .sf-last-workout-summary small{font-size:.66rem}
+ .sf-last-workout-exercises span{font-size:.67rem;padding:6px 7px}
+}
