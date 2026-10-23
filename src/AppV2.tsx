@@ -16,6 +16,7 @@ type Product = {
   category_slug?: string; target_audience?: string; contents_json?: string; contents?: string[]; discount_percent?: number; discount_starts_at?: string | null; discount_ends_at?: string | null; discount_is_active?: number;
 };
 type Category = { slug: string; title: string; description?: string };
+type ExSet = { reps: number; weight_kg: number | null };
 type WorkoutExercise = { name: string; sets_detail: ExSet[]; sets?: number; reps?: number; weight_kg?: number | null };
 type Workout = { id: string; title: string; performed_on: string; notes: string; exercises_json: string; created_at: string };
 type Order = { id: string; order_number: string; display_order_number: string; status: string; total_amount: number; currency: string; created_at: string; email?: string; user_id?: string };
@@ -441,6 +442,66 @@ export default function AppV2() {
     } catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się dodać planu przykładowego.', 'error'); }
     finally { setLoading(false); }
   }
+
+  async function createPlan(event: FormEvent) {
+    event.preventDefault();
+
+    const name = newPlanName.trim();
+    if (!name) {
+      notify('Wpisz nazwę planu.', 'error');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const created = await api<{ plan: Plan }>('/api/v2/training/plans', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          description: newPlanDescription.trim()
+        })
+      });
+
+      const plan: Plan = {
+        ...created.plan,
+        name,
+        description: newPlanDescription.trim(),
+        days: created.plan.days || [],
+        updated_at: new Date().toISOString()
+      };
+
+      setPlans(old => [
+        plan,
+        ...old.filter(item => item.id !== plan.id)
+      ]);
+
+      setActivePlanId(plan.id);
+      setPlanName(plan.name);
+      setPlanDescription(plan.description);
+
+      setPlanDays(
+        plan.days.length
+          ? plan.days
+          : [{ day_key: 'A', title: 'Dzień A', exercises: [] }]
+      );
+
+      setNewPlanName('');
+      setNewPlanDescription('');
+
+      notify('Utworzono nowy plan treningowy.', 'success');
+    } catch (e) {
+      notify(
+        e instanceof Error
+          ? e.message
+          : 'Nie udało się utworzyć planu.',
+        'error'
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function savePlan(event: FormEvent) {
     event.preventDefault(); if (!activePlanId) return;
     try { await api(`/api/v2/training/plans/${activePlanId}`, { method: 'PUT', body: JSON.stringify({ name: planName || 'Mój plan', description: planDescription, days: planDays }) }); await refreshUserData(); notify('Plan treningowy zapisany.', 'success'); }
