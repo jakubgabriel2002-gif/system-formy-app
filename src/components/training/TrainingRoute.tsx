@@ -100,6 +100,7 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [summary, setSummary] = useState(false);
+  const [sessionActive, setSessionActive] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -112,6 +113,7 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
       setPlans(Array.isArray(planResult.plans) ? planResult.plans : []);
       const loadedDraft = draftResult.draft?.started && draftResult.draft.plan_id ? draftResult.draft : null;
       setDraft(loadedDraft);
+      setSessionActive(false);
       if (loadedDraft) {
         setTitle(loadedDraft.title || 'Trening');
         setPerformedOn(loadedDraft.performed_on || localDate());
@@ -134,7 +136,7 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
 
   useEffect(() => { void load(); }, [load]);
 
-  const active = Boolean(draft?.started && draft.plan_id && exercises.length && !summary);
+  const active = Boolean(sessionActive && draft?.started && draft.plan_id && exercises.length && !summary);
 
   useEffect(() => {
     if (!active || startedAt === null) return;
@@ -188,9 +190,11 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
 
   const resume = () => {
     if (!draft) return;
+    setSessionActive(true);
     const now = Date.now();
     const savedStart = Number(draft.started_at);
     const startTime = Number.isFinite(savedStart) && savedStart > 0 ? savedStart : now;
+    setSessionActive(true);
     setTitle(draft.title || 'Trening');
     setPerformedOn(draft.performed_on || localDate());
     setNotes(draft.notes || '');
@@ -249,7 +253,7 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
       exercises={exercises}
       onBackToDashboard={onBackToDashboard}
       onStartAnother={() => {
-        setSummary(false); setTitle(''); setNotes(''); setExercises([]);
+        setSummary(false); setSessionActive(false); setTitle(''); setNotes(''); setExercises([]);
         setDraft(null); setStartedAt(null); setElapsedSeconds(0); setError('');
       }}
     />;
