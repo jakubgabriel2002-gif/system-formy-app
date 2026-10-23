@@ -157,3 +157,13 @@
  .sf-last-workout-summary small{font-size:.66rem}
  .sf-last-workout-exercises span{font-size:.67rem;padding:6px 7px}
 }
+
+/* Final dashboard order and full-width paired primary actions. */
+.sf-dashboard-main-card .sf-welcome-actions-full{grid-column:1/-1;width:100%;max-width:none;margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.sf-dashboard-main-card .sf-welcome-actions-full .sf-button{width:100%;min-height:48px;justify-content:center}
+.sf-dashboard-main-card .sf-next-workout{grid-column:1/-1}
+.sf-dashboard-products{margin-top:2px}
+@media(max-width:760px){
+ .sf-dashboard-main-card .sf-welcome-actions-full{grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+ .sf-dashboard-main-card .sf-welcome-actions-full .sf-button{width:100%;min-height:48px;padding:10px 8px;font-size:.76rem;white-space:normal;line-height:1.25}
+}
