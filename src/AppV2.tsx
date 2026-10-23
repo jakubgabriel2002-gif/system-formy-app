@@ -404,14 +404,12 @@ export default function AppV2() {
     catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się zmienić hasła.', 'error'); }
     finally { setLoading(false); }
   }
-  async function startWorkoutFromPlan(planId: string, planNameValue: string, day: Day) {
-    const prepared = day.exercises.filter(ex => ex.name.trim()).map(ex => ({ name: ex.name.trim(), sets_detail: Array.from({ length: Math.max(1, Math.min(30, Number(ex.sets) || 3)) }, () => ({ reps: Math.max(1, Math.min(200, Number(ex.reps) || 10)), weight_kg: ex.weight_kg ?? null })) }));
-    if (!prepared.length) { notify('Ten dzień nie ma jeszcze ćwiczeń. Uzupełnij i zapisz plan przed rozpoczęciem.', 'error'); return; }
-    const title = `${planNameValue} — ${day.title}`.slice(0, 120);
-    const performedOn = today();
-    // Zapis szkicu przed zmianą widoku chroni rozpoczęty trening przed utratą przy szybkim odświeżeniu.
-    await api('/api/v2/training/draft', { method: 'PUT', body: JSON.stringify({ draft: { title, performed_on: performedOn, notes: '', exercises: prepared, plan_id: planId, day_key: day.day_key, started: true } }) }).catch(() => {});
-    go('/app/trening'); notify(`Rozpoczęto trening: ${day.title}. Możesz dopasować obciążenie i wyniki serii.`, 'success');
+  async function startWorkoutFromPlan(_planId: string, _planNameValue: string, _day: Day) {
+    // Przycisk z panelu/kreatora prowadzi do centrum treningowego.
+    // Sesja nie jest tworzona ani oznaczana jako rozpoczęta, dopóki użytkownik
+    // sam nie wybierze planu i dnia oraz nie kliknie przycisku startu w centrum.
+    go('/app/trening');
+    notify('Wybierz plan i dzień w centrum treningowym, aby rozpocząć sesję.', 'info');
   }
   async function startLegacyWorkout(legacy: { day_key: string; title: string; exercises_json: string }) {
     let raw: Array<Record<string, unknown>> = [];
