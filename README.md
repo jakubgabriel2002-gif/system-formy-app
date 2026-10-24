@@ -82,3 +82,18 @@ npm run deploy
 ## Testy
 
 Przed publikacją uruchom `npm run typecheck` i `npm run build`, a następnie ręcznie sprawdź m.in. profil niekompletny, dodawanie przykładowego planu, limity zwykłego/Premium konta, plan wielodniowy, zmianę ciężaru w serii, przedłużanie przerw i zapis podsumowania.
+
+### Interaktywny kreator planu — aktualizacja 2026-10-24
+
+- Utworzenie własnego planu zaczyna się od nazwy, opcjonalnego opisu i liczby dni treningowych (1–14). Wybrana struktura dni jest zapisywana od razu, więc można wrócić do edycji po odświeżeniu strony.
+- Kreator używa zakładek dni zamiast długiej listy wszystkich dni. W każdej zakładce można zmienić nazwę dnia, dodawać i usuwać ćwiczenia oraz zmieniać ich kolejność przyciskami góra/dół (wygodne na telefonie).
+- Karta ćwiczenia ma osobne pola serii, powtórzeń oraz opcjonalnego ciężaru. Zaawansowane ustawienia zawierają przerwę między seriami, przerwę między ćwiczeniami i opcjonalną wskazówkę techniczną.
+- Podgląd przed zapisem zbiera dni, ćwiczenia, serie, ciężary i przerwy; z podglądu można wrócić do edycji wybranego dnia.
+- Zapis weryfikuje kompletność danych po stronie interfejsu, a API nadal waliduje strukturę dni i ćwiczeń. Limity maksymalne API: 14 dni na plan, 40 ćwiczeń na dzień, 30 serii na ćwiczenie, 200 powtórzeń i zakresy przerw określone w `worker/v2.ts`.
+- Nowy komponent kreatora: `src/components/PlanBuilder.tsx`. Style są dopisane w `src/v2.css`.
+- Utworzenie planu zapisuje początkowy układ dni zanim otworzy się edytor. Same zmiany ćwiczeń zapisuje użytkownik przyciskiem „Zapisz plan i wszystkie dni”; nie ma automatycznego zapisu po każdej zmianie pola. Jeśli zapis struktury dni się nie powiedzie, aplikacja podejmuje próbę usunięcia nowo utworzonego rekordu, aby nie zajmował limitu planów.
+
+### Weryfikacja tej aktualizacji
+
+- Parser/transpilacja TypeScript/TSX: 13 plików bez błędów składni. Nowy `PlanBuilder.tsx` przeszedł dodatkowe sprawdzenie typów na minimalnych deklaracjach React; nie jest to zamiennik pełnego sprawdzenia z rzeczywistymi zależnościami projektu.
+- Pełny `npm run typecheck` i build produkcyjny nie zostały potwierdzone w środowisku przygotowawczym, ponieważ instalacja zależności (`npm ci`) przekroczyła limit czasu i katalog `node_modules` pozostał niekompletny. Przed wdrożeniem sprawdź kontrolę builda w swoim pipeline.
