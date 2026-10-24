@@ -247,6 +247,14 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     }
     if (path === '/api/account/overview' && method === 'GET') {
       const session = await requireSession(request, env);
+      await db.prepare(`CREATE TABLE IF NOT EXISTS individual_plan_requests (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, email TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '',
+        goal TEXT NOT NULL, level TEXT NOT NULL, location TEXT NOT NULL, equipment TEXT NOT NULL,
+        days_per_week INTEGER NOT NULL, session_minutes INTEGER NOT NULL, training_history TEXT NOT NULL DEFAULT '',
+        schedule TEXT NOT NULL DEFAULT '', preferences TEXT NOT NULL DEFAULT '', avoid TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'new', admin_note TEXT NOT NULL DEFAULT '',
+        consent INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      )`).run();
       const [orders, entitlements, planRequests] = await Promise.all([
         db.prepare('SELECT id, order_number, status, total_amount, currency, created_at FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(session.user_id).all(),
         db.prepare('SELECT id, product_key, product_title, product_type, access_status, created_at FROM user_entitlements WHERE user_id = ? ORDER BY created_at DESC LIMIT 100').bind(session.user_id).all(),

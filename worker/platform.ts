@@ -123,9 +123,9 @@ export async function handlePlatformApi(request:Request,env:PlatformEnv):Promise
     if(!free&&(!Number.isFinite(price)||price<=0||price>100000))return reply({error:'Cena płatnego produktu musi być większa od zera.'},400);
     if(checkout){try{if(new URL(checkout).protocol!=='https:')throw new Error();}catch{return reply({error:'Link zakupu musi być prawidłowym adresem HTTPS.'},400);}}
     if(await product(env,key))return reply({error:'Produkt o takim kluczu już istnieje. Użyj innego klucza.'},409);
-    const selectedExisting=Boolean(existingFileKey),selectedNew=file instanceof File&&file.size>0;
+    const selectedExisting=Boolean(existingFileKey),selectedNew=file instanceof File&&file.size>0, noFileGenerator=key==='generator-planu-treningowego';
     if(selectedExisting&&selectedNew)return reply({error:'Wybierz plik z R2 albo prześlij nowy plik — nie oba naraz.'},400);
-    if(!selectedExisting&&!selectedNew)return reply({error:'Wybierz istniejący plik z R2 albo prześlij nowy plik.'},400);
+    if(!noFileGenerator&&!selectedExisting&&!selectedNew)return reply({error:'Wybierz istniejący plik z R2 albo prześlij nowy plik.'},400);
     let fileKey='',originalFilename='',contentType='application/octet-stream',uploadedNewFile=false;
     if(selectedExisting){
      if(existingFileKey.length>1024||existingFileKey.startsWith('/')||existingFileKey.includes('..')||existingFileKey.includes('\\'))return reply({error:'Nieprawidłowa ścieżka istniejącego pliku.'},400);
@@ -134,7 +134,7 @@ export async function handlePlatformApi(request:Request,env:PlatformEnv):Promise
      if(!/\.(pdf|xlsx|docx|zip|csv|txt)$/i.test(originalFilename))return reply({error:'Wybrany plik ma niedozwolony format.'},400);
      if(object.size>MAX_FILE_BYTES)return reply({error:'Wybrany plik przekracza limit 25 MB.'},400);
      fileKey=existingFileKey;contentType=object.httpMetadata?.contentType||'application/octet-stream';
-    }else{
+    }else if(selectedNew){
      if(!(file instanceof File)||file.size>MAX_FILE_BYTES)return reply({error:'Wybierz plik o rozmiarze do 25 MB.'},400);
      if(!/\.(pdf|xlsx|docx|zip|csv|txt)$/i.test(file.name))return reply({error:'Dozwolone formaty: PDF, XLSX, DOCX, ZIP, CSV i TXT.'},400);
      fileKey='products/'+crypto.randomUUID()+'/'+safeFileName(file.name);originalFilename=file.name;contentType=file.type||'application/octet-stream';

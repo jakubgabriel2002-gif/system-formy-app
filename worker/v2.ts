@@ -14,6 +14,18 @@ type V2PromoCandidate = { id: string; code: string; discount_type: string; disco
 class V2InputError extends Error { readonly status = 400; }
 const V2_COOKIE = 'sf_session';
 const V2_MAX_FILE = 25 * 1024 * 1024;
+const V2_GENERATOR_PRODUCT_KEY = 'generator-planu-treningowego';
+
+async function ensureIndividualPlanRequestTable(env: V2Env): Promise<void> {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS individual_plan_requests (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, email TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '',
+    goal TEXT NOT NULL, level TEXT NOT NULL, location TEXT NOT NULL, equipment TEXT NOT NULL,
+    days_per_week INTEGER NOT NULL, session_minutes INTEGER NOT NULL, training_history TEXT NOT NULL DEFAULT '',
+    schedule TEXT NOT NULL DEFAULT '', preferences TEXT NOT NULL DEFAULT '', avoid TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'new', admin_note TEXT NOT NULL DEFAULT '',
+    consent INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`).run();
+}
 
 function v2Reply(body: unknown, status = 200, headers?: HeadersInit): Response {
   const h = new Headers(headers);
@@ -298,20 +310,22 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       if (!env.STRIPE_SECRET_KEY || !env.STRIPE_WEBHOOK_SECRET) return v2Reply({ error: 'Płatności Stripe nie są w pełni skonfigurowane.' }, 503);
       const body = await v2Body(request), key = v2Field(body, 'product_key', 100).toLowerCase(), code = v2Field(body, 'promotion_code', 80).toUpperCase(), analyticsSession = v2Field(body, 'analytics_session_key', 100);
-      const item = await v2Product(env, key); if (!item || !item.is_published) return v2Reply({ error: 'Produkt nie jest dostępny.' }, 404);
+      const generatorCreditProduct = key === V2_GENERATOR_PRODUCT_KEY;
+      const item = await v2Product(env, key); if (!item || (!item.is_published && !generatorCreditProduct)) return v2Reply({ error: 'Produkt nie jest dostępny.' }, 404);
       if (item.is_free) return v2Reply({ error: 'Ten produkt jest bezpłatny — użyj opcji odbioru.' }, 400);
-      if (!Number.isFinite(item.price_amount) || item.price_amount <= 0) return v2Reply({ error: 'Produkt nie ma prawidłowej ceny.' }, 400);
+      if (!generatorCreditProduct && (!Number.isFinite(item.price_amount) || item.price_amount <= 0)) return v2Reply({ error: 'Produkt nie ma prawidłowej ceny.' }, 400);
+      if (generatorCreditProduct && code) return v2Reply({ error: 'Zakup generatora za 29,99 zł nie obsługuje kodów rabatowych.' }, 400);
       const entitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(gate.session!.id, key).first<{ id: string }>();
       if (entitlement) return v2Reply({ error: 'Masz już dostęp do tego materiału.' }, 409);
-      let totalCents = Math.round(item.price_amount * 100), discountCents = 0, promo: V2PromoCandidate | null = null;
+      let totalCents = generatorCreditProduct ? 2999 : Math.round(item.price_amount * 100), discountCents = 0, promo: V2PromoCandidate | null = null;
       // Rabat bezpośredni produktu: daty i procent sprawdzane po stronie serwera.
-      const directDiscount = await env.DB.prepare('SELECT discount_percent,starts_at,ends_at,is_active FROM product_discounts WHERE product_key=? LIMIT 1').bind(key).first<{discount_percent:number;starts_at:string|null;ends_at:string|null;is_active:number}>().catch(()=>null);
+      const directDiscount = generatorCreditProduct ? null : await env.DB.prepare('SELECT discount_percent,starts_at,ends_at,is_active FROM product_discounts WHERE product_key=? LIMIT 1').bind(key).first<{discount_percent:number;starts_at:string|null;ends_at:string|null;is_active:number}>().catch(()=>null);
       const discountNow = Date.now();
       if (directDiscount?.is_active && (!directDiscount.starts_at || Date.parse(directDiscount.starts_at) <= discountNow) && (!directDiscount.ends_at || Date.parse(directDiscount.ends_at) >= discountNow)) {
         discountCents = Math.min(totalCents, Math.round(totalCents * Math.max(1, Math.min(99, Number(directDiscount.discount_percent))) / 100));
         totalCents -= discountCents;
       }
-      if (code) {
+      if (code && !generatorCreditProduct) {
         promo = await env.DB.prepare('SELECT id,code,discount_type,discount_value,max_uses,used_count,product_key FROM promotion_codes WHERE code=? COLLATE NOCASE AND is_active=1 LIMIT 1').bind(code).first<V2PromoCandidate>();
         if (!promo) return v2Reply({ error: 'Kod rabatowy jest nieprawidłowy lub nieaktywny.' }, 400);
         const dates = await env.DB.prepare('SELECT starts_at,ends_at FROM promotion_codes WHERE id=?').bind(promo.id).first<{ starts_at: string | null; ends_at: string | null }>();
@@ -349,7 +363,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         return v2Reply({ free: true, order_number: number, display_order_number: display });
       }
       const origin = url.origin, form = new URLSearchParams();
-      form.set('mode', 'payment'); form.set('success_url', `${origin}/app/zamowienia?payment=success&session_id={CHECKOUT_SESSION_ID}`); form.set('cancel_url', `${origin}/produkty/${encodeURIComponent(key)}?payment=cancelled`);
+      form.set('mode', 'payment'); form.set('success_url', generatorCreditProduct ? `${origin}/app/plan/ai?payment=success&session_id={CHECKOUT_SESSION_ID}` : `${origin}/app/zamowienia?payment=success&session_id={CHECKOUT_SESSION_ID}`); form.set('cancel_url', generatorCreditProduct ? `${origin}/app/plan/ai?payment=cancelled` : `${origin}/produkty/${encodeURIComponent(key)}?payment=cancelled`);
       form.set('client_reference_id', gate.session!.id); form.set('customer_email', gate.session!.email);
       form.set('line_items[0][price_data][currency]', (item.currency || 'PLN').toLowerCase()); form.set('line_items[0][price_data][unit_amount]', String(totalCents)); form.set('line_items[0][price_data][product_data][name]', item.title); form.set('line_items[0][quantity]', '1');
       if (item.description) form.set('line_items[0][price_data][product_data][description]', item.description.slice(0, 500));
@@ -377,7 +391,25 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       return v2Reply({ materials: rows.results });
     }
 
-    // Generator treningów AI: wywołanie modelu wyłącznie po stronie Workera, z historią przypisaną do konta.
+    // Zamówienia planów indywidualnych są zapisywane w D1 i widoczne w ACP.
+    if (path === '/api/v2/training/individual-plan-requests' && method === 'POST') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      await ensureIndividualPlanRequestTable(env);
+      const b = await v2Body(request);
+      const goal = v2Field(b, 'goal', 40), level = v2Field(b, 'level', 30), location = v2Field(b, 'location', 20), equipment = v2Field(b, 'equipment', 30);
+      const days = Number(b.days_per_week), minutes = Number(b.session_minutes), consent = b.consent === true || b.consent === 'true';
+      if (!['muscle','strength','fat_loss','general'].includes(goal) || !['beginner','intermediate','advanced'].includes(level) || !['home','gym','both'].includes(location)) return v2Reply({ error: 'W formularzu wybrano nieprawidłowy cel, poziom lub miejsce treningu.' }, 400);
+      if (!['none','bands','dumbbells','both','gym'].includes(equipment) || !Number.isInteger(days) || days < 1 || days > 7 || !Number.isInteger(minutes) || minutes < 30 || minutes > 120) return v2Reply({ error: 'Sprawdź dostępny sprzęt, liczbę dni i czas treningu.' }, 400);
+      if (!consent) return v2Reply({ error: 'Zaznacz zgodę na wykorzystanie odpowiedzi do obsługi zamówienia.' }, 400);
+      const profile = await env.DB.prepare('SELECT first_name FROM user_profiles WHERE user_id=? LIMIT 1').bind(gate.session!.id).first<{ first_name: string | null }>();
+      const id = crypto.randomUUID(), now = new Date().toISOString();
+      await env.DB.prepare(`INSERT INTO individual_plan_requests(id,user_id,email,full_name,goal,level,location,equipment,days_per_week,session_minutes,training_history,schedule,preferences,avoid,notes,status,admin_note,consent,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new','',1,?,?)`)
+        .bind(id, gate.session!.id, gate.session!.email, (profile?.first_name || '').trim().slice(0,80), goal, level, location, equipment, days, minutes,
+          v2Field(b,'training_history',1500), v2Field(b,'schedule',800), v2Field(b,'preferences',1000), v2Field(b,'avoid',1200), v2Field(b,'notes',1500), now, now).run();
+      return v2Reply({ ok: true, id, status: 'new', created_at: now }, 201);
+    }
+
+    // Generator treningów AI: zachowany stary endpoint historyczny, ale nowy kreator nie wywołuje modelu.
     if (path === '/api/v2/training/ai/history' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       const totals = await env.DB.prepare("SELECT COUNT(*) AS total_generations, SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS successful_generations FROM ai_plan_generations WHERE user_id=?").bind(gate.session!.id).first<{ total_generations: number; successful_generations: number | null }>();
@@ -583,10 +615,10 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
           });
           return { day_key: String.fromCharCode(65 + dayIndex), title: `Dzień ${dayIndex + 1} — ${title.replace(/^Dzień\s+\d+\s*[-—:]?\s*/i, '')}`, exercises };
         });
-        const { promptTokens: inputTokens, completionTokens: outputTokens, totalTokens: outputTotalTokens } = usageForDiagnostics;
+        const { promptTokens: inputTokens, completionTokens: outputTokens, totalTokens } = usageForDiagnostics;
         const completedAt = new Date().toISOString();
-        const output = { days: normalizedDays, duration_weeks: durationWeeks, start_date: startDate, progression_strategy: progressionStrategy, generation_id: generationId, generation_number: generationNumber, model, usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: outputTotalTokens } };
-        await env.DB.prepare("UPDATE ai_plan_generations SET status='success',result_json=?,prompt_tokens=?,completion_tokens=?,total_tokens=?,completed_at=? WHERE id=? AND user_id=?").bind(JSON.stringify(output), inputTokens, outputTokens, outputTotalTokens, completedAt, generationId, gate.session!.id).run();
+        const output = { days: normalizedDays, duration_weeks: durationWeeks, start_date: startDate, progression_strategy: progressionStrategy, generation_id: generationId, generation_number: generationNumber, model, usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: totalTokens } };
+        await env.DB.prepare("UPDATE ai_plan_generations SET status='success',result_json=?,prompt_tokens=?,completion_tokens=?,total_tokens=?,completed_at=? WHERE id=? AND user_id=?").bind(JSON.stringify(output), inputTokens, outputTokens, totalTokens, completedAt, generationId, gate.session!.id).run();
         const totals = await env.DB.prepare("SELECT COUNT(*) AS total_generations, SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS successful_generations FROM ai_plan_generations WHERE user_id=?").bind(gate.session!.id).first<{ total_generations: number; successful_generations: number | null }>();
         return v2Reply({ ...output, total_generations: Number(totals?.total_generations || generationNumber), successful_generations: Number(totals?.successful_generations || 0) });
       } catch (error) {
@@ -637,6 +669,11 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     if (path === '/api/v2/training/plans' && method === 'POST') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       const b = await v2Body(request), name = v2Field(b, 'name', 120), description = v2Field(b, 'description', 1000);
+      const paidGeneratorPlan = b.source === 'paid_generator';
+      if (paidGeneratorPlan) {
+        const credit = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(gate.session!.id, V2_GENERATOR_PRODUCT_KEY).first<{ id: string }>();
+        if (!credit) return v2Reply({ error: 'Aby zapisać plan z generatora, kup najpierw jednorazowe użycie za 29,99 zł.' }, 403);
+      }
       const durationWeeks = 4;
       const requestedStartDate = typeof b.start_date === 'string' ? b.start_date.trim() : '';
       const startDate = requestedStartDate || new Date().toISOString().slice(0, 10);
@@ -677,6 +714,9 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (!plan) return v2Reply({ error: 'Nie znaleziono planu.' }, 404);
       if (method === 'DELETE') { await env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id IN (SELECT id FROM training_plan_days_v2 WHERE plan_id=?)').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plans_v2 WHERE id=? AND user_id=?').bind(plan.id, gate.session!.id).run(); return v2Reply({ ok: true }); }
       const b = await v2Body(request), name = v2Field(b, 'name', 120), description = v2Field(b, 'description', 1000), rawDays = Array.isArray(b.days) ? b.days : [];
+      const consumeGeneratorCredit = b.consume_generator_credit === true;
+      const generatorCredit = consumeGeneratorCredit ? await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(gate.session!.id, V2_GENERATOR_PRODUCT_KEY).first<{ id: string }>() : null;
+      if (consumeGeneratorCredit && !generatorCredit) return v2Reply({ error: 'Użycie generatora zostało już wykorzystane lub nie jest aktywne. Opłać kolejne użycie, aby zapisać nowy plan.' }, 403);
       const durationWeeks = 4;
       const requestedStartDate = typeof b.start_date === 'string' ? b.start_date.trim() : '';
       const startDate = requestedStartDate || plan.start_date || new Date().toISOString().slice(0, 10);
@@ -716,6 +756,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const dayId = crypto.randomUUID(); statements.push(env.DB.prepare('INSERT INTO training_plan_days_v2(id,plan_id,day_key,title,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').bind(dayId, plan.id, day.day_key, day.title, di, now, now));
         day.exercises.forEach((ex, ei) => statements.push(env.DB.prepare('INSERT INTO training_plan_exercises_v2(id,day_id,name,sort_order,target_sets,target_reps,target_weight_kg,notes,rest_seconds,transition_rest_seconds,alternatives_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), dayId, ex.name, ei, ex.sets, ex.reps, ex.weight_kg, ex.notes, ex.rest_seconds, ex.transition_rest_seconds, JSON.stringify(ex.alternatives))));
       });
+      if (consumeGeneratorCredit && generatorCredit) statements.push(env.DB.prepare("UPDATE user_entitlements SET access_status='used' WHERE id=? AND access_status='active'").bind(generatorCredit.id));
       if (statements.length) await env.DB.batch(statements);
       return v2Reply({ ok: true, duration_weeks: durationWeeks, start_date: startDate, progression_strategy: progressionStrategy, updated_at: now });
     }
@@ -819,6 +860,21 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     // Każda ścieżka ACP jest weryfikowana po stronie Workera.
     if (path.startsWith('/api/v2/admin/')) {
       const gate = await v2Gate(request, env, true); if (gate.response) return gate.response;
+      if (path === '/api/v2/admin/individual-plan-requests' && method === 'GET') {
+        await ensureIndividualPlanRequestTable(env);
+        const rows = await env.DB.prepare("SELECT * FROM individual_plan_requests ORDER BY CASE status WHEN 'new' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END, created_at DESC LIMIT 300").all();
+        return v2Reply({ requests: rows.results });
+      }
+      const individualRequestMatch = path.match(/^\/api\/v2\/admin\/individual-plan-requests\/([a-f0-9-]+)$/i);
+      if (individualRequestMatch && method === 'PATCH') {
+        await ensureIndividualPlanRequestTable(env);
+        const b = await v2Body(request), status = v2Field(b, 'status', 30), adminNote = v2Field(b, 'admin_note', 4000);
+        if (!['new','in_progress','waiting','completed','cancelled'].includes(status)) return v2Reply({ error: 'Nieprawidłowy status zamówienia planu indywidualnego.' }, 400);
+        const now = new Date().toISOString();
+        const result = await env.DB.prepare('UPDATE individual_plan_requests SET status=?,admin_note=?,updated_at=? WHERE id=?').bind(status, adminNote, now, individualRequestMatch[1]).run();
+        if (!result.meta.changes) return v2Reply({ error: 'Nie znaleziono zamówienia planu indywidualnego.' }, 404);
+        return v2Reply({ ok: true, status, updated_at: now });
+      }
       const replacementFileMatch = path.match(/^\/api\/v2\/admin\/products\/([a-z0-9-]+)\/file$/);
       if (replacementFileMatch && method === 'POST') {
         if (!env.PRODUCT_FILES) return v2Reply({ error: 'Magazyn plików R2 nie jest skonfigurowany.' }, 503);
