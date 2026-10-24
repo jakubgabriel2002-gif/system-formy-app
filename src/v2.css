@@ -619,3 +619,6 @@
 .sf-individual-orders .sf-ticket select,.sf-individual-orders .sf-ticket textarea{width:100%;box-sizing:border-box}
 .sf-individual-plan-cta{margin-top:4px}
 @media(max-width:640px){.sf-individual-answer-grid{grid-template-columns:1fr}.sf-individual-plan-form{padding:16px}.sf-individual-orders .sf-ticket{padding:16px}}
+
+.sf-individual-plan-price{display:flex;align-items:baseline;gap:10px;margin:18px 0 0;font-size:clamp(1.65rem,4vw,2.2rem);font-weight:800;letter-spacing:-.04em;color:var(--sf-text,#f7f7f5)}
+.sf-individual-plan-price small{font-size:.85rem;font-weight:500;letter-spacing:0;color:var(--sf-muted,#a7aca5)}
