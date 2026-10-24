@@ -31,7 +31,7 @@ type Props = {
   days: PlanDay[];
   location: 'home' | 'gym';
   equipment: 'none' | 'bands' | 'dumbbells' | 'both' | 'gym';
-  onReplaceExercises: (request: { location: 'home' | 'gym'; equipment: 'none' | 'bands' | 'dumbbells' | 'both' | 'gym'; exercises: ReplaceExerciseTarget[] }) => Promise<{ replacements: Array<{ key: string; name: string }>; usage?: { total_tokens?: number | null } }>;
+  onReplaceExercises: (request: { location: 'home' | 'gym'; equipment: 'none' | 'bands' | 'dumbbells' | 'both' | 'gym'; exercises: ReplaceExerciseTarget[] }) => Promise<{ replacements: Array<{ key: string; name: string }> }>;
   setDays: Dispatch<SetStateAction<PlanDay[]>>;
   loading?: boolean;
   progressionStrategy: ProgressionStrategy;
@@ -255,15 +255,15 @@ export default function PlanBuilder({ days, setDays, location, equipment, onRepl
           <button type="button" className="sf-builder-add-day-tab" onClick={addDay} disabled={days.length >= MAX_DAYS} aria-label="Dodaj dzień treningowy"><Plus size={18}/><span>Dodaj dzień</span></button>
         </div>
 
-        <section className="sf-builder-ai-replace-toolbar" aria-label="Wymiana ćwiczeń z katalogu">
-          <div className="sf-builder-ai-replace-copy"><b>Wymień ćwiczenia z katalogu</b><span>Zaznacz konkretne pozycje. Możesz zmieniać dni i zachować zaznaczenia. Opcjonalnie wpisz nazwę ćwiczenia, które wolisz.</span></div>
-          <div className="sf-builder-ai-replace-actions">
+        <section className="sf-builder-catalog-replace-toolbar" aria-label="Wymiana ćwiczeń z katalogu">
+          <div className="sf-builder-catalog-replace-copy"><b>Wymień ćwiczenia z katalogu</b><span>Zaznacz konkretne pozycje. Możesz zmieniać dni i zachować zaznaczenia. Opcjonalnie wpisz nazwę ćwiczenia, które wolisz.</span></div>
+          <div className="sf-builder-catalog-replace-actions">
             <button type="button" className="sf-button sf-button-outline sf-button-sm" disabled={replacingExercises || loading || allExerciseKeys.length === 0} onClick={toggleAllExercisesForReplacement}>{allExercisesSelected ? 'Odznacz cały plan' : 'Zaznacz cały plan'}</button>
-            <button type="button" className="sf-button sf-button-lime sf-button-sm" disabled={replacingExercises || loading || selectedTargets.length === 0} onClick={() => void replaceSelectedExercisesFromCatalog()}>{replacingExercises ? <><span className="sf-ai-mini-spinner"/> Dobieram zamienniki…</> : <><RotateCcw size={14}/> Wymień zaznaczone ({selectedTargets.length})</>}</button>
+            <button type="button" className="sf-button sf-button-lime sf-button-sm" disabled={replacingExercises || loading || selectedTargets.length === 0} onClick={() => void replaceSelectedExercisesFromCatalog()}>{replacingExercises ? <><span className="sf-catalog-mini-spinner"/> Dobieram zamienniki…</> : <><RotateCcw size={14}/> Wymień zaznaczone ({selectedTargets.length})</>}</button>
           </div>
-          {selectedTargets.length > 0 && <small className="sf-builder-ai-selected-count">Zaznaczono {selectedTargets.length} ćwiczeń w całym planie. Własna preferencja jest opcjonalna.</small>}
-          {replacementError && <div className="sf-builder-ai-feedback is-error" role="alert">{replacementError}</div>}
-          {replacementNotice && <div className="sf-builder-ai-feedback is-success" role="status">{replacementNotice}</div>}
+          {selectedTargets.length > 0 && <small className="sf-builder-catalog-selected-count">Zaznaczono {selectedTargets.length} ćwiczeń w całym planie. Własna preferencja jest opcjonalna.</small>}
+          {replacementError && <div className="sf-builder-catalog-feedback is-error" role="alert">{replacementError}</div>}
+          {replacementNotice && <div className="sf-builder-catalog-feedback is-success" role="status">{replacementNotice}</div>}
         </section>
 
         {activeDay && <div className="sf-builder-active-day" key={`${activeDay.day_key}-${activeDayIndex}`}>
@@ -284,7 +284,7 @@ export default function PlanBuilder({ days, setDays, location, equipment, onRepl
               const isAdvanced = Boolean(advanced[key]);
               return <article className="sf-builder-exercise-card" key={key}>
                 <div className="sf-builder-exercise-top">
-                  <label className="sf-builder-ai-select" title="Zaznacz to ćwiczenie do wymiany"><input type="checkbox" checked={Boolean(selectedForReplacement[exerciseSelectionKey(activeDay, index, exercise)])} disabled={replacingExercises || loading} onChange={event => { const selectionKey = exerciseSelectionKey(activeDay, index, exercise); setSelectedForReplacement(old => ({ ...old, [selectionKey]: event.target.checked })); setReplacementError(''); setReplacementNotice(''); }}/><span>Wymień</span></label>
+                  <label className="sf-builder-catalog-select" title="Zaznacz to ćwiczenie do wymiany"><input type="checkbox" checked={Boolean(selectedForReplacement[exerciseSelectionKey(activeDay, index, exercise)])} disabled={replacingExercises || loading} onChange={event => { const selectionKey = exerciseSelectionKey(activeDay, index, exercise); setSelectedForReplacement(old => ({ ...old, [selectionKey]: event.target.checked })); setReplacementError(''); setReplacementNotice(''); }}/><span>Wymień</span></label>
                   <span className="sf-builder-exercise-number">{String(index + 1).padStart(2, '0')}</span>
                   <label className="sf-builder-exercise-name">Nazwa ćwiczenia
                     <input required maxLength={120} value={exercise.name} onChange={e => updateExercise(activeDayIndex, index, { name: e.target.value })} placeholder="np. Przysiady ze sztangą" />
@@ -296,7 +296,7 @@ export default function PlanBuilder({ days, setDays, location, equipment, onRepl
                   </div>
                 </div>
 
-                {Boolean(selectedForReplacement[exerciseSelectionKey(activeDay, index, exercise)]) && <div className="sf-builder-ai-preference">
+                {Boolean(selectedForReplacement[exerciseSelectionKey(activeDay, index, exercise)]) && <div className="sf-builder-catalog-preference">
                   <label>Jakie ćwiczenie wolisz? <span>opcjonalnie</span><input maxLength={120} value={preferredNames[exerciseSelectionKey(activeDay, index, exercise)] || ''} disabled={replacingExercises || loading} onChange={event => setPreferredNames(old => ({ ...old, [exerciseSelectionKey(activeDay, index, exercise)]: event.target.value }))} placeholder="np. Wyciskanie na maszynie"/></label>
                   <small>Wpisz dokładną nazwę z katalogu. Zamiana zachowuje grupę ćwiczenia i uwzględnia dostępny sprzęt.</small>
                 </div>}

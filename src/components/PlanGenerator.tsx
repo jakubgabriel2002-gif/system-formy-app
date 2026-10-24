@@ -30,15 +30,9 @@ export type GeneratedPlanDraft = {
   duration_weeks: number;
   start_date: string;
   progression_strategy: ProgressionStrategy;
-  generation_id?: string;
-  generation_number?: number;
-  model?: string;
 };
 
-export type GeneratedPlanResult = {
-  days: GeneratedPlanDay[]; generation_id: string; generation_number: number; total_generations: number; successful_generations?: number; model: string; duration_weeks?: number; start_date?: string; progression_strategy?: ProgressionStrategy;
-  usage?: { prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null };
-};
+export type GeneratedPlanResult = { days: GeneratedPlanDay[]; duration_weeks?: number; start_date?: string; progression_strategy?: ProgressionStrategy; };
 
 
 type Goal = 'muscle' | 'strength' | 'fat-loss' | 'general';
@@ -63,7 +57,7 @@ type Props = {
   onPurchase: () => Promise<void>;
   onCancel: () => void;
   onSave: (draft: GeneratedPlanDraft) => Promise<void>;
-  onReplaceExercises: (request: { location: Place; equipment: Equipment | 'gym'; exercises: Array<{ key: string; day_title: string; name: string; sets: number; reps: number; notes: string; preferred_name?: string; other_names: string[] }> }) => Promise<{ replacements: Array<{ key: string; name: string }>; usage?: { total_tokens?: number | null } }>;
+  onReplaceExercises: (request: { location: Place; equipment: Equipment | 'gym'; exercises: Array<{ key: string; day_title: string; name: string; sets: number; reps: number; notes: string; preferred_name?: string; other_names: string[] }> }) => Promise<{ replacements: Array<{ key: string; name: string }> }>;
 };
 
 const GOALS: Array<{ id: Goal; title: string; desc: string; icon: typeof Target }> = [
@@ -355,10 +349,8 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
         throw new Error('Nie udało się zbudować kompletnego planu z katalogu ćwiczeń. Zmień ustawienia i spróbuj ponownie.');
       }
       const localResult: GeneratedPlanResult = {
-        days: resultDays, generation_id: '', generation_number: 1, total_generations: 1,
-        successful_generations: 1, model: 'katalog-systemu-formy', duration_weeks: PROGRAM_WEEKS,
+        days: resultDays, duration_weeks: PROGRAM_WEEKS,
         start_date: startDate, progression_strategy: progressionStrategy,
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       };
       setGeneratedDays(localResult.days); setGenerationMeta(localResult); setStep(3);
     } catch (error) {
@@ -374,7 +366,7 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
       const resultDays = buildDays(location, equipment, level, goal, days, duration, focus);
       if (!resultDays.length || !resultDays.every(day => day.exercises.length && day.exercises.every(ex => ex.name.trim()))) throw new Error('Nie udało się ułożyć planu z katalogu. Zmień ustawienia i spróbuj ponownie.');
       setGeneratedDays(resultDays);
-      setGenerationMeta({ days: resultDays, generation_id: '', generation_number: 1, total_generations: 1, successful_generations: 1, model: 'katalog-systemu-formy', duration_weeks: PROGRAM_WEEKS, start_date: startDate, progression_strategy: progressionStrategy, usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } });
+      setGenerationMeta({ days: resultDays, duration_weeks: PROGRAM_WEEKS, start_date: startDate, progression_strategy: progressionStrategy });
       setStep(3);
     } catch (error) { setGenerationError(error instanceof Error ? error.message : 'Nie udało się ułożyć planu.'); }
     finally { setGenerating(false); }
@@ -384,17 +376,17 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
     const cleanName = planName.trim();
     if (cleanName.length < 2 || !generationMeta) return;
     const description = `Plan przygotowany przez katalog ćwiczeń Systemu Formy na 4 tygodnie: cel — ${GOAL_NAMES[goal]}; poziom — ${LEVEL_NAMES[level]}; nacisk — ${FOCUS_NAMES[focus]}; ${location === 'home' ? `trening w domu (${chosenEquipment.title.toLowerCase()})` : 'trening na siłowni'}; ${days} jednostki tygodniowo; około ${duration} min na jednostkę; progresja — ${progressionOption(progressionStrategy).shortLabel}. Schemat tygodniowy powtarza się przez 4 tygodnie, a parametry zmieniają się zgodnie z wybraną progresją. Dopasuj obciążenie do swoich możliwości i techniki.`;
-    await onSave({ name: cleanName, description, location, days: generatedDays, duration_weeks: PROGRAM_WEEKS, start_date: startDate, progression_strategy: progressionStrategy, generation_id: generationMeta.generation_id, generation_number: generationMeta.generation_number, model: generationMeta.model });
+    await onSave({ name: cleanName, description, location, days: generatedDays, duration_weeks: PROGRAM_WEEKS, start_date: startDate, progression_strategy: progressionStrategy });
   };
 
   if (generating) return <section className="sf-view sf-plan-generator-view sf-gen-loading-view" role="status" aria-live="polite">
     <div className="sf-gen-loading-card">
       <div className="sf-gen-loader-ring" aria-hidden="true"><span/></div>
-      <p className="sf-eyebrow">SYSTEM FORMY · GENERATOR PLANU</p>
+      <p className="sf-eyebrow">SYSTEM FORMY · KREATOR PLANU</p>
       <h1>Układamy Twój <span>plan.</span></h1>
       <p>Układamy trening z kontrolowanej biblioteki ćwiczeń, dopasowując podział dni, poziom i dostępny sprzęt.</p>
-      <div className="sf-gen-loading-steps"><span className="is-done"><CheckCircle2 size={15}/> Analizujemy ustawienia</span><span className="is-current"><span className="sf-ai-mini-spinner"/> Dobieramy ćwiczenia z katalogu</span><span><CheckCircle2 size={15}/> Sprawdzamy plan</span></div>
-      <small>Plan powstaje lokalnie — bez wysyłania ustawień do modelu AI.</small>
+      <div className="sf-gen-loading-steps"><span className="is-done"><CheckCircle2 size={15}/> Analizujemy ustawienia</span><span className="is-current"><span className="sf-catalog-mini-spinner"/> Dobieramy ćwiczenia z katalogu</span><span><CheckCircle2 size={15}/> Sprawdzamy plan</span></div>
+      <small>Plan powstaje lokalnie na podstawie katalogu ćwiczeń Systemu Formy.</small>
     </div>
   </section>;
 
@@ -449,14 +441,14 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
       </div>
       <section className="sf-gen-month-summary"><div><h3>Plan na 4 tygodnie</h3><p>Program trwa od {formatProgramDate(startDate)} do {formatProgramDate(getProgramEndDate(startDate))}. Ten sam tygodniowy układ treningów powtarza się przez 4 tygodnie, a parametry są dostosowane do wybranej progresji.</p></div><div className="sf-gen-month-weeks">{[1,2,3,4].map(week => { const example = generatedDays.flatMap(day => day.exercises).find(ex => ex.name); const prescribed = example ? exerciseForProgramWeek(example, progressionStrategy, week) : null; const value = !prescribed ? '—' : progressionStrategy === 'weight' ? prescribed.weight_kg == null ? 'Mały krok ciężaru' : `${prescribed.weight_kg} kg` : `${prescribed.sets} ser. × ${prescribed.reps} powt.`; return <div key={week}><small>TYDZIEŃ {week}</small><b>{value}</b></div>; })}</div><p><b>{progressionOption(progressionStrategy).shortLabel}:</b> {progressionOption(progressionStrategy).explanation}</p></section>
       <label className="sf-gen-plan-name">Nazwa Twojego planu<input value={planName} onChange={event => setPlanName(event.target.value)} maxLength={120} minLength={2} required placeholder="np. Siła i forma — plan A"/></label>
-      <section className="sf-builder-ai-replace-toolbar sf-gen-preview-replace" aria-label="Wymiana ćwiczeń w podglądzie">
-        <div className="sf-builder-ai-replace-copy"><b>Nie pasuje Ci jakieś ćwiczenie?</b><span>Zaznacz tylko te ćwiczenia, które chcesz wymienić. Opcjonalnie wpisz nazwę z katalogu ćwiczeń. Zamienniki dobieramy lokalnie, bez AI i bez tokenów.</span></div>
-        <div className="sf-builder-ai-replace-actions"><button type="button" className="sf-button sf-button-outline sf-button-sm" disabled={replacingExercises} onClick={toggleAllGeneratedExercises}>{generatedDays.length > 0 && generatedDays.flatMap(day => day.exercises.map((exercise, index) => generatedExerciseSelectionKey(day,index,exercise))).every(key => selectedForReplacement[key]) ? 'Odznacz cały plan' : 'Zaznacz cały plan'}</button><button type="button" className="sf-button sf-button-lime sf-button-sm" disabled={replacingExercises || selectedGeneratedCount === 0} onClick={() => void replaceSelectedGeneratedExercises()}>{replacingExercises ? <><span className="sf-ai-mini-spinner"/> Dobieram zamienniki…</> : <><RotateCcw size={14}/> Wymień zaznaczone ({selectedGeneratedCount})</>}</button></div>
-        {selectedGeneratedCount > 0 && <small className="sf-builder-ai-selected-count">Zaznaczono {selectedGeneratedCount} ćwiczeń. Wszystkie pozostałe parametry treningu zostaną zachowane.</small>}
-        {replacementError && <div className="sf-builder-ai-feedback is-error" role="alert">{replacementError}</div>}
-        {replacementNotice && <div className="sf-builder-ai-feedback is-success" role="status">{replacementNotice}</div>}
+      <section className="sf-builder-catalog-replace-toolbar sf-gen-preview-replace" aria-label="Wymiana ćwiczeń w podglądzie">
+        <div className="sf-builder-catalog-replace-copy"><b>Nie pasuje Ci jakieś ćwiczenie?</b><span>Zaznacz tylko te ćwiczenia, które chcesz wymienić. Opcjonalnie wpisz nazwę z katalogu ćwiczeń. Zamienniki dobieramy lokalnie, bez AI i bez tokenów.</span></div>
+        <div className="sf-builder-catalog-replace-actions"><button type="button" className="sf-button sf-button-outline sf-button-sm" disabled={replacingExercises} onClick={toggleAllGeneratedExercises}>{generatedDays.length > 0 && generatedDays.flatMap(day => day.exercises.map((exercise, index) => generatedExerciseSelectionKey(day,index,exercise))).every(key => selectedForReplacement[key]) ? 'Odznacz cały plan' : 'Zaznacz cały plan'}</button><button type="button" className="sf-button sf-button-lime sf-button-sm" disabled={replacingExercises || selectedGeneratedCount === 0} onClick={() => void replaceSelectedGeneratedExercises()}>{replacingExercises ? <><span className="sf-catalog-mini-spinner"/> Dobieram zamienniki…</> : <><RotateCcw size={14}/> Wymień zaznaczone ({selectedGeneratedCount})</>}</button></div>
+        {selectedGeneratedCount > 0 && <small className="sf-builder-catalog-selected-count">Zaznaczono {selectedGeneratedCount} ćwiczeń. Wszystkie pozostałe parametry treningu zostaną zachowane.</small>}
+        {replacementError && <div className="sf-builder-catalog-feedback is-error" role="alert">{replacementError}</div>}
+        {replacementNotice && <div className="sf-builder-catalog-feedback is-success" role="status">{replacementNotice}</div>}
       </section>
-      <div className="sf-gen-day-list">{generatedDays.map((day, index) => <article className="sf-gen-day-card" key={day.day_key}><header><span className="sf-gen-day-index">{String(index + 1).padStart(2, '0')}</span><div><p className="sf-eyebrow">{location === 'home' ? 'DOM' : 'SIŁOWNIA'} · {day.exercises.length} ĆWICZEŃ</p><h3>{day.title.replace(/^Dzień \d+ — /, '')}</h3></div><span className="sf-gen-day-chevron"><ArrowRight size={17}/></span></header><div className="sf-gen-exercise-list">{day.exercises.map((exercise, exerciseIndex) => { const selectionKey = generatedExerciseSelectionKey(day, exerciseIndex, exercise); const isSelected = Boolean(selectedForReplacement[selectionKey]); return <div className="sf-gen-exercise-wrap" key={`${day.day_key}-${exercise.name}-${exerciseIndex}`}><div className="sf-gen-exercise-row"><label className="sf-gen-exercise-select"><input type="checkbox" checked={isSelected} disabled={replacingExercises} onChange={event => { setSelectedForReplacement(old => ({ ...old, [selectionKey]: event.target.checked })); setReplacementError(''); setReplacementNotice(''); }}/><span>{String(exerciseIndex + 1).padStart(2, '0')}</span></label><b>{exercise.name}</b><small>{exercise.sets} × {exercise.reps}{exercise.notes?.toLowerCase().includes('minut') ? ' min' : exercise.notes?.toLowerCase().includes('sekund') ? ' s' : ''}</small></div>{isSelected && <label className="sf-builder-ai-preference sf-gen-exercise-preference">Jakie ćwiczenie wolisz? <span>opcjonalnie</span><input maxLength={120} value={preferredReplacementNames[selectionKey] || ''} disabled={replacingExercises} onChange={event => setPreferredReplacementNames(old => ({ ...old, [selectionKey]: event.target.value }))} placeholder="np. Wyciskanie na maszynie"/></label>}</div>; })}</div><div className="sf-gen-day-foot"><span><Clock3 size={13}/> Przerwa: {day.exercises[0]?.rest_seconds ?? 90} s</span><span>{day.exercises.reduce((total, ex) => total + ex.sets, 0)} serii łącznie</span></div></article>)}</div>
+      <div className="sf-gen-day-list">{generatedDays.map((day, index) => <article className="sf-gen-day-card" key={day.day_key}><header><span className="sf-gen-day-index">{String(index + 1).padStart(2, '0')}</span><div><p className="sf-eyebrow">{location === 'home' ? 'DOM' : 'SIŁOWNIA'} · {day.exercises.length} ĆWICZEŃ</p><h3>{day.title.replace(/^Dzień \d+ — /, '')}</h3></div><span className="sf-gen-day-chevron"><ArrowRight size={17}/></span></header><div className="sf-gen-exercise-list">{day.exercises.map((exercise, exerciseIndex) => { const selectionKey = generatedExerciseSelectionKey(day, exerciseIndex, exercise); const isSelected = Boolean(selectedForReplacement[selectionKey]); return <div className="sf-gen-exercise-wrap" key={`${day.day_key}-${exercise.name}-${exerciseIndex}`}><div className="sf-gen-exercise-row"><label className="sf-gen-exercise-select"><input type="checkbox" checked={isSelected} disabled={replacingExercises} onChange={event => { setSelectedForReplacement(old => ({ ...old, [selectionKey]: event.target.checked })); setReplacementError(''); setReplacementNotice(''); }}/><span>{String(exerciseIndex + 1).padStart(2, '0')}</span></label><b>{exercise.name}</b><small>{exercise.sets} × {exercise.reps}{exercise.notes?.toLowerCase().includes('minut') ? ' min' : exercise.notes?.toLowerCase().includes('sekund') ? ' s' : ''}</small></div>{isSelected && <label className="sf-builder-catalog-preference sf-gen-exercise-preference">Jakie ćwiczenie wolisz? <span>opcjonalnie</span><input maxLength={120} value={preferredReplacementNames[selectionKey] || ''} disabled={replacingExercises} onChange={event => setPreferredReplacementNames(old => ({ ...old, [selectionKey]: event.target.value }))} placeholder="np. Wyciskanie na maszynie"/></label>}</div>; })}</div><div className="sf-gen-day-foot"><span><Clock3 size={13}/> Przerwa: {day.exercises[0]?.rest_seconds ?? 90} s</span><span>{day.exercises.reduce((total, ex) => total + ex.sets, 0)} serii łącznie</span></div></article>)}</div>
       {generationError && <div className="sf-gen-error" role="alert">{generationError}</div>}
       {generating && <div className="sf-gen-history-strip" role="status"><Sparkles size={16}/><span><b>Katalog przygotowuje nową wersję.</b> Poprzedni podgląd zostaje zachowany do czasu otrzymania nowego wyniku.</span></div>}
       <div className="sf-gen-prototype-note"><Sparkles size={16}/><p><b>Plan z kontrolowanego katalogu ćwiczeń.</b> Nazwy pochodzą z zatwierdzonej biblioteki. Generator i wymiany działają bez zapytań do zewnętrznego modelu i bez zużycia tokenów. Sprawdź, czy ćwiczenia odpowiadają Twoim możliwościom.</p></div>
