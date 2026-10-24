@@ -1,11 +1,12 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import TrainingRoute from './components/training/TrainingRoute';
+import PlanBuilder from './components/PlanBuilder';
 import {
   Activity, ArrowDownToLine, ArrowLeft, ArrowRight, BarChart3, BookOpen, Check, CheckCircle2,
   ChevronDown, CircleHelp, ClipboardList, Clock3, Crown, Dumbbell, FileText, Gauge, Goal,
   Home, KeyRound, LayoutDashboard, LifeBuoy, List, LockKeyhole, LogOut, Mail, Menu,
   Minus, Plus, Search, Settings, ShieldCheck, ShoppingBag, SlidersHorizontal, Sparkles,
-  Timer, TrendingUp, UserRound, Users, WalletCards, X,
+  Timer, TrendingUp, Trash2, UserRound, Users, WalletCards, X,
 } from 'lucide-react';
 
 type User = { id: string; email: string };
@@ -52,6 +53,7 @@ const productTypeLabel = (v: string) => ({ ebook: 'E-book / PDF', training_plan:
 const orderStatusLabel = (v: string) => ({ pending: 'Oczekuje', paid: 'Opłacone', processing: 'W realizacji', fulfilled: 'Zrealizowane', canceled: 'Anulowane', refunded: 'Zwrócone' } as Record<string, string>)[v] || v;
 const pathOnly = (v: string) => v.split('?')[0] || '/';
 
+
 const SAMPLE_PLANS: Record<'home' | 'gym', { name: string; description: string; days: Day[] }> = {
   home: {
     name: 'Plan przykładowy — dom bez sprzętu',
@@ -94,6 +96,7 @@ export default function AppV2() {
   const [adminOrderItems, setAdminOrderItems] = useState<OrderItem[]>([]);
   const [newPlanName, setNewPlanName] = useState('');
   const [newPlanDescription, setNewPlanDescription] = useState('');
+  const [newPlanDayCount, setNewPlanDayCount] = useState(3);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
@@ -454,72 +457,83 @@ export default function AppV2() {
       go('/app/profil');
       return;
     }
-
     if (!canCreateTrainingPlan) {
       notify(trainingIsPremium ? 'Konto Premium pozwala na maksymalnie 3 zapisane plany.' : 'Zwykłe konto pozwala na 1 zapisany plan. Premium zwiększa limit do 3.', 'error');
       return;
     }
     const name = newPlanName.trim();
-    if (!name) {
-      notify('Wpisz nazwę planu.', 'error');
-      return;
-    }
+    const requestedDays = Number(newPlanDayCount);
+    if (!name || name.length < 2) { notify('Wpisz nazwę planu (co najmniej 2 znaki).', 'error'); return; }
+    if (!Number.isInteger(requestedDays) || requestedDays < 1 || requestedDays > 14) { notify('Wybierz od 1 do 14 dni treningowych.', 'error'); return; }
 
+    const initialDays: Day[] = Array.from({ length: requestedDays }, (_, index) => ({
+      day_key: String.fromCharCode(65 + index),
+      title: `Dzień ${index + 1}`,
+      exercises: [],
+    }));
+    const description = newPlanDescription.trim();
     setLoading(true);
-
     try {
       const created = await api<{ plan: Plan }>('/api/v2/training/plans', {
         method: 'POST',
-        body: JSON.stringify({
-          name,
-          description: newPlanDescription.trim()
-        })
+        body: JSON.stringify({ name, description }),
       });
-
-      const plan: Plan = {
-        ...created.plan,
-        name,
-        description: newPlanDescription.trim(),
-        days: created.plan.days || [],
-        updated_at: new Date().toISOString()
-      };
-
-      setPlans(old => [
-        plan,
-        ...old.filter(item => item.id !== plan.id)
-      ]);
-
+      try {
+        // Save the chosen day structure immediately, so it survives a refresh while the user builds exercises.
+        await api(`/api/v2/training/plans/${created.plan.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ name, description, days: initialDays }),
+        });
+      } catch (saveError) {
+        // Avoid leaving an empty plan that would consume a user's plan limit if initialization failed.
+        try { await api(`/api/v2/training/plans/${created.plan.id}`, { method: 'DELETE' }); } catch { /* best-effort cleanup */ }
+        throw saveError;
+      }
+      const plan: Plan = { ...created.plan, name, description, days: initialDays, updated_at: new Date().toISOString() };
+      setPlans(old => [plan, ...old.filter(item => item.id !== plan.id)]);
       setActivePlanId(plan.id);
       setPlanName(plan.name);
       setPlanDescription(plan.description);
-
-      setPlanDays(
-        plan.days.length
-          ? plan.days
-          : [{ day_key: 'A', title: 'Dzień A', exercises: [] }]
-      );
-
+      setPlanDays(initialDays);
       setNewPlanName('');
       setNewPlanDescription('');
-
-      notify('Utworzono nowy plan treningowy.', 'success');
+      setNewPlanDayCount(3);
+      notify(`Utworzono plan na ${requestedDays} dni. Dodaj ćwiczenia do każdego dnia, a następnie zapisz plan.`, 'success');
     } catch (e) {
-      notify(
-        e instanceof Error
-          ? e.message
-          : 'Nie udało się utworzyć planu.',
-        'error'
-      );
+      notify(e instanceof Error ? e.message : 'Nie udało się utworzyć planu.', 'error');
     } finally {
       setLoading(false);
     }
   }
 
   async function savePlan(event: FormEvent) {
-    event.preventDefault(); if (!activePlanId) return;
-    try { await api(`/api/v2/training/plans/${activePlanId}`, { method: 'PUT', body: JSON.stringify({ name: planName || 'Mój plan', description: planDescription, days: planDays }) }); await refreshUserData(); notify('Plan treningowy zapisany.', 'success'); }
-    catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się zapisać planu.', 'error'); }
+    event.preventDefault();
+    if (!activePlanId) return;
+    if (planDays.length < 1 || planDays.length > 14) { notify('Plan musi zawierać od 1 do 14 dni.', 'error'); return; }
+    for (let dayIndex = 0; dayIndex < planDays.length; dayIndex++) {
+      const day = planDays[dayIndex];
+      if (!day.title.trim()) { notify(`Uzupełnij nazwę dnia ${dayIndex + 1}.`, 'error'); return; }
+      if (!day.exercises.length) { notify(`Dodaj przynajmniej jedno ćwiczenie do: ${day.title}.`, 'error'); return; }
+      if (day.exercises.length > 40) { notify(`Dzień ${dayIndex + 1} przekracza limit 40 ćwiczeń.`, 'error'); return; }
+      for (let exerciseIndex = 0; exerciseIndex < day.exercises.length; exerciseIndex++) {
+        const ex = day.exercises[exerciseIndex];
+        if (!ex.name.trim()) { notify(`Uzupełnij nazwę ćwiczenia ${exerciseIndex + 1} w dniu ${dayIndex + 1}.`, 'error'); return; }
+        if (!Number.isInteger(Number(ex.sets)) || Number(ex.sets) < 1 || Number(ex.sets) > 30) { notify(`Sprawdź liczbę serii w ćwiczeniu „${ex.name}”.`, 'error'); return; }
+        if (!Number.isInteger(Number(ex.reps)) || Number(ex.reps) < 1 || Number(ex.reps) > 200) { notify(`Sprawdź liczbę powtórzeń w ćwiczeniu „${ex.name}”.`, 'error'); return; }
+        if (ex.weight_kg != null && (!Number.isFinite(Number(ex.weight_kg)) || Number(ex.weight_kg) < 0 || Number(ex.weight_kg) > 1000)) { notify(`Sprawdź ciężar w ćwiczeniu „${ex.name}”.`, 'error'); return; }
+        if (!Number.isInteger(Number(ex.rest_seconds ?? 90)) || Number(ex.rest_seconds ?? 90) < 0 || Number(ex.rest_seconds ?? 90) > 600) { notify(`Przerwa między seriami w ćwiczeniu „${ex.name}” musi wynosić od 0 do 600 sekund.`, 'error'); return; }
+        if (!Number.isInteger(Number(ex.transition_rest_seconds ?? 120)) || Number(ex.transition_rest_seconds ?? 120) < 0 || Number(ex.transition_rest_seconds ?? 120) > 900) { notify(`Przerwa między ćwiczeniami w ćwiczeniu „${ex.name}” musi wynosić od 0 do 900 sekund.`, 'error'); return; }
+      }
+    }
+    setLoading(true);
+    try {
+      await api(`/api/v2/training/plans/${activePlanId}`, { method: 'PUT', body: JSON.stringify({ name: planName || 'Mój plan', description: planDescription, days: planDays }) });
+      await refreshUserData();
+      notify('Plan treningowy zapisany. Wszystkie dni i ćwiczenia są gotowe.', 'success');
+    } catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się zapisać planu.', 'error'); }
+    finally { setLoading(false); }
   }
+
   async function saveGoal(event: FormEvent) {
     event.preventDefault(); try { await api('/api/v2/progress/goal', { method: 'PUT', body: JSON.stringify({ goal_title: goalTitle, target_date: goalTargetDate, target_value: goalTargetValue || null, current_value: goalCurrentValue || null, unit: goalUnit }) }); await refreshUserData(); notify('Cel został zapisany.', 'success'); }
     catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się zapisać celu.', 'error'); }
@@ -665,8 +679,53 @@ export default function AppV2() {
 <section className="sf-dashboard-products"><div className="sf-panel-heading sf-section-heading"><div><p className="sf-eyebrow">DOSTĘPNE W KATALOGU</p><h3>{featuredProductsTitle}</h3><p className="sf-muted">Wybierz program lub materiał dostępny w katalogu Systemu Formy.</p></div><button className="sf-text-button" onClick={() => go('/produkty')}>Cały katalog <ArrowRight size={15}/></button></div>{featuredProducts.length ? <div className="sf-dashboard-product-grid">{featuredProducts.map(product => <div key={product.product_key} className="sf-dashboard-product-item">{ProductCard({ product })}</div>)}</div> : <div className="sf-empty-inline"><p>W katalogu nie ma jeszcze opublikowanych produktów. Gdy dodasz je w ACP, pojawią się tutaj.</p><button className="sf-button sf-button-outline" onClick={() => go('/produkty')}>Otwórz katalog <ArrowRight size={15}/></button></div>}</section>
 </div>
     : path === '/app/trening' ? <TrainingRoute onGoToPlans={() => go('/app/plan')} onBackToDashboard={() => go('/app')} onSaved={refreshUserData} />
-    : path === '/app/plan' ? !profileComplete ? <section className="sf-view">{PageTitle({ eyebrow: 'KREATOR PLANÓW', title: 'Zacznij od profilu.', subtitle: 'Uzupełnij podstawowe dane, aby tworzyć własne plany. Treningi przykładowe są dostępne od razu.' })}<div className="sf-plan-profile-gate"><article className="sf-panel sf-profile-required sf-profile-required-prominent"><div className="sf-profile-gate-icon"><UserRound size={23}/></div><div><h3>Uzupełnij profil, aby stworzyć własny plan</h3><p>Potrzebujemy imienia, głównego celu, miejsca treningu (dom lub siłownia) i liczby treningów w tygodniu. Po uzupełnieniu wrócisz tutaj i stworzysz własny plan z dowolną liczbą dni.</p><button type="button" className="sf-button sf-button-lime" onClick={() => go('/app/profil')}>Uzupełnij profil <ArrowRight size={16}/></button></div></article><div className="sf-plan-profile-samples"><div className="sf-panel-heading"><div><p className="sf-eyebrow">MOŻESZ ZACZĄĆ OD RAZU</p><h3>Treningi przykładowe</h3></div><span className="sf-muted">Nie wymagają profilu</span></div><div className="sf-plan-sample-grid">{(['home','gym'] as const).map(kind => { const sample = SAMPLE_PLANS[kind]; const existing = plans.find(plan => plan.name === sample.name); return <article className="sf-panel sf-plan-sample-card" key={kind}><div className="sf-plan-sample-icon"><Dumbbell size={20}/></div><p className="sf-eyebrow">{kind === 'home' ? 'BEZ SPRZĘTU' : 'SIŁOWNIA'}</p><h3>{sample.name}</h3><p className="sf-muted">{sample.description}</p><div className="sf-plan-sample-days">{sample.days.map(day => <div key={day.day_key}><b>{day.title}</b><small>{day.exercises.length} ćwiczeń</small></div>)}</div><button type="button" className="sf-button sf-button-outline sf-button-full" disabled={loading} onClick={() => void addSamplePlan(kind)}>{existing ? 'Otwórz przykładowy plan' : 'Dodaj przykładowy plan'} <ArrowRight size={15}/></button></article>; })}</div></div></div></section> : <section className="sf-view">{PageTitle({ eyebrow: 'KREATOR PLANÓW', title: 'Twój plan. Twoje zasady.', subtitle: `Własne plany: ${customPlansCount}/${trainingPlanLimit}. Każdy plan może mieć do 14 dni, a każde ćwiczenie własne ustawienia serii i przerw.` })}<div className="sf-two-col"><div className="sf-panel"><div className="sf-panel-heading"><h3>Zapisane plany</h3><ClipboardList size={18}/></div>{plans.length ? plans.map(p => <button key={p.id} className={`sf-plan-select ${activePlanId === p.id ? 'is-active' : ''}`} onClick={() => { setActivePlanId(p.id); setPlanName(p.name); setPlanDescription(p.description); setPlanDays(p.days.length ? p.days : [{day_key:'A',title:'Dzień A',exercises:[]}]); }}><span><b>{p.name}</b><small>{p.days.length} dni · aktualizacja {dateLabel(p.updated_at)}</small></span><ArrowRight size={16}/></button>) : <p className="sf-muted">Nie utworzono jeszcze własnego planu.</p>}<div className="sf-sample-plan-actions"><p className="sf-muted">Przykładowe plany są dostępne bez profilu i nie zużywają limitu własnych planów.</p><button type="button" className="sf-button sf-button-outline sf-button-full" disabled={loading} onClick={() => void addSamplePlan('home')}><Dumbbell size={16}/> Dodaj plan domowy bez sprzętu</button><button type="button" className="sf-button sf-button-outline sf-button-full" disabled={loading} onClick={() => void addSamplePlan('gym')}><Dumbbell size={16}/> Dodaj plan siłowniany</button></div>{canCreateTrainingPlan ? <form className="sf-form-stack sf-create-plan" onSubmit={createPlan}><h4>Utwórz nowy plan</h4><p className="sf-muted">Możesz dodać dowolną liczbę dni (maksymalnie 14) i samodzielnie wpisać ćwiczenia.</p><label>Nazwa<input value={newPlanName} onChange={e => setNewPlanName(e.target.value)} maxLength={120} required placeholder="np. Budowanie siły"/></label><label>Opis (opcjonalnie)<textarea value={newPlanDescription} onChange={e => setNewPlanDescription(e.target.value)} maxLength={1000} rows={2}/></label><button className="sf-button sf-button-lime"><Plus size={16}/> Utwórz plan</button></form> : <div className="sf-plan-limit-notice"><h4>Limit zapisanych planów wykorzystany</h4><p>{trainingIsPremium ? 'Konto Premium pozwala zapisać do 3 planów treningowych.' : 'Zwykłe konto pozwala zapisać 1 plan. Dostęp Premium zwiększa limit do 3 planów.'} Możesz nadal edytować swoje istniejące plany albo usunąć jeden z nich, aby zwolnić miejsce.</p></div>}<article className="sf-generator-preview"><div className="sf-generator-preview-icon"><Sparkles size={20}/></div><div><p className="sf-eyebrow">W PRZYGOTOWANIU</p><h4>Pomóż nam ułożyć Twój plan</h4><p>Planowany wywiad o celu, doświadczeniu i dostępności sprzętu, a następnie trening na bazie ćwiczeń wybranych przez System Formy.</p><small>Planowana cena: 29,99 zł · bezpłatnie dla Premium</small></div><span className="sf-coming-soon-chip">Wkrótce</span></article>{legacyPlans.length > 0 && <div className="sf-legacy-plans"><h4>Dotychczasowe dni A/B/C</h4>{legacyPlans.map(p => <div key={p.day_key}><b>{p.title || `Dzień ${p.day_key}`}</b><small>{p.day_key} · zachowany stary plan</small></div>)}</div>}</div><div className="sf-panel"><div className="sf-panel-heading"><h3>Edycja planu</h3>{activePlanId && <button type="button" className="sf-text-button sf-danger-text" onClick={async () => { if (!confirm('Usunąć ten plan?')) return; await api(`/api/v2/training/plans/${activePlanId}`,{method:'DELETE'}); setPlans(old => old.filter(p => p.id !== activePlanId)); setActivePlanId(''); notify('Plan usunięty.','success'); }}>Usuń plan</button>}</div>{activePlanId ? <form className="sf-form-stack" onSubmit={savePlan}><label>Nazwa planu<input value={planName} onChange={e => { setPlanName(e.target.value); setPlans(old => old.map(p => p.id === activePlanId ? {...p,name:e.target.value} : p)); }} required maxLength={120}/></label><label>Opis planu<textarea value={planDescription} onChange={e => { setPlanDescription(e.target.value); setPlans(old => old.map(p => p.id === activePlanId ? {...p,description:e.target.value} : p)); }} maxLength={1000} rows={2}/></label><div className="sf-days-list">{planDays.map((day,di) => <div className="sf-day-editor" key={`${day.day_key}-${di}`}><div className="sf-day-heading"><label>Nazwa dnia<input value={day.title} onChange={e => setPlanDays(old => old.map((d,i) => i === di ? {...d,title:e.target.value} : d))} maxLength={120} required/></label><button type="button" className="sf-icon-button sf-danger" title="Usuń dzień" aria-label="Usuń dzień" onClick={() => setPlanDays(old => old.filter((_,i) => i !== di))}><X size={16}/></button></div>{day.exercises.map((ex,ei) => <div className="sf-plan-exercise sf-plan-exercise-expanded" key={ei}><label className="sf-plan-exercise-name">Nazwa ćwiczenia<input required value={ex.name} maxLength={120} onChange={e => setPlanDays(old => old.map((d,i) => i === di ? {...d,exercises:d.exercises.map((x,j) => j === ei ? {...x,name:e.target.value} : x)} : d))} placeholder="np. Przysiady"/></label><label>Serie<input type="number" min="1" max="30" value={ex.sets} onChange={e => setPlanDays(old => old.map((d,i) => i === di ? {...d,exercises:d.exercises.map((x,j) => j === ei ? {...x,sets:Number(e.target.value)} : x)} : d))} aria-label="Serie"/></label><label>Powtórzenia<input type="number" min="1" max="200" value={ex.reps} onChange={e => setPlanDays(old => old.map((d,i) => i === di ? {...d,exercises:d.exercises.map((x,j) => j === ei ? {...x,reps:Number(e.target.value)} : x)} : d))} aria-label="Powtórzenia"/></label><label className="sf-rest-field"><span>Przerwa między seriami <span className="sf-help-dot" title="Odpoczynek po zapisaniu serii, przed kolejną serią tego samego ćwiczenia." aria-label="Wyjaśnienie przerwy między seriami">?</span></span><input type="number" min="0" max="600" step="15" value={ex.rest_seconds ?? 90} onChange={e => setPlanDays(old => old.map((d,i) => i === di ? {...d,exercises:d.exercises.map((x,j) => j === ei ? {...x,rest_seconds:Number(e.target.value)} : x)} : d))} aria-label="Przerwa między seriami w sekundach"/><small>sekund</small></label><label className="sf-rest-field"><span>Przerwa między ćwiczeniami <span className="sf-help-dot" title="Odpoczynek po ostatniej serii tego ćwiczenia, przed rozpoczęciem następnego ćwiczenia." aria-label="Wyjaśnienie przerwy między ćwiczeniami">?</span></span><input type="number" min="0" max="900" step="15" value={ex.transition_rest_seconds ?? 120} onChange={e => setPlanDays(old => old.map((d,i) => i === di ? {...d,exercises:d.exercises.map((x,j) => j === ei ? {...x,transition_rest_seconds:Number(e.target.value)} : x)} : d))} aria-label="Przerwa między ćwiczeniami w sekundach"/><small>sekund</small></label><button type="button" className="sf-icon-button sf-danger sf-remove-exercise" title="Usuń ćwiczenie" aria-label="Usuń ćwiczenie" onClick={() => setPlanDays(old => old.map((d,i) => i === di ? {...d,exercises:d.exercises.filter((_,j) => j !== ei)} : d))}><X size={15}/></button></div>)}<button type="button" className="sf-text-button" onClick={() => setPlanDays(old => old.map((d,i) => i === di ? {...d,exercises:[...d.exercises,{name:'',sets:3,reps:10,rest_seconds:90,transition_rest_seconds:120}]} : d))}><Plus size={14}/> Dodaj ćwiczenie</button><button type="button" className="sf-button sf-button-outline sf-button-full sf-start-day-button" disabled={loading || !day.exercises.some(ex => ex.name.trim())} onClick={() => void startEditedPlanDay(day)}><Dumbbell size={15}/> Zapisz plan i przejdź do treningu</button></div>)}</div><button type="button" className="sf-button sf-button-outline" onClick={() => setPlanDays(old => [...old,{day_key:String.fromCharCode(65 + old.length),title:`Dzień ${old.length + 1}`,exercises:[]}])}><Plus size={15}/> Dodaj dzień</button><button className="sf-button sf-button-lime"><Check size={16}/> Zapisz plan</button></form> : <div className="sf-empty-inline"><ClipboardList size={28}/><p>Wybierz zapisany plan albo utwórz nowy.</p></div>}</div></div></section>
-    : path === '/app/postepy' ? <section className="sf-view">{PageTitle({ eyebrow: 'DANE, NIE DOMYSŁY', title: 'Postępy i wyniki.', subtitle: 'Podsumowania są liczone z zapisanych sesji. Brak historii oznacza brak wykresu — nie fikcyjne wartości.' })}<div className="sf-stat-grid"><div className="sf-stat-card"><span className="sf-stat-icon"><Dumbbell/></span><small>WSZYSTKIE TRENINGI</small><b>{progress.session_count}</b><span className="sf-muted">Zapisane sesje</span></div><div className="sf-stat-card"><span className="sf-stat-icon"><TrendingUp/></span><small>ĆWICZENIA Z REKORDEM</small><b>{Object.keys(progress.records).length}</b><span className="sf-muted">Wyniki z historii</span></div><div className="sf-stat-card"><span className="sf-stat-icon"><Activity/></span><small>POMIARY</small><b>{progress.measurements.length}</b><span className="sf-muted">Dobrowolnie zapisane</span></div></div><div className="sf-two-col">{progress.goal && !goalEditing ? <section className="sf-panel sf-goal-card">
+     : path === '/app/plan' ? (!profileComplete
+      ? <section className="sf-view">
+          {PageTitle({ eyebrow: 'KREATOR PLANÓW', title: 'Najpierw poznajmy Twoje potrzeby.', subtitle: 'Uzupełnij podstawy profilu, aby tworzyć własne plany. Gotowe plany możesz dodać od razu.' })}
+          <div className="sf-plan-profile-gate">
+            <article className="sf-panel sf-profile-required sf-profile-required-prominent">
+              <div className="sf-profile-gate-icon"><UserRound size={23}/></div>
+              <div><h3>Uzupełnij profil, aby stworzyć własny plan</h3><p>Potrzebujemy imienia, głównego celu, miejsca treningu oraz liczby treningów w tygodniu. Dzięki temu kreator będzie znał podstawowy kontekst Twojego planu.</p><button type="button" className="sf-button sf-button-lime" onClick={() => go('/app/profil')}>Uzupełnij profil <ArrowRight size={16}/></button></div>
+            </article>
+            <div className="sf-plan-profile-samples">
+              <div className="sf-panel-heading"><div><p className="sf-eyebrow">MOŻESZ ZACZĄĆ OD RAZU</p><h3>Wybierz gotowy plan</h3></div><span className="sf-muted">Bez profilu i bez limitu własnych planów</span></div>
+              <div className="sf-plan-sample-grid">{(['home','gym'] as const).map(kind => { const sample = SAMPLE_PLANS[kind]; const existing = plans.find(plan => plan.name === sample.name); return <article className="sf-panel sf-plan-sample-card" key={kind}><div className="sf-plan-sample-icon"><Dumbbell size={20}/></div><p className="sf-eyebrow">{kind === 'home' ? 'BEZ SPRZĘTU' : 'SIŁOWNIA'}</p><h3>{sample.name}</h3><p className="sf-muted">{sample.description}</p><div className="sf-plan-sample-days">{sample.days.map(day => <div key={day.day_key}><b>{day.title}</b><small>{day.exercises.length} ćwiczeń</small></div>)}</div><button type="button" className="sf-button sf-button-outline sf-button-full" disabled={loading} onClick={() => void addSamplePlan(kind)}>{existing ? 'Otwórz przykładowy plan' : 'Dodaj przykładowy plan'} <ArrowRight size={15}/></button></article>; })}</div>
+            </div>
+          </div>
+        </section>
+      : <section className="sf-view">
+          {PageTitle({ eyebrow: 'KREATOR PLANÓW', title: 'Zbuduj plan po swojemu.', subtitle: `Własne plany: ${customPlansCount}/${trainingPlanLimit}. Wybierz dni, dodawaj ćwiczenia, ustaw ciężar i osobne przerwy — wszystko w jednym kreatorze.` })}
+          <div className="sf-plan-workspace">
+            <aside className="sf-plan-sidebar">
+              <div className="sf-panel sf-plan-library-panel">
+                <div className="sf-panel-heading"><div><p className="sf-eyebrow">TWOJA BIBLIOTEKA</p><h3>Zapisane plany</h3></div><ClipboardList size={19}/></div>
+                {plans.length ? <div className="sf-plan-library-list">{plans.map(p => <button key={p.id} className={`sf-plan-select ${activePlanId === p.id ? 'is-active' : ''}`} onClick={() => { setActivePlanId(p.id); setPlanName(p.name); setPlanDescription(p.description); setPlanDays(p.days.length ? p.days : [{day_key:'A',title:'Dzień 1',exercises:[]}]); }}><span><b>{p.name}</b><small>{p.days.length} dni · aktualizacja {dateLabel(p.updated_at)}</small></span><ArrowRight size={16}/></button>)}</div> : <div className="sf-plan-library-empty"><ClipboardList size={22}/><p>Nie masz jeszcze zapisanego planu. Zacznij od utworzenia własnego albo dodaj jeden z gotowych.</p></div>}
+                <div className="sf-sample-plan-actions"><p className="sf-muted">Plany przykładowe nie wymagają profilu i nie zużywają limitu własnych planów.</p><button type="button" className="sf-button sf-button-outline sf-button-full" disabled={loading} onClick={() => void addSamplePlan('home')}><Home size={16}/> Dodaj plan domowy bez sprzętu</button><button type="button" className="sf-button sf-button-outline sf-button-full" disabled={loading} onClick={() => void addSamplePlan('gym')}><Dumbbell size={16}/> Dodaj plan siłowniany</button></div>
+              </div>
+              {canCreateTrainingPlan ? <form className="sf-panel sf-form-stack sf-create-plan sf-create-plan-wizard" onSubmit={createPlan}>
+                <div className="sf-create-plan-kicker"><span><Plus size={17}/></span><div><p className="sf-eyebrow">NOWY PROJEKT</p><h3>Utwórz własny plan</h3></div></div>
+                <p className="sf-muted">Zaczniesz od podstaw, a następnie w kreatorze zbudujesz każdy dzień osobno.</p>
+                <label>Nazwa planu<input value={newPlanName} onChange={e => setNewPlanName(e.target.value)} minLength={2} maxLength={120} required placeholder="np. Budowanie siły"/></label>
+                <label>Krótki opis <span className="sf-optional-label">opcjonalnie</span><textarea value={newPlanDescription} onChange={e => setNewPlanDescription(e.target.value)} maxLength={1000} rows={2} placeholder="Na czym chcesz się skupić?"/></label>
+                <div className="sf-create-days-picker"><div className="sf-create-days-heading"><span>Liczba dni treningowych</span><strong>{newPlanDayCount}</strong></div><p>Wybierz liczbę jednostek, które chcesz ułożyć w tym planie.</p><div className="sf-create-days-chips">{[2,3,4,5,6].map(count => <button type="button" key={count} className={newPlanDayCount === count ? 'is-active' : ''} onClick={() => setNewPlanDayCount(count)}>{count}</button>)}</div><label className="sf-create-days-custom">Dokładna liczba (1–14)<input type="number" min="1" max="14" step="1" value={newPlanDayCount} onChange={e => setNewPlanDayCount(e.target.value === '' ? 1 : Number(e.target.value))}/></label></div>
+                <button type="submit" className="sf-button sf-button-lime sf-button-full" disabled={loading}>{loading ? 'Tworzę kreator…' : 'Utwórz i przejdź do kreatora'} <ArrowRight size={16}/></button>
+                <small className="sf-create-plan-footnote"><ShieldCheck size={13}/> Liczba dni zapisze się od razu. Ćwiczenia zapisz przyciskiem w edytorze.</small>
+              </form> : <div className="sf-panel sf-plan-limit-notice"><div className="sf-plan-limit-icon"><LockKeyhole size={18}/></div><h4>Limit własnych planów wykorzystany</h4><p>{trainingIsPremium ? 'Konto Premium pozwala zapisać do 3 własnych planów.' : 'Na zwykłym koncie możesz mieć 1 własny plan. Premium zwiększa limit do 3.'} Możesz edytować zapisane plany lub usunąć jeden, aby zwolnić miejsce.</p></div>}
+              <article className="sf-generator-preview"><div className="sf-generator-preview-icon"><Sparkles size={20}/></div><div><p className="sf-eyebrow">W PRZYGOTOWANIU</p><h4>Pomóż nam ułożyć Twój plan</h4><p>Planowany wywiad o celu, doświadczeniu i dostępności sprzętu, a następnie plan oparty na ćwiczeniach dobranych przez System Formy.</p><small>Planowana cena: 29,99 zł · bezpłatnie dla Premium</small></div><span className="sf-coming-soon-chip">Wkrótce</span></article>
+              {legacyPlans.length > 0 && <div className="sf-panel sf-legacy-plans"><h4>Dotychczasowe dni A/B/C</h4>{legacyPlans.map(p => <div key={p.day_key}><b>{p.title || `Dzień ${p.day_key}`}</b><small>{p.day_key} · zachowany stary plan</small></div>)}</div>}
+            </aside>
+
+            <div className="sf-panel sf-plan-editor-panel">
+              <div className="sf-panel-heading sf-plan-editor-heading"><div><p className="sf-eyebrow">KREATOR KROK PO KROKU</p><h3>{activePlanId ? 'Edytor planu' : 'Twój obszar roboczy'}</h3><p>{activePlanId ? 'Dodawaj i porządkuj ćwiczenia, a na końcu przejrzyj cały plan.' : 'Wybierz zapisany plan albo utwórz nowy po lewej stronie.'}</p></div>{activePlanId && <button type="button" className="sf-text-button sf-danger-text" onClick={async () => { if (!window.confirm('Usunąć ten plan? Tej operacji nie można cofnąć.')) return; try { await api(`/api/v2/training/plans/${activePlanId}`,{method:'DELETE'}); setPlans(old => old.filter(p => p.id !== activePlanId)); setActivePlanId(''); setPlanName(''); setPlanDescription(''); setPlanDays([{day_key:'A',title:'Dzień 1',exercises:[]}]); await refreshUserData(); notify('Plan usunięty.','success'); } catch(e) { notify(e instanceof Error ? e.message : 'Nie udało się usunąć planu.','error'); } }}><Trash2 size={15}/> Usuń plan</button>}</div>
+              {activePlanId ? <form className="sf-form-stack sf-plan-edit-form" onSubmit={savePlan}>
+                <div className="sf-plan-meta-fields"><label>Nazwa planu<input value={planName} onChange={e => { setPlanName(e.target.value); setPlans(old => old.map(p => p.id === activePlanId ? {...p,name:e.target.value} : p)); }} required minLength={2} maxLength={120}/></label><label>Opis planu <span className="sf-optional-label">opcjonalnie</span><textarea value={planDescription} onChange={e => { setPlanDescription(e.target.value); setPlans(old => old.map(p => p.id === activePlanId ? {...p,description:e.target.value} : p)); }} maxLength={1000} rows={2}/></label></div>
+                <PlanBuilder key={activePlanId} days={planDays} setDays={setPlanDays} loading={loading}/>
+                <div className="sf-builder-save-bar"><div><CheckCircle2 size={18}/><span><b>Gotowe do zapisania?</b><small>Sprawdzę kompletność ćwiczeń i parametrów przed zapisem.</small></span></div><button type="submit" className="sf-button sf-button-lime" disabled={loading}>{loading ? 'Zapisuję…' : 'Zapisz plan i wszystkie dni'} <Check size={16}/></button></div>
+              </form> : <div className="sf-plan-editor-empty"><div className="sf-plan-editor-empty-icon"><WandSparkles size={25}/></div><h3>Tworzenie planu zaczyna się tutaj</h3><p>Najpierw utwórz nowy plan po lewej albo otwórz już zapisany. Następnie pojawi się kreator dni, kart ćwiczeń, obciążenia i przerw.</p><div className="sf-plan-editor-empty-steps"><span><b>01</b> Wybierz dni</span><span><b>02</b> Dodaj ćwiczenia</span><span><b>03</b> Sprawdź i zapisz</span></div></div>}
+            </div>
+          </div>
+        </section>)
+: path === '/app/postepy' ? <section className="sf-view">{PageTitle({ eyebrow: 'DANE, NIE DOMYSŁY', title: 'Postępy i wyniki.', subtitle: 'Podsumowania są liczone z zapisanych sesji. Brak historii oznacza brak wykresu — nie fikcyjne wartości.' })}<div className="sf-stat-grid"><div className="sf-stat-card"><span className="sf-stat-icon"><Dumbbell/></span><small>WSZYSTKIE TRENINGI</small><b>{progress.session_count}</b><span className="sf-muted">Zapisane sesje</span></div><div className="sf-stat-card"><span className="sf-stat-icon"><TrendingUp/></span><small>ĆWICZENIA Z REKORDEM</small><b>{Object.keys(progress.records).length}</b><span className="sf-muted">Wyniki z historii</span></div><div className="sf-stat-card"><span className="sf-stat-icon"><Activity/></span><small>POMIARY</small><b>{progress.measurements.length}</b><span className="sf-muted">Dobrowolnie zapisane</span></div></div><div className="sf-two-col">{progress.goal && !goalEditing ? <section className="sf-panel sf-goal-card">
 <div className="sf-panel-heading"><h3>Twój cel</h3><button type="button" className="sf-button sf-button-outline" onClick={() => setGoalEditing(true)}>Edytuj cel <Settings size={15}/></button></div>
 <p className="sf-goal-title">{progress.goal.goal_title}</p>
 <div className="sf-goal-details"><div><small>Aktualny wynik</small><b>{progress.goal.current_value ?? '—'} {progress.goal.unit || ''}</b></div><div><small>Cel do osiągnięcia</small><b>{progress.goal.target_value ?? '—'} {progress.goal.unit || ''}</b></div><div><small>Termin</small><b>{dateLabel(progress.goal.target_date)}</b></div></div>
