@@ -583,10 +583,10 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
           });
           return { day_key: String.fromCharCode(65 + dayIndex), title: `Dzień ${dayIndex + 1} — ${title.replace(/^Dzień\s+\d+\s*[-—:]?\s*/i, '')}`, exercises };
         });
-        const { promptTokens: inputTokens, completionTokens: outputTokens, totalTokens } = usageForDiagnostics;
+        const { promptTokens: inputTokens, completionTokens: outputTokens, totalTokens: outputTotalTokens } = usageForDiagnostics;
         const completedAt = new Date().toISOString();
-        const output = { days: normalizedDays, duration_weeks: durationWeeks, start_date: startDate, progression_strategy: progressionStrategy, generation_id: generationId, generation_number: generationNumber, model, usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: totalTokens } };
-        await env.DB.prepare("UPDATE ai_plan_generations SET status='success',result_json=?,prompt_tokens=?,completion_tokens=?,total_tokens=?,completed_at=? WHERE id=? AND user_id=?").bind(JSON.stringify(output), inputTokens, outputTokens, totalTokens, completedAt, generationId, gate.session!.id).run();
+        const output = { days: normalizedDays, duration_weeks: durationWeeks, start_date: startDate, progression_strategy: progressionStrategy, generation_id: generationId, generation_number: generationNumber, model, usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: outputTotalTokens } };
+        await env.DB.prepare("UPDATE ai_plan_generations SET status='success',result_json=?,prompt_tokens=?,completion_tokens=?,total_tokens=?,completed_at=? WHERE id=? AND user_id=?").bind(JSON.stringify(output), inputTokens, outputTokens, outputTotalTokens, completedAt, generationId, gate.session!.id).run();
         const totals = await env.DB.prepare("SELECT COUNT(*) AS total_generations, SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS successful_generations FROM ai_plan_generations WHERE user_id=?").bind(gate.session!.id).first<{ total_generations: number; successful_generations: number | null }>();
         return v2Reply({ ...output, total_generations: Number(totals?.total_generations || generationNumber), successful_generations: Number(totals?.successful_generations || 0) });
       } catch (error) {
