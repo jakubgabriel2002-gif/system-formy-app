@@ -434,7 +434,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (!plan) return v2Reply({ error: 'Nie znaleziono planu.' }, 404);
       if (method === 'DELETE') { await env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id IN (SELECT id FROM training_plan_days_v2 WHERE plan_id=?)').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plans_v2 WHERE id=? AND user_id=?').bind(plan.id, gate.session!.id).run(); return v2Reply({ ok: true }); }
       const b = await v2Body(request), name = v2Field(b, 'name', 120), description = v2Field(b, 'description', 1000), rawDays = Array.isArray(b.days) ? b.days : [];
-      if (name.length < 2 || rawDays.length > 14) return v2Reply({ error: 'Sprawdź nazwę planu i liczbę dni (maksymalnie 14).' }, 400);
+      if (name.length < 2 || rawDays.length < 1 || rawDays.length > 7) return v2Reply({ error: 'Sprawdź nazwę planu i liczbę dni (od 1 do 7).' }, 400);
       const sampleNames = ['Plan przykładowy — dom bez sprzętu', 'Plan przykładowy — siłownia'];
       const wasSample = sampleNames.includes(plan.name), willBeSample = sampleNames.includes(name);
       if (!wasSample && willBeSample) return v2Reply({ error: 'Ta nazwa jest zarezerwowana dla planu przykładowego. Wybierz inną nazwę.' }, 400);
