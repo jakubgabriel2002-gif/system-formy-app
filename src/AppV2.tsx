@@ -231,7 +231,7 @@ export default function AppV2() {
     let timer: number | undefined;
     let attempts = 0;
     // Usuń identyfikator Checkout z paska adresu, ale zachowaj polling webhooka.
-    window.history.replaceState({}, '', pathOnly(route) === '/app/plan/ai' ? '/app/plan/ai' : '/app/zamowienia');
+    window.history.replaceState({}, '', pathOnly(route) === '/app/plan/katalog' ? '/app/plan/katalog' : '/app/zamowienia');
     const check = async () => {
       try {
         const result = await api<{ orders: Order[]; items: OrderItem[] }>('/api/v2/account/orders');
@@ -416,7 +416,7 @@ export default function AppV2() {
     finally { setLoading(false); }
   }
   async function purchaseGeneratorPlan(): Promise<void> {
-    if (!user) { go(`/login?next=${encodeURIComponent('/app/plan/ai')}`); return; }
+    if (!user) { go(`/login?next=${encodeURIComponent('/app/plan/katalog')}`); return; }
     setLoading(true);
     try {
       const response = await api<{ url?: string; free?: boolean }>('/api/v2/checkout/session', {
@@ -604,10 +604,6 @@ export default function AppV2() {
         try { await api(`/api/v2/training/plans/${created.plan.id}`, { method: 'DELETE' }); } catch { /* best-effort cleanup */ }
         throw saveError;
       }
-      if (draft.generation_id) {
-        try { await api(`/api/v2/training/ai/history/${draft.generation_id}/link`, { method: 'POST', body: JSON.stringify({ plan_id: created.plan.id }) }); }
-        catch (linkError) { console.warn('Nie udało się połączyć generacji z zapisanym planem:', linkError); }
-      }
       const saved: Plan = { ...created.plan, name, description, days: draft.days, duration_weeks: PROGRAM_WEEKS, start_date: draft.start_date, progression_strategy: draft.progression_strategy, updated_at: new Date().toISOString() };
       setPlans(old => [saved, ...old.filter(item => item.id !== saved.id)]);
       setActivePlanId(saved.id);
@@ -623,9 +619,9 @@ export default function AppV2() {
       setWorkoutDayChoice(draft.days[0]?.day_key || '');
       try { window.sessionStorage.removeItem('sf-generator-plan-settings-v1'); } catch { /* opcjonalny zapis ustawień */ }
       go('/app/plan/edytor');
-      notify('Plan z generatora został utworzony. Możesz teraz dopracować ćwiczenia i zapisać zmiany.', 'success');
+      notify('Plan z katalogu ćwiczeń został utworzony. Możesz teraz dopracować ćwiczenia i zapisać zmiany.', 'success');
     } catch (e) {
-      notify(e instanceof Error ? e.message : 'Nie udało się zapisać planu z generatora.', 'error');
+      notify(e instanceof Error ? e.message : 'Nie udało się zapisać planu treningowego.', 'error');
     } finally {
       setLoading(false);
     }
@@ -804,13 +800,13 @@ export default function AppV2() {
 <section className="sf-dashboard-products"><div className="sf-panel-heading sf-section-heading"><div><p className="sf-eyebrow">DOSTĘPNE W KATALOGU</p><h3>{featuredProductsTitle}</h3><p className="sf-muted">Wybierz program lub materiał dostępny w katalogu Systemu Formy.</p></div><button className="sf-text-button" onClick={() => go('/produkty')}>Cały katalog <ArrowRight size={15}/></button></div>{featuredProducts.length ? <div className="sf-dashboard-product-grid">{featuredProducts.map(product => <div key={product.product_key} className="sf-dashboard-product-item">{ProductCard({ product })}</div>)}</div> : <div className="sf-empty-inline"><p>W katalogu nie ma jeszcze opublikowanych produktów. Gdy dodasz je w ACP, pojawią się tutaj.</p><button className="sf-button sf-button-outline" onClick={() => go('/produkty')}>Otwórz katalog <ArrowRight size={15}/></button></div>}</section>
 </div>
     : path === '/app/trening' ? <TrainingRoute onGoToPlans={() => go('/app/plan')} onBackToDashboard={() => go('/app')} onSaved={refreshUserData} />
-     : path === '/app/plan/ai' ? <PlanGenerator defaultLocation={profile.training_location === 'home' ? 'home' : 'gym'} saving={loading} hasPaidAccess={materials.some(item => item.product_key === 'generator-planu-treningowego' && item.access_status === 'active')} canCreatePlan={canCreateTrainingPlan} onPurchase={purchaseGeneratorPlan} onCancel={() => go('/app/plan')} onSave={saveGeneratedPlan} onReplaceExercises={replacePlanExercisesFromCatalog} />
+     : path === '/app/plan/katalog' ? <PlanGenerator defaultLocation={profile.training_location === 'home' ? 'home' : 'gym'} saving={loading} hasPaidAccess={materials.some(item => item.product_key === 'generator-planu-treningowego' && item.access_status === 'active')} canCreatePlan={canCreateTrainingPlan} onPurchase={purchaseGeneratorPlan} onCancel={() => go('/app/plan')} onSave={saveGeneratedPlan} onReplaceExercises={replacePlanExercisesFromCatalog} />
      : path === '/app/plan/indywidualny' ? <IndividualPlanRequest name={profile.first_name || ''} email={user?.email || ''} saving={loading} onCancel={() => { try { sessionStorage.removeItem('sf-individual-plan-form-v1'); sessionStorage.removeItem('sf-individual-plan-request-id'); } catch { /* optional storage */ } go('/app/plan'); }} onSubmit={submitIndividualPlanRequest} />
      : (path === '/app/plan' || path === '/app/plan/kreator' || path === '/app/plan/edytor') ? (path === '/app/plan' ? <section className="sf-view sf-plan-home-view">
           <div className="sf-plan-home-grid">
             <article className="sf-panel sf-plan-home-card sf-plan-home-create"><span className="sf-plan-home-icon"><Dumbbell size={23}/></span><p className="sf-eyebrow">TWÓJ PLAN, TWOJE ZASADY</p><h2>Stwórz swój plan</h2><p>Ustaw nazwę, liczbę dni oraz miejsce treningu, a potem dodaj własne ćwiczenia.</p><button type="button" className="sf-button sf-button-lime sf-button-full" disabled={!canCreateTrainingPlan} onClick={() => { if (!profileComplete) { notify('Najpierw uzupełnij podstawowe dane profilu, aby tworzyć własne plany.', 'info'); go('/app/profil'); return; } setNewPlanName(''); setNewPlanDescription(''); setNewPlanDayCount(3); setNewPlanLocation(profile.training_location === 'home' ? 'home' : 'gym'); setNewPlanStartDate(today()); setNewPlanProgression('reps'); go('/app/plan/kreator'); }}>{canCreateTrainingPlan ? 'Utwórz nowy plan' : 'Limit własnych planów wykorzystany'} <ArrowRight size={16}/></button>
               <div className="sf-plan-home-divider"><span>ALBO ZACZNIJ SZYBCIEJ</span></div>
-              <button type="button" className="sf-button sf-button-outline sf-button-full" disabled={!canCreateTrainingPlan} onClick={() => { if (!profileComplete) { notify('Najpierw uzupełnij podstawowe dane profilu, aby utworzyć plan.', 'info'); go('/app/profil'); return; } go('/app/plan/ai'); }}><Sparkles size={16}/> Generator planu treningowego · 29,99 zł <ArrowRight size={16}/></button>
+              <button type="button" className="sf-button sf-button-outline sf-button-full" disabled={!canCreateTrainingPlan} onClick={() => { if (!profileComplete) { notify('Najpierw uzupełnij podstawowe dane profilu, aby utworzyć plan.', 'info'); go('/app/profil'); return; } go('/app/plan/katalog'); }}><Sparkles size={16}/> Kreator planu z katalogu ćwiczeń · 29,99 zł <ArrowRight size={16}/></button>
               <small className="sf-muted">Własne plany: {customPlansCount}/{trainingPlanLimit}</small><button type="button" className="sf-button sf-button-outline sf-button-full sf-individual-plan-cta" onClick={() => go('/app/plan/indywidualny')}><ClipboardList size={16}/> Zamów plan indywidualny <ArrowRight size={15}/></button>
             </article>
           {plans.length > 0 && <div className="sf-panel sf-plan-home-saved"><div className="sf-panel-heading"><div><p className="sf-eyebrow">TWOJA BIBLIOTEKA</p><h3>Zapisane plany</h3></div><ClipboardList size={19}/></div><div className="sf-plan-library-list">{plans.map(p => <button key={p.id} className="sf-plan-select" onClick={() => { setActivePlanId(p.id); setPlanName(p.name); setPlanStartDate(p.start_date || p.created_at?.slice(0, 10) || today()); setPlanProgression(p.progression_strategy || 'reps'); const match = p.description.match(/^\[\[SF_LOCATION:(home|gym)\]\]\n?/); setNewPlanLocation(match?.[1] === 'home' || (!match && /dom|home/i.test(p.name)) ? 'home' : 'gym'); setPlanDescription(p.description.replace(/^\[\[SF_LOCATION:(home|gym)\]\]\n?/, '')); setPlanDays(p.days.length ? p.days : [{day_key:'A',title:'Dzień 1',exercises:[]}]); go('/app/plan/edytor'); }}><span><b>{p.name}</b><small>{p.days.length} treningi/tydz. · 4 tygodnie · {dateLabel(p.start_date || p.created_at?.slice(0, 10))}–{dateLabel(getProgramEndDate(p.start_date || p.created_at?.slice(0, 10), p.duration_weeks || PROGRAM_WEEKS))}</small></span><ArrowRight size={16}/></button>)}</div></div>}
