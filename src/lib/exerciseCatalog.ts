@@ -5,7 +5,7 @@ type Exercise = { name: string; group: Group; places: TrainingPlace[]; equipment
 
 /**
  * Zamknięty katalog nazw. Generator i wymiana ćwiczeń korzystają z niego lokalnie,
- * bez modelu językowego i bez zużywania tokenów.
+ * Dobór ćwiczeń odbywa się lokalnie na podstawie tego katalogu.
  */
 const CATALOG: Exercise[] = [
   {name:'Przysiady z masą ciała',group:'legs',places:['home']},
@@ -74,7 +74,7 @@ export function replaceExercisesFromCatalog(request: {
   location: TrainingPlace;
   equipment: TrainingEquipment;
   exercises: Array<{ key: string; day_title: string; name: string; sets: number; reps: number; notes: string; preferred_name?: string; other_names: string[] }>;
-}): { replacements: Array<{ key: string; name: string }>; usage: { total_tokens: 0 } } {
+}): { replacements: Array<{ key: string; name: string }> } {
   const library = available(request.location, request.location === 'gym' ? 'gym' : request.equipment);
   const namesChosenByDay = new Map<string, Set<string>>();
   const replacements = request.exercises.map((item, index) => {
@@ -96,5 +96,5 @@ export function replaceExercisesFromCatalog(request: {
     namesChosenByDay.set(dayKey, alreadyChosen);
     return { key: item.key, name: chosen.name };
   });
-  return { replacements, usage: { total_tokens: 0 } };
+  return { replacements };
 }
