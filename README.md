@@ -43,7 +43,7 @@ npm run deploy
 
 ### Plany treningowe
 
-- Zalogowany użytkownik może zapisywać plany zawierające do 14 dni; poszczególny dzień może zawierać ćwiczenia, liczbę serii, powtórzeń, ciężar i ustawienia przerw.
+- Zalogowany użytkownik może zapisywać plany zawierające od 1 do 7 dni; limit jest egzekwowany w interfejsie i API. Poszczególny dzień może zawierać ćwiczenia, liczbę serii, powtórzeń, ciężar i ustawienia przerw.
 - Limit zapisanych planów jest weryfikowany po stronie API: zwykłe konto — 1 plan, konto z aktywnym uprawnieniem, którego klucz lub tytuł zawiera `premium` — 3 plany.
 - Dwa plany przykładowe (dom bez sprzętu i siłownia) są dostępne bez uzupełniania profilu i nie zużywają limitu własnych planów. W centrum treningowym są także wirtualne przykłady, które można uruchomić bez zapisywania ich na koncie.
 - Przerwa między seriami ma domyślnie 90 sekund, a między ćwiczeniami 120 sekund. Obie wartości można zmienić dla każdego ćwiczenia.
@@ -66,13 +66,14 @@ npm run deploy
 
 ## Planowane, ale jeszcze niewdrożone
 
-- **Generator planu przez System Formy**: planowany wywiad o celu, doświadczeniu, miejscu i sprzęcie użytkownika, a następnie wybór zatwierdzonych ćwiczeń i przygotowanie planu. Planowana cena: 29,99 zł; dla aktywnego Premium bez dodatkowej opłaty. Formularz i generowanie nie są jeszcze podłączone do logiki płatności ani generatora — obecny interfejs oznacza tę funkcję jako „Wkrótce”.
+- **Właściwe generowanie przez model AI**: interaktywny prototyp kreatora jest już dostępny pod `/app/plan/ai`. Obecnie układa propozycję lokalnie z katalogu ćwiczeń na podstawie celu, poziomu, miejsca, dostępnego sprzętu, liczby dni (1–7), czasu treningu i priorytetu. Nie jest jeszcze podłączony zewnętrzny model AI ani logika płatności. Planowana cena pełnej funkcji: 29,99 zł; dla aktywnego Premium bez dodatkowej opłaty — do decyzji przed uruchomieniem produkcyjnym.
 - **Subskrypcje Premium**: brak dedykowanego systemu cyklicznych płatności i lifecycle abonamentu. Obecny limit 3 planów wymaga istniejącego aktywnego entitlement z tekstem `premium` w kluczu lub tytule.
 - Dalsze szlify wizualne i testy end-to-end po każdym wdrożeniu.
 
 ## Przydatne ścieżki
 
-- `src/AppV2.tsx` — główna aplikacja i kreator planów.
+- `src/AppV2.tsx` — główna aplikacja, nawigacja i zapis planów.
+- `src/components/PlanGenerator.tsx` — interaktywny prototyp generatora planów na podstawie preferencji.
 - `src/components/training/TrainingRoute.tsx` — wybór planu, start/wznowienie sesji i zapis.
 - `src/components/training/WorkoutSession.tsx` — rejestracja serii, przerwy i historia wykonania.
 - `src/components/training/WorkoutSummary.tsx` — podsumowanie ukończonego treningu.
@@ -85,11 +86,11 @@ Przed publikacją uruchom `npm run typecheck` i `npm run build`, a następnie r�
 
 ### Interaktywny kreator planu — aktualizacja 2026-10-24
 
-- Utworzenie własnego planu zaczyna się od nazwy, opcjonalnego opisu i liczby dni treningowych (1–14). Wybrana struktura dni jest zapisywana od razu, więc można wrócić do edycji po odświeżeniu strony.
+- Utworzenie własnego planu zaczyna się od nazwy, opcjonalnego opisu i liczby dni treningowych (1–7). Wybrana struktura dni jest zapisywana od razu, więc można wrócić do edycji po odświeżeniu strony.
 - Kreator używa zakładek dni zamiast długiej listy wszystkich dni. W każdej zakładce można zmienić nazwę dnia, dodawać i usuwać ćwiczenia oraz zmieniać ich kolejność przyciskami góra/dół (wygodne na telefonie).
 - Karta ćwiczenia ma osobne pola serii, powtórzeń oraz opcjonalnego ciężaru. Zaawansowane ustawienia zawierają przerwę między seriami, przerwę między ćwiczeniami i opcjonalną wskazówkę techniczną.
 - Podgląd przed zapisem zbiera dni, ćwiczenia, serie, ciężary i przerwy; z podglądu można wrócić do edycji wybranego dnia.
-- Zapis weryfikuje kompletność danych po stronie interfejsu, a API nadal waliduje strukturę dni i ćwiczeń. Limity maksymalne API: 14 dni na plan, 40 ćwiczeń na dzień, 30 serii na ćwiczenie, 200 powtórzeń i zakresy przerw określone w `worker/v2.ts`.
+- Zapis weryfikuje kompletność danych po stronie interfejsu i API. Limity API: 7 dni na plan, 40 ćwiczeń na dzień, 30 serii na ćwiczenie, 200 powtórzeń i zakresy przerw określone w `worker/v2.ts`.
 - Nowy komponent kreatora: `src/components/PlanBuilder.tsx`. Style są dopisane w `src/v2.css`.
 - Utworzenie planu zapisuje początkowy układ dni zanim otworzy się edytor. Same zmiany ćwiczeń zapisuje użytkownik przyciskiem „Zapisz plan i wszystkie dni”; nie ma automatycznego zapisu po każdej zmianie pola. Jeśli zapis struktury dni się nie powiedzie, aplikacja podejmuje próbę usunięcia nowo utworzonego rekordu, aby nie zajmował limitu planów.
 
@@ -97,3 +98,18 @@ Przed publikacją uruchom `npm run typecheck` i `npm run build`, a następnie r�
 
 - Parser/transpilacja TypeScript/TSX: 13 plików bez błędów składni. Nowy `PlanBuilder.tsx` przeszedł dodatkowe sprawdzenie typów na minimalnych deklaracjach React; nie jest to zamiennik pełnego sprawdzenia z rzeczywistymi zależnościami projektu.
 - Pełny `npm run typecheck` i build produkcyjny nie zostały potwierdzone w środowisku przygotowawczym, ponieważ instalacja zależności (`npm ci`) przekroczyła limit czasu i katalog `node_modules` pozostał niekompletny. Przed wdrożeniem sprawdź kontrolę builda w swoim pipeline.
+
+### Generator planu — prototyp 2026-10-24
+
+- Strona planów nie pokazuje już wstępnego nagłówka „Zaplanuj swój trening.” ani jego długiego opisu.
+- Osobny kreator ma trzy kroki: cel i poziom, warunki treningu, a następnie podgląd proponowanego planu.
+- Użytkownik wybiera trening domowy lub siłowniany, sprzęt domowy (jeśli dotyczy), 1–7 dni, czas treningu i priorytet. Cel i poziom zmieniają dobór ćwiczeń, serii, powtórzeń i przerw. Siódmy dzień jest zaplanowany jako lżejsza mobilność/regeneracja.
+- Zapis tworzy plan poprzez istniejące API i otwiera standardowy edytor, w którym można zmienić ćwiczenia i parametry. Nie jest potrzebna migracja SQL.
+- Ważne: to działający prototyp regułowy, nie integracja z modelem AI. Właściwa integracja AI wymaga osobnego kroku projektowego i decyzji o dostawcy, kluczu API, kosztach oraz obsłudze błędów.
+- Podczas przygotowania sprawdzono parser TSX dla zmienionych komponentów. Pełny build nie został potwierdzony, ponieważ instalacja zależności `npm ci` przekroczyła limit czasu w środowisku roboczym; przed wdrożeniem należy sprawdzić wynik builda w GitHub/Cloudflare.
+
+## Program treningowy na 4 tygodnie
+
+Plan treningowy jest zapisywany jako tygodniowy schemat od 1 do 7 jednostek, z metadanymi `duration_weeks` (4), `start_date` oraz `progression_strategy` (`reps`, `weight`, `sets` lub `none`). Aplikacja wylicza parametry dla aktualnego tygodnia przy uruchomieniu treningu. Nie przechowujemy 28 duplikatów tygodniowych jednostek, co upraszcza edycję i ogranicza koszt generacji AI.
+
+Przed wdrożeniem uruchom w Cloudflare D1 diagnostykę `sql/SQL-00-SPRAWDZENIE-SCHEMATU.sql`, a następnie według instrukcji wybierz ewentualną bazową migrację AI i uruchom `sql/SQL-02-PLANY-MIESIECZNE.sql`. Pełna instrukcja wdrożenia znajduje się w `INSTRUKCJA-WDROZENIA-PLANOW-MIESIECZNYCH.txt`.

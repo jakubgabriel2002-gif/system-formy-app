@@ -3,6 +3,9 @@
   "name": "system-formy-app",
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-20",
+  "ai": {
+    "binding": "AI"
+  },
   "vars": {
     "ADMIN_EMAIL": "jakub.gabriel2002@gmail.com"
   },
