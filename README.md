@@ -66,7 +66,7 @@ npm run deploy
 
 ## Planowane, ale jeszcze niewdrożone
 
-- **Właściwe generowanie przez model AI**: interaktywny prototyp kreatora jest już dostępny pod `/app/plan/ai`. Obecnie układa propozycję lokalnie z katalogu ćwiczeń na podstawie celu, poziomu, miejsca, dostępnego sprzętu, liczby dni (1–7), czasu treningu i priorytetu. Nie jest jeszcze podłączony zewnętrzny model AI ani logika płatności. Planowana cena pełnej funkcji: 29,99 zł; dla aktywnego Premium bez dodatkowej opłaty — do decyzji przed uruchomieniem produkcyjnym.
+- **Kreator planu z katalogu ćwiczeń**: dostępny pod `/app/plan/katalog`. Układa propozycję lokalnie na podstawie zatwierdzonego katalogu ćwiczeń, celu, poziomu, miejsca, sprzętu, liczby dni, czasu treningu i priorytetu. 
 - **Subskrypcje Premium**: brak dedykowanego systemu cyklicznych płatności i lifecycle abonamentu. Obecny limit 3 planów wymaga istniejącego aktywnego entitlement z tekstem `premium` w kluczu lub tytule.
 - Dalsze szlify wizualne i testy end-to-end po każdym wdrożeniu.
 
@@ -105,11 +105,11 @@ Przed publikacją uruchom `npm run typecheck` i `npm run build`, a następnie r�
 - Osobny kreator ma trzy kroki: cel i poziom, warunki treningu, a następnie podgląd proponowanego planu.
 - Użytkownik wybiera trening domowy lub siłowniany, sprzęt domowy (jeśli dotyczy), 1–7 dni, czas treningu i priorytet. Cel i poziom zmieniają dobór ćwiczeń, serii, powtórzeń i przerw. Siódmy dzień jest zaplanowany jako lżejsza mobilność/regeneracja.
 - Zapis tworzy plan poprzez istniejące API i otwiera standardowy edytor, w którym można zmienić ćwiczenia i parametry. Nie jest potrzebna migracja SQL.
-- Ważne: to działający prototyp regułowy, nie integracja z modelem AI. Właściwa integracja AI wymaga osobnego kroku projektowego i decyzji o dostawcy, kluczu API, kosztach oraz obsłudze błędów.
+- Kreator planu korzysta z lokalnych reguł i katalogu ćwiczeń. Dobieranie i wymiana ćwiczeń odbywają się w aplikacji; 
 - Podczas przygotowania sprawdzono parser TSX dla zmienionych komponentów. Pełny build nie został potwierdzony, ponieważ instalacja zależności `npm ci` przekroczyła limit czasu w środowisku roboczym; przed wdrożeniem należy sprawdzić wynik builda w GitHub/Cloudflare.
 
 ## Program treningowy na 4 tygodnie
 
-Plan treningowy jest zapisywany jako tygodniowy schemat od 1 do 7 jednostek, z metadanymi `duration_weeks` (4), `start_date` oraz `progression_strategy` (`reps`, `weight`, `sets` lub `none`). Aplikacja wylicza parametry dla aktualnego tygodnia przy uruchomieniu treningu. Nie przechowujemy 28 duplikatów tygodniowych jednostek, co upraszcza edycję i ogranicza koszt generacji AI.
+Plan treningowy jest zapisywany jako tygodniowy schemat od 1 do 7 jednostek, z metadanymi `duration_weeks` (4), `start_date` oraz `progression_strategy` (`reps`, `weight`, `sets` lub `none`). Aplikacja wylicza parametry dla aktualnego tygodnia przy uruchomieniu treningu. Nie przechowujemy 28 duplikatów tygodniowych jednostek, co upraszcza edycję i ogranicza kosztów infrastruktury.
 
-Przed wdrożeniem uruchom w Cloudflare D1 diagnostykę `sql/SQL-00-SPRAWDZENIE-SCHEMATU.sql`, a następnie według instrukcji wybierz ewentualną bazową migrację AI i uruchom `sql/SQL-02-PLANY-MIESIECZNE.sql`. Pełna instrukcja wdrożenia znajduje się w `INSTRUKCJA-WDROZENIA-PLANOW-MIESIECZNYCH.txt`.
+Przed wdrożeniem uruchom w Cloudflare D1 diagnostykę `sql/SQL-00-SPRAWDZENIE-SCHEMATU.sql`, a następnie według instrukcji wybierz ewentualną bazową migrację planów i uruchom `sql/SQL-02-PLANY-MIESIECZNE.sql`. Pełna instrukcja wdrożenia znajduje się w `INSTRUKCJA-WDROZENIA-PLANOW-MIESIECZNYCH.txt`.
