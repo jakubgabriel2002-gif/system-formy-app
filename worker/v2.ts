@@ -384,6 +384,107 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const recent = await env.DB.prepare('SELECT id,generation_number,model,status,goal,level,location,days_count,duration_minutes,duration_weeks,start_date,progression_strategy,prompt_tokens,completion_tokens,total_tokens,saved_plan_id,created_at,completed_at FROM ai_plan_generations WHERE user_id=? ORDER BY generation_number DESC LIMIT 8').bind(gate.session!.id).all();
       return v2Reply({ total_generations: Number(totals?.total_generations || 0), successful_generations: Number(totals?.successful_generations || 0), recent: recent.results });
     }
+    if (path === '/api/v2/training/ai/replace-exercises' && method === 'POST') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      if (!env.AI) return v2Reply({ error: 'Workers AI nie jest podłączone. Sprawdź binding AI w Cloudflare.' }, 503);
+      const b = await v2Body(request);
+      const location = b.location === 'gym' ? 'gym' : b.location === 'home' ? 'home' : '';
+      const equipment = typeof b.equipment === 'string' ? b.equipment : (location === 'gym' ? 'gym' : 'none');
+      const allowedEquipment = ['none', 'bands', 'dumbbells', 'both', 'gym'];
+      const incoming = Array.isArray(b.exercises) ? b.exercises : [];
+      if (!location || !allowedEquipment.includes(equipment) || (location === 'home' && equipment === 'gym')) {
+        return v2Reply({ error: 'Nieprawidłowe miejsce treningu lub sprzęt.' }, 400);
+      }
+      if (incoming.length < 1 || incoming.length > 49) {
+        return v2Reply({ error: 'Zaznacz od 1 do 49 ćwiczeń. Większą liczbę można wymienić w dwóch partiach.' }, 400);
+      }
+      const targets: Array<{ key: string; day_title: string; name: string; sets: number; reps: number; notes: string; preferred_name: string; other_names: string[] }> = [];
+      const seenKeys = new Set<string>();
+      for (const item of incoming) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return v2Reply({ error: 'Lista zaznaczonych ćwiczeń zawiera nieprawidłowy element.' }, 400);
+        const value = item as Record<string, unknown>;
+        const key = typeof value.key === 'string' ? value.key.trim() : '';
+        const name = typeof value.name === 'string' ? value.name.trim().slice(0,120) : '';
+        const dayTitle = typeof value.day_title === 'string' ? value.day_title.trim().slice(0,120) : 'Trening';
+        const sets = Number(value.sets), reps = Number(value.reps);
+        const notes = typeof value.notes === 'string' ? value.notes.trim().slice(0,250) : '';
+        const preferredName = typeof value.preferred_name === 'string' ? value.preferred_name.trim().slice(0,120) : '';
+        const otherNames = Array.isArray(value.other_names) ? value.other_names.filter((name): name is string => typeof name === 'string').map(name => name.trim().slice(0,120)).filter(Boolean).slice(0,40) : [];
+        if (!key || key.length > 180 || seenKeys.has(key) || !name || !Number.isInteger(sets) || sets < 1 || sets > 30 || !Number.isInteger(reps) || reps < 1 || reps > 200) {
+          return v2Reply({ error: 'Jedno z zaznaczonych ćwiczeń ma nieprawidłowe dane. Odznacz je i spróbuj ponownie.' }, 400);
+        }
+        seenKeys.add(key);
+        targets.push({ key, day_title: dayTitle, name, sets, reps, notes, preferred_name: preferredName, other_names: otherNames });
+      }
+      const model = '@cf/meta/llama-3.1-8b-instruct-fast';
+      const equipmentLabel = equipment === 'none' ? 'brak sprzętu' : equipment === 'bands' ? 'gumy oporowe' : equipment === 'dumbbells' ? 'hantle' : equipment === 'both' ? 'gumy oporowe i hantle' : 'standardowe wyposażenie siłowni';
+      const replacementSchema = {
+        type: 'object',
+        properties: { replacements: { type: 'array', minItems: targets.length, maxItems: targets.length, items: { type: 'object', properties: {
+          key: { type: 'string' }, name: { type: 'string' }
+        }, required: ['key','name'], additionalProperties: false } } },
+        required: ['replacements'], additionalProperties: false
+      };
+      const systemPrompt = 'Jesteś trenerem siłowym. Zwróć wyłącznie JSON zgodny ze schematem. Dla każdego zaznaczonego ćwiczenia zaproponuj dokładnie jeden zamiennik o podobnym celu i wzorcu ruchowym, zgodny z miejscem treningu i sprzętem. Zachowaj krótkie polskie nazwy. Jeśli podano preferowane ćwiczenie, użyj go dokładnie, o ile jest zgodne ze sprzętem i rozsądnie zastępuje pierwotne ćwiczenie; w przeciwnym razie wybierz najbliższy bezpieczny wariant. Nie powtarzaj w tym samym dniu innych ćwiczeń z listy unikanych nazw. Nie zwracaj serii, powtórzeń, objaśnień ani dodatkowych pól. Każdy klucz wejściowy skopiuj dokładnie.';
+      const userPrompt = `Wymień zaznaczone ćwiczenia. Miejsce: ${location === 'home' ? 'dom' : 'siłownia'}. Dostępny sprzęt: ${equipmentLabel}. Każdy wpis zawiera niezmienny key, dzień, pierwotne ćwiczenie, serie/powtórzenia i opcjonalną preferencję użytkownika. Dla każdego wpisu zwróć nową nazwę ćwiczenia i jego identyczny key. Nie dodawaj ani nie pomijaj pozycji. Dane: ${JSON.stringify(targets.map(({ key, day_title, name, sets, reps, notes, preferred_name, other_names }) => ({ key, day: day_title, current: name, sets, reps, notes, preferred: preferred_name || null, avoid_same_day: other_names })))}.`;
+      let usage = { prompt_tokens: null as number | null, completion_tokens: null as number | null, total_tokens: null as number | null };
+      try {
+        const rawResult = await env.AI.run(model, {
+          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+          max_tokens: Math.max(500, Math.min(2000, 250 + targets.length * 36)),
+          temperature: 0.1,
+          response_format: { type: 'json_schema', json_schema: replacementSchema },
+        });
+        const aiResult = rawResult as Record<string, any>;
+        const rawUsage = aiResult?.usage && typeof aiResult.usage === 'object' ? aiResult.usage as Record<string,unknown> : {};
+        const promptTokens = Number(rawUsage.prompt_tokens ?? rawUsage.input_tokens ?? 0) || null;
+        const completionTokens = Number(rawUsage.completion_tokens ?? rawUsage.output_tokens ?? 0) || null;
+        const totalTokens = Number(rawUsage.total_tokens ?? ((promptTokens || 0) + (completionTokens || 0))) || null;
+        usage = { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: totalTokens };
+        let payload: unknown = aiResult?.response ?? aiResult?.result ?? rawResult;
+        if (typeof payload === 'string') {
+          const stripped = payload.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+          payload = JSON.parse(stripped);
+        }
+        if (payload && typeof payload === 'object' && !Array.isArray(payload) && !('replacements' in (payload as Record<string,unknown>)) && 'response' in (payload as Record<string,unknown>)) {
+          const nested = (payload as Record<string,unknown>).response;
+          if (typeof nested === 'string') payload = JSON.parse(nested);
+          else if (nested && typeof nested === 'object') payload = nested;
+        }
+        const resultObject = payload as Record<string, unknown>;
+        if (!resultObject || !Array.isArray(resultObject.replacements) || resultObject.replacements.length !== targets.length) {
+          throw new Error(`Niekompletna odpowiedź: oczekiwano ${targets.length} zamienników, otrzymano ${Array.isArray(resultObject?.replacements) ? resultObject.replacements.length : 0}.`);
+        }
+        const targetByKey = new Map(targets.map(target => [target.key, target]));
+        const usedKeys = new Set<string>();
+        const replacementNamesByDay = new Map<string, Set<string>>();
+        const replacements = resultObject.replacements.map((rawItem) => {
+          if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) throw new Error('Model zwrócił nieprawidłowy element zamiany.');
+          const item = rawItem as Record<string, unknown>;
+          const key = typeof item.key === 'string' ? item.key : '';
+          const name = typeof item.name === 'string' ? item.name.trim().slice(0,120) : '';
+          const target = targetByKey.get(key);
+          if (!target || usedKeys.has(key) || !name || name.toLocaleLowerCase('pl-PL') === target.name.toLocaleLowerCase('pl-PL')) throw new Error('Model nie zwrócił poprawnej, unikalnej zamiany dla wszystkich zaznaczonych ćwiczeń.');
+          const normalizedName = name.toLocaleLowerCase('pl-PL');
+          if (target.other_names.some(other => other.toLocaleLowerCase('pl-PL') === normalizedName)) throw new Error(`Zamiennik „${name}” powtarza inne ćwiczenie w dniu „${target.day_title}”.`);
+          const normalizedDay = target.day_title.toLocaleLowerCase('pl-PL');
+          const sameDayNames = replacementNamesByDay.get(normalizedDay) || new Set<string>();
+          if (sameDayNames.has(normalizedName)) throw new Error(`AI zaproponowało ten sam zamiennik więcej niż raz w dniu „${target.day_title}”.`);
+          sameDayNames.add(normalizedName);
+          replacementNamesByDay.set(normalizedDay, sameDayNames);
+          usedKeys.add(key);
+          return { key, name };
+        });
+        if (usedKeys.size !== targets.length) throw new Error('Odpowiedź AI pominęła co najmniej jedno zaznaczone ćwiczenie. Żadne zmiany nie zostały zastosowane.');
+        console.info('System Formy AI exercise replacement completed', { selectedCount: targets.length, model, usage });
+        return v2Reply({ replacements, model, usage });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się wymienić ćwiczeń.';
+        console.error('System Formy AI exercise replacement error:', { selectedCount: targets.length, model, usage, error: message.slice(0,300) });
+        return v2Reply({ error: 'AI nie zwróciło poprawnej listy zamienników. Twoje ćwiczenia nie zostały zmienione. Spróbuj ponownie lub zmniejsz liczbę zaznaczonych pozycji.' }, 502);
+      }
+    }
+
     if (path === '/api/v2/training/ai/generate' && method === 'POST') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       if (!env.AI) return v2Reply({ error: 'Workers AI nie jest podłączone. Dodaj binding AI do ustawień Cloudflare i ponownie wdroż aplikację.' }, 503);
@@ -418,28 +519,36 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const levelLabel: Record<string,string> = { beginner: 'początkujący', intermediate: 'średniozaawansowany', advanced: 'zaawansowany' };
       const focusLabel: Record<string,string> = { balanced: 'zrównoważony plan całego ciała', upper: 'większy nacisk na górne partie ciała', lower: 'większy nacisk na nogi i pośladki', conditioning: 'kondycja' };
       const progressionLabel: Record<string,string> = { reps: 'progresja powtórzeń', weight: 'progresja ciężaru', sets: 'progresja liczby serii', none: 'stałe parametry bez automatycznej progresji' };
-      const exerciseCount = duration <= 30 ? 4 : duration <= 45 ? 5 : 6;
+      const exerciseCount = duration <= 45 ? 4 : 5;
+      // Stała, mniejsza liczba pól i ćwiczeń ogranicza rozmiar odpowiedzi, czas generowania i ryzyko ucięcia JSON-u.
       const schema = {
         type: 'object',
-        properties: { days: { type: 'array', items: { type: 'object', properties: {
+        properties: { days: { type: 'array', minItems: days, maxItems: days, items: { type: 'object', properties: {
           title: { type: 'string' },
-          exercises: { type: 'array', items: { type: 'object', properties: {
-            name: { type: 'string' }, sets: { type: 'integer' }, reps: { type: 'integer' }, notes: { type: 'string' },
-            rest_seconds: { type: 'integer' }, transition_rest_seconds: { type: 'integer' },
-            alternatives: { type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 3 }
-          }, required: ['name','sets','reps','notes','rest_seconds','transition_rest_seconds','alternatives'], additionalProperties: false } },
+          exercises: { type: 'array', minItems: exerciseCount, maxItems: exerciseCount, items: { type: 'object', properties: {
+            name: { type: 'string' }, sets: { type: 'integer' }, reps: { type: 'integer' }, rest_seconds: { type: 'integer' }
+          }, required: ['name','sets','reps','rest_seconds'], additionalProperties: false } },
         }, required: ['title','exercises'], additionalProperties: false } } }, required: ['days'], additionalProperties: false
       };
-      const systemPrompt = 'Jesteś doświadczonym trenerem siłowym tworzącym zrównoważone, bezpieczne czterotygodniowe programy treningowe w języku polskim. Zwróć wyłącznie JSON zgodny ze schematem. Model ma tworzyć bazowy tygodniowy rozkład od 1 do 7 różnych jednostek, a aplikacja będzie powtarzać go przez 4 tygodnie i stosować wybraną progresję. Nie generuj 28 osobnych dni ani nie zwiększaj samodzielnie parametrów progresji w bazowym planie. Uwzględniaj poziom użytkownika, regenerację i wybrane wyposażenie. Nie podawaj diagnoz medycznych ani nie obiecuj rezultatów. Każde ćwiczenie musi mieć dokładnie 3 różne zamienniki, bez powtarzania nazwy głównej. Zamienniki mają trenować zbliżony wzorzec ruchu i wymagać tego samego lub łatwiej dostępnego sprzętu. Dla treningu domowego bez sprzętu nie używaj maszyn, wyciągów ani hantli. Dla samych gum nie zakładaj hantli. Nie wpisuj konkretnych ciężarów. Ustawiaj liczbę serii i powtórzeń adekwatnie do celu i doświadczenia. Przy 6–7 dniach uwzględnij regenerację, a co najmniej jeden dzień zrób wyraźnie lżejszy. Zamiast maksymalnej objętości wybieraj jakość i wykonalność. Nie powtarzaj tego samego ćwiczenia głównego wiele razy w jednym dniu.';
-      const userPrompt = `Przygotuj program treningowy na 4 tygodnie (28 dni kalendarzowych) z bazowym tygodniowym harmonogramem dokładnie ${days} różnych jednostek treningowych. Początek programu: ${startDate}. Strategia progresji na kolejne tygodnie: ${progressionLabel[progressionStrategy]}. Każdy dzień wyjściowy jest wzorcem tygodniowym, a nie osobną datą kalendarzową; aplikacja sama zastosuje progresję w kolejnych tygodniach. Cel: ${goalLabel[goal]}. Poziom: ${levelLabel[level]}. Miejsce: ${location === 'home' ? 'dom' : 'siłownia'}. Sprzęt: ${equipment === 'none' ? 'brak sprzętu' : equipment === 'bands' ? 'gumy oporowe' : equipment === 'dumbbells' ? 'hantle' : equipment === 'both' ? 'gumy oporowe i hantle' : 'standardowe wyposażenie siłowni'}. Nacisk: ${focusLabel[focus]}. Czas na jednostkę: około ${duration} minut. Zaproponuj około ${exerciseCount} ćwiczeń na dzień (w dniu lekkiej mobilności może być mniej). Dni mają mieć polskie, krótkie nazwy. Każde ćwiczenie: name, sets, reps (liczba całkowita; dla izometrii/czasu wpisz sekundy w reps i objaśnij w notes), notes (krótko, może być pusty tekst), rest_seconds, transition_rest_seconds, alternatives (dokładnie 3 nazwy). Przerwy zwykle 45–150 sekund zależnie od ćwiczenia i celu. Zachowaj pełną zgodność ćwiczeń z miejscem i sprzętem. Odpowiedź ma mieć dokładnie ${days} elementów w days.`;
+      const equipmentLabel = equipment === 'none' ? 'brak sprzętu' : equipment === 'bands' ? 'gumy oporowe' : equipment === 'dumbbells' ? 'hantle' : equipment === 'both' ? 'gumy oporowe i hantle' : 'standardowe wyposażenie siłowni';
+      const systemPrompt = 'Jesteś doświadczonym trenerem siłowym tworzącym bezpieczne, wykonalne programy treningowe po polsku. Zwróć wyłącznie JSON zgodny ze schematem. Twórz bazowy tygodniowy rozkład, który aplikacja powtórzy przez 4 tygodnie i zastosuje wybraną progresję. Nie generuj 28 osobnych dni. Używaj krótkich, jednoznacznych nazw ćwiczeń. Nie generuj zamienników, notatek ani dodatkowych komentarzy. Dobieraj objętość do poziomu, celu, sprzętu i czasu. Nie podawaj diagnoz ani obietnic rezultatów. Nie wpisuj konkretnych ciężarów. Przy 6–7 dniach uwzględnij regenerację i zrób co najmniej jeden dzień wyraźnie lżejszy. Nie powtarzaj tego samego ćwiczenia głównego w jednym dniu.';
+      const userPrompt = `Zwróć bazowy tygodniowy plan na 4 tygodnie. Dokładnie ${days} dni; dokładnie ${exerciseCount} ćwiczenia w każdym dniu. Cel: ${goalLabel[goal]}; poziom: ${levelLabel[level]}; miejsce: ${location === 'home' ? 'dom' : 'siłownia'}; sprzęt: ${equipmentLabel}; nacisk: ${focusLabel[focus]}; czas treningu: około ${duration} minut; start: ${startDate}; progresja: ${progressionLabel[progressionStrategy]}. Każde ćwiczenie zwróć tylko jako name, sets (1–6), reps (1–100) i rest_seconds (30–180). Używaj krótkich nazw i krótkiego JSON. Bez opisów, alternatyw, notatek i dodatkowych pól. Nie pomijaj żadnego dnia ani ćwiczenia.`;
+      let aiResultForDiagnostics: Record<string, any> | null = null;
+      let usageForDiagnostics = { promptTokens: null as number | null, completionTokens: null as number | null, totalTokens: null as number | null };
       try {
         const rawResult = await env.AI.run(model, {
           messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
-          max_tokens: 4600,
-          temperature: 0.25,
+          max_tokens: Math.min(3200, 450 + (days * exerciseCount * 70)),
+          temperature: 0.1,
           response_format: { type: 'json_schema', json_schema: schema },
         });
         const aiResult = rawResult as Record<string, any>;
+        aiResultForDiagnostics = aiResult;
+        const rawUsage = aiResult?.usage && typeof aiResult.usage === 'object' ? aiResult.usage as Record<string,unknown> : {};
+        const promptTokens = Number(rawUsage.prompt_tokens ?? rawUsage.input_tokens ?? 0) || null;
+        const completionTokens = Number(rawUsage.completion_tokens ?? rawUsage.output_tokens ?? 0) || null;
+        const totalTokens = Number(rawUsage.total_tokens ?? ((promptTokens || 0) + (completionTokens || 0))) || null;
+        usageForDiagnostics = { promptTokens, completionTokens, totalTokens };
         let payload: unknown = aiResult?.response ?? aiResult?.result ?? rawResult;
         if (typeof payload === 'string') {
           const stripped = payload.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
@@ -451,29 +560,30 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
           else if (nested && typeof nested === 'object') payload = nested;
         }
         const planObject = payload as Record<string, unknown>;
-        if (!planObject || !Array.isArray(planObject.days) || planObject.days.length !== days) throw new Error('Model zwrócił niepełny plan. Wróć do formularza i ponów generowanie.');
+        if (!planObject || !Array.isArray(planObject.days) || planObject.days.length !== days) {
+          const receivedDays = Array.isArray(planObject?.days) ? planObject.days.length : 0;
+          throw new Error(`AI zwróciło niepełny plan: oczekiwano ${days} dni, otrzymano ${receivedDays}.`);
+        }
         const normalizedDays = planObject.days.map((rawDay, dayIndex) => {
           if (!rawDay || typeof rawDay !== 'object' || Array.isArray(rawDay)) throw new Error('Odpowiedź AI zawiera nieprawidłowy dzień treningowy.');
           const day = rawDay as Record<string,unknown>;
           const title = typeof day.title === 'string' ? day.title.trim().slice(0,120) : '';
-          if (!title || !Array.isArray(day.exercises) || day.exercises.length < 3 || day.exercises.length > 8) throw new Error(`AI zwróciło nieprawidłową listę ćwiczeń w dniu ${dayIndex + 1}. Spróbuj ponownie.`);
+          if (!title || !Array.isArray(day.exercises) || day.exercises.length !== exerciseCount) throw new Error(`AI zwróciło niepełny dzień ${dayIndex + 1}: wymagane ${exerciseCount} ćwiczenia, otrzymano ${Array.isArray(day.exercises) ? day.exercises.length : 0}.`);
           const exercises = day.exercises.map((rawExercise) => {
             if (!rawExercise || typeof rawExercise !== 'object' || Array.isArray(rawExercise)) throw new Error('AI zwróciło nieprawidłowe ćwiczenie.');
             const ex = rawExercise as Record<string,unknown>;
             const name = typeof ex.name === 'string' ? ex.name.trim().slice(0,120) : '';
-            const sets = Number(ex.sets), reps = Number(ex.reps), restSeconds = Number(ex.rest_seconds), transitionRestSeconds = Number(ex.transition_rest_seconds);
-            const notes = typeof ex.notes === 'string' ? ex.notes.trim().slice(0,500) : '';
-            const alternativesRaw = Array.isArray(ex.alternatives) ? ex.alternatives : [];
-            const alternatives = Array.from(new Set(alternativesRaw.filter((a): a is string => typeof a === 'string').map(a => a.trim().slice(0,120)).filter(a => a.length > 0 && a.toLowerCase() !== name.toLowerCase()))).slice(0,3);
-            if (!name || !Number.isInteger(sets) || sets < 1 || sets > 6 || !Number.isInteger(reps) || reps < 1 || reps > 100 || !Number.isInteger(restSeconds) || restSeconds < 30 || restSeconds > 300 || !Number.isInteger(transitionRestSeconds) || transitionRestSeconds < 30 || transitionRestSeconds > 240 || alternatives.length !== 3) throw new Error(`Nie udało się sprawdzić ćwiczenia „${name || 'bez nazwy'}” i jego trzech zamienników. Wygeneruj plan ponownie.`);
-            return { name, sets, reps, weight_kg: null, notes, rest_seconds: restSeconds, transition_rest_seconds: transitionRestSeconds, alternatives };
+            const sets = Number(ex.sets), reps = Number(ex.reps);
+            const requestedRest = Number(ex.rest_seconds);
+            const restSeconds = Number.isInteger(requestedRest) && requestedRest >= 30 && requestedRest <= 180 ? requestedRest : 90;
+            const transitionRestSeconds = 120;
+            const notes = '';
+            if (!name || !Number.isInteger(sets) || sets < 1 || sets > 6 || !Number.isInteger(reps) || reps < 1 || reps > 100) throw new Error(`AI zwróciło nieprawidłowe parametry ćwiczenia „${name || 'bez nazwy'}” w dniu ${dayIndex + 1}.`);
+            return { name, sets, reps, weight_kg: null, notes, rest_seconds: restSeconds, transition_rest_seconds: transitionRestSeconds, alternatives: [] as string[] };
           });
           return { day_key: String.fromCharCode(65 + dayIndex), title: `Dzień ${dayIndex + 1} — ${title.replace(/^Dzień\s+\d+\s*[-—:]?\s*/i, '')}`, exercises };
         });
-        const usage = aiResult?.usage && typeof aiResult.usage === 'object' ? aiResult.usage as Record<string,unknown> : {};
-        const inputTokens = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0) || null;
-        const outputTokens = Number(usage.completion_tokens ?? usage.output_tokens ?? 0) || null;
-        const totalTokens = Number(usage.total_tokens ?? ((inputTokens || 0) + (outputTokens || 0))) || null;
+        const { promptTokens: inputTokens, completionTokens: outputTokens, totalTokens } = usageForDiagnostics;
         const completedAt = new Date().toISOString();
         const output = { days: normalizedDays, duration_weeks: durationWeeks, start_date: startDate, progression_strategy: progressionStrategy, generation_id: generationId, generation_number: generationNumber, model, usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: totalTokens } };
         await env.DB.prepare("UPDATE ai_plan_generations SET status='success',result_json=?,prompt_tokens=?,completion_tokens=?,total_tokens=?,completed_at=? WHERE id=? AND user_id=?").bind(JSON.stringify(output), inputTokens, outputTokens, totalTokens, completedAt, generationId, gate.session!.id).run();
@@ -481,9 +591,15 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         return v2Reply({ ...output, total_generations: Number(totals?.total_generations || generationNumber), successful_generations: Number(totals?.successful_generations || 0) });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Nie udało się wygenerować planu. Spróbuj ponownie.';
-        await env.DB.prepare("UPDATE ai_plan_generations SET status='failed',error_message=?,completed_at=? WHERE id=? AND user_id=?").bind(message.slice(0,400), new Date().toISOString(), generationId, gate.session!.id).run().catch(() => {});
-        console.error('System Formy AI plan generation error:', error);
-        return v2Reply({ error: message.includes('Model zwrócił') || message.includes('AI zwróciło') || message.includes('Nie udało się sprawdzić') ? message : 'Model AI nie zwrócił teraz poprawnego planu. Spróbuj ponownie za chwilę; ta próba została zapisana w historii generacji.' }, 502);
+        const completedAt = new Date().toISOString();
+        await env.DB.prepare("UPDATE ai_plan_generations SET status='failed',error_message=?,prompt_tokens=?,completion_tokens=?,total_tokens=?,completed_at=? WHERE id=? AND user_id=?").bind(message.slice(0,400), usageForDiagnostics.promptTokens, usageForDiagnostics.completionTokens, usageForDiagnostics.totalTokens, completedAt, generationId, gate.session!.id).run().catch(() => {});
+        const raw = aiResultForDiagnostics || {};
+        const finishReason = String(raw.finish_reason ?? raw.stop_reason ?? raw.termination_reason ?? 'unknown').slice(0,80);
+        console.error('System Formy AI plan generation error:', { generationId, model, requestedDays: days, exerciseCount, finishReason, usage: usageForDiagnostics, error: message.slice(0,300) });
+        const clientMessage = /niepełny plan|nieprawidłowy dzień|nieprawidłową listę ćwiczeń|nieprawidłowe parametry ćwiczenia/i.test(message)
+          ? message
+          : 'AI nie zwróciło kompletnego planu. Zapisaliśmy dostępne statystyki tej próby. Spróbuj ponownie za chwilę; jeśli błąd się powtórzy, sprawdzimy szczegóły w logach.';
+        return v2Reply({ error: clientMessage, generation_id: generationId, diagnostic: { model, finish_reason: finishReason, total_tokens: usageForDiagnostics.totalTokens } }, 502);
       }
     }
     const aiHistoryLinkMatch = path.match(/^\/api\/v2\/training\/ai\/history\/([a-f0-9-]+)\/link$/i);
