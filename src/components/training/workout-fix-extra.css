@@ -80,3 +80,12 @@
  .sf-wm-status-pulse, .sf-wm-animated-card, .sf-wm-history-card, .sf-wm-set-history { animation: none !important; }
  .sf-wm-register-inputs input, .sf-wm-rest-extension-actions button { transition: none !important; }
 }
+
+/* Rejestracja serii: ćwiczenie po lewej i czas treningu po prawej w tym samym kafelku. */
+.sf-wm-register-topline { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding-bottom:18px; border-bottom:1px solid #30382a; }
+.sf-wm-register-exercise-name { min-width:0; }
+.sf-wm-register-exercise-name h2 { margin:7px 0 5px; font-size:clamp(21px,3.2vw,30px); line-height:1.12; overflow-wrap:anywhere; }
+.sf-wm-register-exercise-name small { color:var(--sf-wm-muted); font-size:12px; }
+.sf-wm-register-clock { flex-shrink:0; min-width:105px; }
+.sf-wm-register-heading { margin-top:18px; }
+@media (max-width:520px) { .sf-wm-register-topline { gap:10px; } .sf-wm-register-clock { min-width:94px; padding:9px 10px; } .sf-wm-register-clock strong { font-size:20px; } .sf-wm-register-exercise-name h2 { font-size:22px; } }

@@ -96,11 +96,9 @@ export default function WorkoutSession({ title, elapsedLabel = "00:00", exercise
       <header className="sf-wm-session-header">
         <div className="sf-wm-session-title">
           <p className="sf-wm-eyebrow"><span className="sf-wm-status-pulse" /> TRENING W TOKU</p>
-          <h1>{current.name}</h1>
           <p>{doneExercises} z {exercises.length} ćwiczeń · {doneSets} z {allSets} serii</p>
         </div>
         <div className="sf-wm-header-tools">
-          <div className="sf-wm-session-clock" role="timer" aria-live="off"><span>CZAS TRENINGU</span><strong>{elapsedLabel}</strong></div>
           <button className="sf-wm-button sf-wm-button-quiet" onClick={onCancel}><X size={16} /> Zakończ później</button>
         </div>
       </header>
@@ -133,9 +131,11 @@ export default function WorkoutSession({ title, elapsedLabel = "00:00", exercise
             </article>
           ) : activeSet ? (
             <article className="sf-wm-current-exercise sf-wm-register-card sf-wm-animated-card" key={`set-${activeExercise}-${activeSetIndex}`}>
-              <div className="sf-wm-current-meta"><span>REJESTRACJA SERII</span><span>ĆWICZENIE {String(activeExercise + 1).padStart(2, "0")} / {String(exercises.length).padStart(2, "0")}</span></div>
-              <h2>{current.name}</h2>
-              <div className="sf-wm-register-heading"><div><span className="sf-wm-label">TERAZ WYKONUJESZ</span><h3>Seria {activeSetIndex + 1} <span>z {current.sets_detail.length}</span></h3></div><div className="sf-wm-register-target"><Dumbbell size={15}/><span>Plan: {current.sets_detail[activeSetIndex].reps} powt.</span></div></div>
+              <div className="sf-wm-register-topline">
+                <div className="sf-wm-register-exercise-name"><span className="sf-wm-label">AKTUALNE ĆWICZENIE</span><h2>{current.name}</h2><small>Seria {activeSetIndex + 1} z {current.sets_detail.length}</small></div>
+                <div className="sf-wm-session-clock sf-wm-register-clock" role="timer" aria-live="off"><span>CZAS TRENINGU</span><strong>{elapsedLabel}</strong></div>
+              </div>
+              <div className="sf-wm-register-heading"><div><span className="sf-wm-label">ZAPISZ WYKONANĄ SERIĘ</span><h3>Wpisz wynik</h3></div><div className="sf-wm-register-target"><Dumbbell size={15}/><span>Plan: {current.sets_detail[activeSetIndex].reps} powt.</span></div></div>
               <div className="sf-wm-register-inputs">
                 <label>Powtórzenia<input inputMode="numeric" type="number" min="1" max="200" value={activeSet.reps} onChange={(event) => patchSet(activeExercise, activeSetIndex, { reps: event.target.value === "" ? 1 : clampNumber(Number(event.target.value), 1, 200) })}/></label>
                 <label>Ciężar (kg)<input inputMode="decimal" type="number" min="0" max="1000" step="0.5" placeholder="Np. 20 kg" value={activeSet.weight_kg ?? ""} onChange={(event) => patchSet(activeExercise, activeSetIndex, { weight_kg: event.target.value === "" ? null : clampNumber(Number(event.target.value), 0, 1000) })}/></label>
