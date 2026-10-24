@@ -19,7 +19,7 @@ export default function WorkoutSummary({
   const setCount = exercises.reduce((sum, exercise) => sum + exercise.sets_detail.length, 0);
   const completedSets = exercises.reduce((sum, exercise) => sum + exercise.sets_detail.filter((set) => set.completed).length, 0);
   const volume = exercises.reduce((sum, exercise) => sum + exercise.sets_detail.reduce((setSum, set) => {
-    if (set.weight_kg == null || !Number.isFinite(set.weight_kg) || !Number.isFinite(set.reps)) return setSum;
+    if (!set.completed || set.weight_kg == null || !Number.isFinite(set.weight_kg) || !Number.isFinite(set.reps)) return setSum;
     return setSum + set.weight_kg * set.reps;
   }, 0), 0);
 

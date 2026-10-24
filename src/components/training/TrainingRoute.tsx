@@ -177,6 +177,7 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
       plan_id: plan.id, day_key: day.day_key, started: true, started_at: now,
     };
     setDraft(next);
+    setSessionActive(true);
     setTitle(next.title);
     setPerformedOn(next.performed_on);
     setNotes('');
@@ -234,15 +235,20 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
     }
   };
 
-  const cancel = async () => {
-    await request('/api/v2/training/draft', { method: 'DELETE' }).catch(() => {});
-    setDraft(null);
-    setTitle('');
-    setNotes('');
-    setExercises([]);
-    setSummary(false);
-    setStartedAt(null);
-    setElapsedSeconds(0);
+  const pauseWorkout = async () => {
+    const pausedDraft: WorkoutDraft = {
+      title: title || 'Trening', performed_on: performedOn, notes, exercises,
+      plan_id: draft?.plan_id, day_key: draft?.day_key, started: true,
+      started_at: startedAt ?? Date.now(),
+    };
+    try {
+      await request('/api/v2/training/draft', { method: 'PUT', body: JSON.stringify({ draft: pausedDraft }) });
+      setDraft(pausedDraft);
+      setSessionActive(false);
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? `Nie udało się zachować treningu do późniejszego wznowienia: ${e.message}` : 'Nie udało się zachować treningu do późniejszego wznowienia.');
+    }
   };
 
   if (loading) return <section className="sf-view"><p className="sf-muted">Ładowanie treningów…</p></section>;
@@ -263,19 +269,11 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
 
   if (active) {
     return <section className="sf-view">
-      <div className="sf-wm-live-timer" role="timer" aria-live="off">
-        <span> <strong>●</strong> TRENING W TOKU</span>
-        <strong>{formatDuration(elapsedSeconds)}</strong>
-      </div>
-      <div className="sf-wm-session-meta">
-        <label>Nazwa treningu<input value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} /></label>
-        <label>Data<input type="date" value={performedOn} onChange={(e) => setPerformedOn(e.target.value)} /></label>
-      </div>
       {error && <p role="alert" className="sf-wm-error">{error}</p>}
       <WorkoutSession
         title={title} elapsedLabel={formatDuration(elapsedSeconds)} exercises={exercises} notes={notes} saving={saving}
         onExercisesChange={setExercises} onNotesChange={setNotes}
-        onFinish={() => void finish()} onCancel={() => void cancel()}
+        onFinish={() => void finish()} onCancel={() => void pauseWorkout()}
       />
     </section>;
   }

@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight, Clock3, Pause, Play, Plus, X } from "lucide-react";
+import { Check, CheckCircle2, ChevronRight, Dumbbell, Timer, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { WorkoutExercise } from "./workoutTypes";
 
@@ -22,8 +22,10 @@ function clock(seconds: number) {
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+type HistorySet = { exerciseName: string; exerciseIndex: number; setIndex: number; reps: number; weight_kg: number | null };
+
 export default function WorkoutSession({ title, elapsedLabel = "00:00", exercises, notes, saving = false, onExercisesChange, onNotesChange, onFinish, onCancel }: Props) {
-  const [activeExercise, setActiveExercise] = useState(0);
+  const [activeExercise, setActiveExercise] = useState(() => Math.max(0, exercises.findIndex((exercise) => exercise.sets_detail.some((set) => !set.completed))));
   const [restEnd, setRestEnd] = useState<number | null>(null);
   const [restSeconds, setRestSeconds] = useState(0);
   const [pendingNextExercise, setPendingNextExercise] = useState<number | null>(null);
@@ -35,6 +37,9 @@ export default function WorkoutSession({ title, elapsedLabel = "00:00", exercise
   const progress = allSets ? Math.round((doneSets / allSets) * 100) : 0;
   const activeSetIndex = current ? current.sets_detail.findIndex((set) => !set.completed) : -1;
   const activeSet = current && activeSetIndex >= 0 ? current.sets_detail[activeSetIndex] : null;
+  const completedHistory = useMemo<HistorySet[]>(() => exercises.flatMap((exercise, exerciseIndex) => exercise.sets_detail.map((set, setIndex) => ({
+    exerciseName: exercise.name, exerciseIndex, setIndex, reps: set.reps, weight_kg: set.weight_kg, completed: Boolean(set.completed),
+  })).filter((set) => set.completed).map(({ completed: _completed, ...set }) => set)).reverse(), [exercises]);
 
   useEffect(() => {
     if (restEnd === null) { setRestSeconds(0); return; }
@@ -59,12 +64,6 @@ export default function WorkoutSession({ title, elapsedLabel = "00:00", exercise
       ...exercise, sets_detail: exercise.sets_detail.map((set, j) => j === setIndex ? { ...set, ...patch } : set),
     }));
   }
-  function addSet() {
-    const previous = current.sets_detail[current.sets_detail.length - 1];
-    onExercisesChange(exercises.map((exercise, i) => i !== activeExercise ? exercise : {
-      ...exercise, sets_detail: [...exercise.sets_detail, { reps: previous?.reps ?? 10, weight_kg: previous?.weight_kg ?? null, completed: false }],
-    }));
-  }
   function startRest(seconds: number, label: string, nextExercise: number | null = null) {
     setRestLabel(label);
     setPendingNextExercise(nextExercise);
@@ -83,52 +82,81 @@ export default function WorkoutSession({ title, elapsedLabel = "00:00", exercise
       startRest(current.transition_rest_seconds ?? 120, "Przerwa między ćwiczeniami", nextExercise);
     }
   }
+  function extendRest(extraSeconds: number) {
+    setRestEnd(Date.now() + (restSeconds + extraSeconds) * 1000);
+  }
+  function skipRest() {
+    setRestEnd(null);
+    if (pendingNextExercise !== null) setActiveExercise(pendingNextExercise);
+    setPendingNextExercise(null);
+  }
 
   return (
-    <section className="sf-workout-mode">
+    <section className="sf-workout-mode sf-wm-active-session">
       <header className="sf-wm-session-header">
-        <div><p className="sf-wm-eyebrow">TRENING W TOKU</p><h1>{title || "Twój trening"}</h1><p>{doneExercises} z {exercises.length} ćwiczeń ukończonych · {doneSets} z {allSets} serii</p></div>
-        <button className="sf-wm-button sf-wm-button-quiet" onClick={onCancel}><X size={16} /> Zakończ później</button>
+        <div className="sf-wm-session-title">
+          <p className="sf-wm-eyebrow"><span className="sf-wm-status-pulse" /> TRENING W TOKU</p>
+          <h1>{current.name}</h1>
+          <p>{doneExercises} z {exercises.length} ćwiczeń · {doneSets} z {allSets} serii</p>
+        </div>
+        <div className="sf-wm-header-tools">
+          <div className="sf-wm-session-clock" role="timer" aria-live="off"><span>CZAS TRENINGU</span><strong>{elapsedLabel}</strong></div>
+          <button className="sf-wm-button sf-wm-button-quiet" onClick={onCancel}><X size={16} /> Zakończ później</button>
+        </div>
       </header>
-      <div className="sf-wm-live-timer" role="timer"><span>POSTĘP TRENINGU</span><strong>{progress}%</strong></div>
-      <div className="sf-wm-progress" aria-label={`Ukończono ${progress}% treningu`}><div style={{ width: `${progress}%` }} /></div>
+      <div className="sf-wm-progress"><div style={{ width: `${progress}%` }} /></div>
       <div className="sf-wm-session-layout">
         <aside className="sf-wm-exercise-nav"><span className="sf-wm-label">ĆWICZENIA</span>
           {exercises.map((exercise, index) => {
             const completed = exercise.sets_detail.length > 0 && exercise.sets_detail.every((set) => set.completed);
-            return <button key={`${exercise.name}-${index}`} className={`sf-wm-exercise-nav-item ${index === activeExercise ? "is-active" : ""}`} onClick={() => { setRestEnd(null); setPendingNextExercise(null); setActiveExercise(index); }}>
+            return <button key={`${exercise.name}-${index}`} disabled={index !== activeExercise || restEnd !== null} className={`sf-wm-exercise-nav-item ${index === activeExercise ? "is-active" : ""} ${completed ? "is-complete" : ""}`} aria-current={index === activeExercise ? "step" : undefined}>
               <span className="sf-wm-exercise-index">{completed ? <Check size={15} /> : String(index + 1).padStart(2, "0")}</span>
               <span className="sf-wm-exercise-nav-name">{exercise.name}</span><small>{exercise.sets_detail.filter((set) => set.completed).length}/{exercise.sets_detail.length}</small>
             </button>;
           })}
         </aside>
         <div className="sf-wm-session-main">
-          <article className="sf-wm-current-exercise sf-wm-register-card">
-            <div className="sf-wm-current-meta"><span>ĆWICZENIE {String(activeExercise + 1).padStart(2, "0")} / {String(exercises.length).padStart(2, "0")}</span><span>{current.sets_detail.length} serii</span></div>
-            <h2>{current.name}</h2>
-            {restEnd !== null ? (
-              <div className="sf-wm-rest-focus">
-                <span className="sf-wm-label"><Clock3 size={15} /> {restLabel.toUpperCase()}</span>
-                <strong className="sf-wm-rest-countdown">{clock(restSeconds)}</strong>
-                <p>Odpocznij. Po zakończeniu przerwy przejdziesz do kolejnej serii lub ćwiczenia.</p>
-                <div className="sf-wm-rest-actions"><button className="sf-wm-button sf-wm-button-secondary" onClick={() => setRestEnd(Date.now() + (restSeconds + 30) * 1000)}>Dodaj 30 s</button><button className="sf-wm-button sf-wm-button-primary" onClick={() => { setRestEnd(null); if (pendingNextExercise !== null) setActiveExercise(pendingNextExercise); setPendingNextExercise(null); }}>Pomiń przerwę <ChevronRight size={16}/></button></div>
+          {restEnd !== null ? (
+            <article className="sf-wm-current-exercise sf-wm-rest-focus sf-wm-animated-card" key={`rest-${activeExercise}-${doneSets}`}>
+              <div className="sf-wm-rest-icon"><Timer size={22}/></div>
+              <p className="sf-wm-eyebrow">CZAS NA REGENERACJĘ</p>
+              <h2>{restLabel}</h2>
+              <strong className="sf-wm-rest-countdown">{clock(restSeconds)}</strong>
+              <p className="sf-wm-rest-description">Oddech wraca do normy. Po przerwie przejdziesz automatycznie do {restLabel === "Przerwa między ćwiczeniami" ? "kolejnego ćwiczenia" : "następnej serii"}.</p>
+              <div className="sf-wm-rest-actions sf-wm-rest-extension-actions">
+                <button type="button" onClick={() => extendRest(30)}>+30 s</button>
+                <button type="button" onClick={() => extendRest(60)}>+60 s</button>
+                <button type="button" onClick={() => extendRest(90)}>+90 s</button>
+                <button type="button" className="sf-wm-rest-skip" onClick={skipRest}>Pomiń przerwę <ChevronRight size={15}/></button>
               </div>
-            ) : activeSet ? (
-              <>
-                <div className="sf-wm-register-heading"><div><span className="sf-wm-label">ZAREJESTRUJ WYKONANE ĆWICZENIE</span><h3>Seria {activeSetIndex + 1} <span>z {current.sets_detail.length}</span></h3></div><div className="sf-wm-register-clock"><Clock3 size={18}/><strong>{elapsedLabel}</strong><small>czas treningu</small></div></div>
-                <p>Wpisz faktyczny wynik serii, a następnie zapisz wykonanie.</p>
-                <div className="sf-wm-register-inputs">
-                  <label>Powtórzenia<input type="number" min="1" max="200" value={activeSet.reps} onChange={(event) => patchSet(activeExercise, activeSetIndex, { reps: clampNumber(Number(event.target.value), 1, 200) })}/></label>
-                  <label>Ciężar (kg)<input type="number" min="0" max="1000" step="0.5" placeholder="Bez ciężaru" value={activeSet.weight_kg ?? ""} onChange={(event) => patchSet(activeExercise, activeSetIndex, { weight_kg: event.target.value === "" ? null : clampNumber(Number(event.target.value), 0, 1000) })}/></label>
-                </div>
-                <button className="sf-wm-button sf-wm-button-primary sf-wm-register-save" onClick={completeCurrentSet}><Check size={18}/> Zapisz serię i rozpocznij przerwę</button>
-                <div className="sf-wm-register-footer"><span>Po zapisaniu: {current.rest_seconds ?? 90} s przerwy</span><span>{doneSets}/{allSets} serii wykonanych</span></div>
-              </>
-            ) : (
-              <div className="sf-wm-all-done"><Check size={22}/><h3>Ćwiczenie ukończone</h3><p>Wszystkie serie tego ćwiczenia są zapisane.</p><button className="sf-wm-button sf-wm-button-secondary" onClick={() => { const next = exercises.findIndex((exercise, index) => index > activeExercise && exercise.sets_detail.some((set) => !set.completed)); if (next >= 0) setActiveExercise(next); }}>Następne ćwiczenie <ChevronRight size={16}/></button></div>
-            )}
-            <div className="sf-wm-exercise-controls"><button className="sf-wm-button sf-wm-button-secondary" disabled={activeExercise === 0} onClick={() => { setRestEnd(null); setPendingNextExercise(null); setActiveExercise((value) => Math.max(0, value - 1)); }}><ChevronLeft size={16}/> Poprzednie</button><button className="sf-wm-button sf-wm-button-secondary" disabled={activeExercise >= exercises.length - 1} onClick={() => { setRestEnd(null); setPendingNextExercise(null); setActiveExercise((value) => Math.min(exercises.length - 1, value + 1)); }}>Następne ćwiczenie <ChevronRight size={16}/></button></div>
-          </article>
+              <div className="sf-wm-rest-meter"><span style={{ width: `${Math.min(100, restSeconds / Math.max(1, (pendingNextExercise === null ? (current.rest_seconds ?? 90) : (current.transition_rest_seconds ?? 120))) * 100)}%` }} /></div>
+            </article>
+          ) : activeSet ? (
+            <article className="sf-wm-current-exercise sf-wm-register-card sf-wm-animated-card" key={`set-${activeExercise}-${activeSetIndex}`}>
+              <div className="sf-wm-current-meta"><span>REJESTRACJA SERII</span><span>ĆWICZENIE {String(activeExercise + 1).padStart(2, "0")} / {String(exercises.length).padStart(2, "0")}</span></div>
+              <h2>{current.name}</h2>
+              <div className="sf-wm-register-heading"><div><span className="sf-wm-label">TERAZ WYKONUJESZ</span><h3>Seria {activeSetIndex + 1} <span>z {current.sets_detail.length}</span></h3></div><div className="sf-wm-register-target"><Dumbbell size={15}/><span>Plan: {current.sets_detail[activeSetIndex].reps} powt.</span></div></div>
+              <div className="sf-wm-register-inputs">
+                <label>Powtórzenia<input inputMode="numeric" type="number" min="1" max="200" value={activeSet.reps} onChange={(event) => patchSet(activeExercise, activeSetIndex, { reps: event.target.value === "" ? 1 : clampNumber(Number(event.target.value), 1, 200) })}/></label>
+                <label>Ciężar (kg)<input inputMode="decimal" type="number" min="0" max="1000" step="0.5" placeholder="Np. 20 kg" value={activeSet.weight_kg ?? ""} onChange={(event) => patchSet(activeExercise, activeSetIndex, { weight_kg: event.target.value === "" ? null : clampNumber(Number(event.target.value), 0, 1000) })}/></label>
+              </div>
+              <button className="sf-wm-button sf-wm-button-primary sf-wm-register-save" onClick={completeCurrentSet}><CheckCircle2 size={18}/> Zapisz serię</button>
+              <div className="sf-wm-register-footer"><span>Po tej serii: {activeSetIndex + 1 < current.sets_detail.length ? `${current.rest_seconds ?? 90} s przerwy` : `do ${current.transition_rest_seconds ?? 120} s przed kolejnym ćwiczeniem`}</span><span>{doneSets}/{allSets} serii zapisanych</span></div>
+            </article>
+          ) : (
+            <article className="sf-wm-current-exercise sf-wm-all-done sf-wm-animated-card">
+              <CheckCircle2 size={30}/><h2>Ćwiczenie ukończone</h2><p>Wszystkie serie są zapisane. Po ostatnim ćwiczeniu możesz zakończyć trening i zobaczyć podsumowanie.</p>
+            </article>
+          )}
+
+          {completedHistory.length > 0 && <section className="sf-wm-set-history" aria-label="Zapisane serie">
+            <div className="sf-wm-history-heading"><span className="sf-wm-label">ZAPISANE SERIE</span><span>{completedHistory.length} / {allSets}</span></div>
+            {completedHistory.map((set) => <article className="sf-wm-history-card" key={`${set.exerciseIndex}-${set.setIndex}`} aria-disabled="true">
+              <span className="sf-wm-history-check"><Check size={15}/></span>
+              <div className="sf-wm-history-copy"><b>{set.exerciseName}</b><small>Seria {set.setIndex + 1} · {set.reps} powtórzeń{set.weight_kg != null ? ` · ${set.weight_kg} kg` : " · bez dodatkowego ciężaru"}</small></div>
+              <span className="sf-wm-history-complete">Zapisano</span>
+            </article>)}
+          </section>}
           <label className="sf-wm-notes">Notatki do treningu<textarea rows={3} maxLength={1000} value={notes} onChange={(event) => onNotesChange(event.target.value)} placeholder="Samopoczucie, technika, uwagi…"/></label>
           <div className="sf-wm-finish-row"><span>Postęp: <strong>{progress}%</strong></span><button className="sf-wm-button sf-wm-button-primary" disabled={saving || !exercises.some((exercise) => exercise.name.trim())} onClick={onFinish}>{saving ? "Zapisywanie…" : "Zakończ i zapisz trening"} <Check size={16}/></button></div>
         </div>
