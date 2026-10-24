@@ -496,16 +496,18 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       for (const value of raw) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return v2Reply({ error: 'Nieprawidłowe ćwiczenie.' }, 400);
         const x = value as Record<string, unknown>, name = typeof x.name === 'string' ? x.name.trim() : '', sets = Array.isArray(x.sets_detail) ? x.sets_detail : null;
+        const restSeconds = Number(x.rest_seconds ?? 90), transitionRestSeconds = Number(x.transition_rest_seconds ?? 120);
         if (!name || name.length > 120) return v2Reply({ error: 'Każde ćwiczenie musi mieć nazwę.' }, 400);
+        if (!Number.isInteger(restSeconds) || restSeconds < 0 || restSeconds > 600 || !Number.isInteger(transitionRestSeconds) || transitionRestSeconds < 0 || transitionRestSeconds > 900) return v2Reply({ error: 'Nieprawidłowy czas przerwy.' }, 400);
         if (sets) {
           if (sets.length < 1 || sets.length > 40) return v2Reply({ error: 'Ćwiczenie musi mieć od 1 do 40 serii.' }, 400);
-          for (const sv of sets) { if (!sv || typeof sv !== 'object' || Array.isArray(sv)) return v2Reply({ error: 'Nieprawidłowa seria.' }, 400); const set = sv as Record<string, unknown>, reps = Number(set.reps), weight = set.weight_kg === '' || set.weight_kg == null ? null : Number(set.weight_kg); if (!Number.isInteger(reps) || reps < 1 || reps > 200 || (weight !== null && (!Number.isFinite(weight) || weight < 0 || weight > 1000)) || !Number.isInteger(restSeconds) || restSeconds < 0 || restSeconds > 600 || !Number.isInteger(transitionRestSeconds) || transitionRestSeconds < 0 || transitionRestSeconds > 900) return v2Reply({ error: 'Sprawdź powtórzenia i ciężar w serii.' }, 400); }
+          for (const sv of sets) { if (!sv || typeof sv !== 'object' || Array.isArray(sv)) return v2Reply({ error: 'Nieprawidłowa seria.' }, 400); const set = sv as Record<string, unknown>, reps = Number(set.reps), weight = set.weight_kg === '' || set.weight_kg == null ? null : Number(set.weight_kg); if (!Number.isInteger(reps) || reps < 1 || reps > 200 || (weight !== null && (!Number.isFinite(weight) || weight < 0 || weight > 1000))) return v2Reply({ error: 'Sprawdź powtórzenia i ciężar w serii.' }, 400); }
           const validSets = sets.map((sv) => { const set = sv as Record<string, unknown>; return { reps: Number(set.reps), weight_kg: set.weight_kg === '' || set.weight_kg == null ? null : Number(set.weight_kg) }; });
-          exercises.push({ name, sets: validSets.length, reps: validSets[0]?.reps || 1, weight_kg: validSets[0]?.weight_kg ?? null, sets_detail: validSets });
+          exercises.push({ name, sets: validSets.length, reps: validSets[0]?.reps || 1, weight_kg: validSets[0]?.weight_kg ?? null, rest_seconds: restSeconds, transition_rest_seconds: transitionRestSeconds, sets_detail: validSets });
         } else {
           const setCount = Number(x.sets), reps = Number(x.reps), weight = x.weight_kg == null ? null : Number(x.weight_kg);
-          if (!Number.isInteger(setCount) || setCount < 1 || setCount > 40 || !Number.isInteger(reps) || reps < 1 || reps > 200 || (weight !== null && (!Number.isFinite(weight) || weight < 0 || weight > 1000)) || !Number.isInteger(restSeconds) || restSeconds < 0 || restSeconds > 600 || !Number.isInteger(transitionRestSeconds) || transitionRestSeconds < 0 || transitionRestSeconds > 900) return v2Reply({ error: 'Sprawdź serie, powtórzenia i ciężar.' }, 400);
-          exercises.push({ name, sets: setCount, reps, weight_kg: weight });
+          if (!Number.isInteger(setCount) || setCount < 1 || setCount > 40 || !Number.isInteger(reps) || reps < 1 || reps > 200 || (weight !== null && (!Number.isFinite(weight) || weight < 0 || weight > 1000))) return v2Reply({ error: 'Sprawdź serie, powtórzenia i ciężar.' }, 400);
+          exercises.push({ name, sets: setCount, reps, weight_kg: weight, rest_seconds: restSeconds, transition_rest_seconds: transitionRestSeconds });
         }
       }
       const id = crypto.randomUUID(), now = new Date().toISOString();
