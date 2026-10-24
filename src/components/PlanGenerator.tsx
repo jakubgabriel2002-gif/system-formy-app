@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { exerciseForProgramWeek, formatProgramDate, getProgramEndDate, localDateString, PROGRAM_WEEKS, PROGRESSION_OPTIONS, progressionOption, type ProgressionStrategy } from '../lib/trainingProgram';
 import {
   ArrowLeft, ArrowRight, CalendarDays, Check, CheckCircle2, Clock3, Dumbbell,
   Flame, Home, Sparkles, Target, Trophy, Zap,
@@ -12,6 +13,7 @@ export type GeneratedPlanExercise = {
   notes?: string;
   rest_seconds?: number;
   transition_rest_seconds?: number;
+  alternatives?: string[];
 };
 
 export type GeneratedPlanDay = {
@@ -25,7 +27,32 @@ export type GeneratedPlanDraft = {
   description: string;
   location: 'home' | 'gym';
   days: GeneratedPlanDay[];
+  duration_weeks: number;
+  start_date: string;
+  progression_strategy: ProgressionStrategy;
+  generation_id?: string;
+  generation_number?: number;
+  model?: string;
 };
+
+export type GenerateTrainingPlanRequest = {
+  goal: 'muscle' | 'strength' | 'fat-loss' | 'general';
+  level: 'beginner' | 'intermediate' | 'advanced';
+  location: 'home' | 'gym';
+  equipment: 'none' | 'bands' | 'dumbbells' | 'both' | 'gym';
+  days: number;
+  duration: number;
+  focus: 'balanced' | 'upper' | 'lower' | 'conditioning';
+  duration_weeks: number;
+  start_date: string;
+  progression_strategy: ProgressionStrategy;
+};
+
+export type GeneratedPlanResult = {
+  days: GeneratedPlanDay[]; generation_id: string; generation_number: number; total_generations: number; successful_generations?: number; model: string; duration_weeks?: number; start_date?: string; progression_strategy?: ProgressionStrategy;
+  usage?: { prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null };
+};
+export type TrainingAiHistory = { total_generations: number; successful_generations: number; recent: Array<{ id: string; generation_number: number; model: string; status: string; goal: string; level: string; location: string; days_count: number; duration_minutes: number; duration_weeks?: number; start_date?: string | null; progression_strategy?: ProgressionStrategy; prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null; saved_plan_id: string | null; created_at: string; completed_at: string | null }> };
 
 type Goal = 'muscle' | 'strength' | 'fat-loss' | 'general';
 type Level = 'beginner' | 'intermediate' | 'advanced';
@@ -40,6 +67,8 @@ type Props = {
   saving: boolean;
   onCancel: () => void;
   onSave: (draft: GeneratedPlanDraft) => Promise<void>;
+  onGenerate: (request: GenerateTrainingPlanRequest) => Promise<GeneratedPlanResult>;
+  onLoadHistory: () => Promise<TrainingAiHistory>;
 };
 
 const GOALS: Array<{ id: Goal; title: string; desc: string; icon: typeof Target }> = [
@@ -203,7 +232,7 @@ function buildDays(location: Place, equipment: Equipment, level: Level, goal: Go
   });
 }
 
-export default function PlanGenerator({ defaultLocation, saving, onCancel, onSave }: Props) {
+export default function PlanGenerator({ defaultLocation, saving, onCancel, onSave, onGenerate, onLoadHistory }: Props) {
   const [step, setStep] = useState(1);
   const [goal, setGoal] = useState<Goal>('muscle');
   const [level, setLevel] = useState<Level>('beginner');
@@ -212,17 +241,51 @@ export default function PlanGenerator({ defaultLocation, saving, onCancel, onSav
   const [days, setDays] = useState(3);
   const [duration, setDuration] = useState(45);
   const [focus, setFocus] = useState<Focus>('balanced');
+  const [startDate, setStartDate] = useState(localDateString());
+  const [progressionStrategy, setProgressionStrategy] = useState<ProgressionStrategy>('reps');
   const [planName, setPlanName] = useState('Mój plan treningowy');
-  const generatedDays = useMemo(() => buildDays(location, equipment, level, goal, days, duration, focus), [location, equipment, level, goal, days, duration, focus]);
+  const [generatedDays, setGeneratedDays] = useState<GeneratedPlanDay[]>([]);
+  const [generationMeta, setGenerationMeta] = useState<GeneratedPlanResult | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState('');
+  const [totalGenerations, setTotalGenerations] = useState<number | null>(null);
+  const [successfulGenerations, setSuccessfulGenerations] = useState<number | null>(null);
+  const [recentHistory, setRecentHistory] = useState<TrainingAiHistory['recent']>([]);
   const selectedGoal = GOALS.find(item => item.id === goal) || GOALS[0];
   const selectedLevel = LEVELS.find(item => item.id === level) || LEVELS[0];
   const chosenEquipment = EQUIPMENT_OPTIONS.find(item => item.id === equipment) || EQUIPMENT_OPTIONS[0];
 
+  useEffect(() => {
+    let active = true;
+    void onLoadHistory().then(history => { if (active) { setTotalGenerations(history.total_generations); setSuccessfulGenerations(history.successful_generations); setRecentHistory(history.recent || []); } }).catch(() => { if (active) { setTotalGenerations(null); setRecentHistory([]); } });
+    return () => { active = false; };
+  }, []);
+
+  const generate = async () => {
+    setGenerating(true); setGenerationError('');
+    try {
+      const result = await onGenerate({ goal, level, location, equipment: location === 'home' ? equipment : 'gym', days, duration, focus, duration_weeks: PROGRAM_WEEKS, start_date: startDate, progression_strategy: progressionStrategy });
+      if (!Array.isArray(result.days) || result.days.length !== days || !result.days.every(day => Array.isArray(day.exercises) && day.exercises.length >= 1)) throw new Error('Generator nie zwrócił kompletnego planu. Spróbuj ponownie.');
+      setGeneratedDays(result.days); setGenerationMeta(result); setTotalGenerations(result.total_generations); setSuccessfulGenerations(result.successful_generations ?? ((successfulGenerations ?? 0) + 1));
+      setRecentHistory(old => [{ id: result.generation_id, generation_number: result.generation_number, model: result.model, status: 'success', goal, level, location, days_count: days, duration_minutes: duration, duration_weeks: PROGRAM_WEEKS, start_date: startDate, progression_strategy: progressionStrategy, prompt_tokens: result.usage?.prompt_tokens ?? null, completion_tokens: result.usage?.completion_tokens ?? null, total_tokens: result.usage?.total_tokens ?? null, saved_plan_id: null, created_at: new Date().toISOString(), completed_at: new Date().toISOString() }, ...old.filter(item => item.id !== result.generation_id)].slice(0, 8));
+      setStep(3);
+    } catch (error) {
+      setGenerationError(error instanceof Error ? error.message : 'Nie udało się wygenerować planu. Spróbuj ponownie.');
+      // Nawet nieudana próba jest rejestrowana, więc odświeżamy licznik i status historii.
+      void onLoadHistory().then(history => {
+        setTotalGenerations(history.total_generations);
+        setSuccessfulGenerations(history.successful_generations);
+        setRecentHistory(history.recent || []);
+      }).catch(() => {});
+    }
+    finally { setGenerating(false); }
+  };
+
   const save = async () => {
     const cleanName = planName.trim();
-    if (cleanName.length < 2) return;
-    const description = `Plan ułożony na podstawie wybranych ustawień: cel — ${GOAL_NAMES[goal]}; poziom — ${LEVEL_NAMES[level]}; nacisk — ${FOCUS_NAMES[focus]}; ${location === 'home' ? `trening w domu (${chosenEquipment.title.toLowerCase()})` : 'trening na siłowni'}; ${days} dni w tygodniu; około ${duration} min na jednostkę. Dopasuj ciężar i warianty ćwiczeń do swoich możliwości.`;
-    await onSave({ name: cleanName, description, location, days: generatedDays });
+    if (cleanName.length < 2 || !generationMeta) return;
+    const description = `Plan wygenerowany przez AI na 4 tygodnie: cel — ${GOAL_NAMES[goal]}; poziom — ${LEVEL_NAMES[level]}; nacisk — ${FOCUS_NAMES[focus]}; ${location === 'home' ? `trening w domu (${chosenEquipment.title.toLowerCase()})` : 'trening na siłowni'}; ${days} jednostki tygodniowo; około ${duration} min na jednostkę; progresja — ${progressionOption(progressionStrategy).shortLabel}. Schemat tygodniowy powtarza się przez 4 tygodnie, a parametry zmieniają się zgodnie z wybraną progresją. Dopasuj obciążenie do swoich możliwości i techniki.`;
+    await onSave({ name: cleanName, description, location, days: generatedDays, duration_weeks: PROGRAM_WEEKS, start_date: startDate, progression_strategy: progressionStrategy, generation_id: generationMeta.generation_id, generation_number: generationMeta.generation_number, model: generationMeta.model });
   };
 
   return <section className="sf-view sf-plan-generator-view">
@@ -236,6 +299,8 @@ export default function PlanGenerator({ defaultLocation, saving, onCancel, onSav
       <h1>Ułóżmy plan pod <span>Ciebie.</span></h1>
       <p>Odpowiedz na kilka krótkich pytań. Zobacz propozycję, a potem dopracuj ćwiczenia w edytorze.</p>
     </header>
+
+    {totalGenerations !== null && <div className="sf-gen-history-strip"><Sparkles size={16}/><span><b>Próby generatora na tym koncie:</b> {totalGenerations}. {totalGenerations === 0 ? 'To będzie pierwsza próba wygenerowania planu.' : `Udane generacje: ${successfulGenerations ?? '—'}. Ostatnia próba: ${recentHistory[0] ? `#${recentHistory[0].generation_number} · ${recentHistory[0].status === 'success' ? 'udana' : recentHistory[0].status === 'pending' ? 'w toku' : 'nieudana'} · ${new Date(recentHistory[0].created_at).toLocaleDateString('pl-PL')}` : 'zapisana w historii'}. Te dane pomogą później ustalić cennik.`}</span></div>}
 
     <div className="sf-gen-progress" aria-label={`Krok ${step} z 3`}>
       {[{ n: 1, title: 'Cel i poziom' }, { n: 2, title: 'Warunki treningu' }, { n: 3, title: 'Twoja propozycja' }].map(item => <div className={`sf-gen-progress-step ${step === item.n ? 'is-current' : step > item.n ? 'is-done' : ''}`} key={item.n}><span>{step > item.n ? <Check size={15}/> : item.n}</span><b>{item.title}</b></div>)}
@@ -261,21 +326,27 @@ export default function PlanGenerator({ defaultLocation, saving, onCancel, onSav
         <div className="sf-gen-setting-card"><div className="sf-gen-setting-icon"><Clock3 size={19}/></div><div className="sf-gen-subsection-head"><h3>Ile masz czasu?</h3><b>{duration} min</b></div><p>Szacowany czas jednej jednostki treningowej.</p><div className="sf-gen-duration-options">{[{ v: 30, label: '30 min' }, { v: 45, label: '45 min' }, { v: 60, label: '60 min' }, { v: 75, label: '75 min' }].map(item => <button type="button" key={item.v} className={duration === item.v ? 'is-selected' : ''} onClick={() => setDuration(item.v)}>{item.label}</button>)}</div></div>
       </div>
       <div className="sf-gen-subsection sf-gen-focus-subsection"><div className="sf-gen-subsection-head"><h3>Na czym chcesz położyć większy nacisk?</h3><span>Opcjonalnie</span></div><div className="sf-gen-focus-options">{FOCUSES.map(item => <button type="button" key={item.id} className={focus === item.id ? 'is-selected' : ''} onClick={() => setFocus(item.id)}>{item.title}</button>)}</div></div>
-      <div className="sf-gen-footer"><button type="button" className="sf-button sf-button-outline" onClick={() => setStep(1)}><ArrowLeft size={16}/> Wstecz</button><button type="button" className="sf-button sf-button-lime" onClick={() => setStep(3)}><Sparkles size={16}/> Przygotuj mój plan <ArrowRight size={16}/></button></div>
+      <div className="sf-gen-month-settings"><div className="sf-gen-month-settings-title"><div><p className="sf-eyebrow">PLAN MIESIĘCZNY</p><h3>Ustaw start i progresję</h3><p>Generator przygotuje tygodniowy schemat na 4 tygodnie (28 dni). Nie tworzymy 28 kopii tych samych treningów — w każdym tygodniu zmieniają się parametry zgodnie z wybraną zasadą.</p></div><span><CalendarDays size={20}/></span></div><div className="sf-month-program-fields"><label>Start programu<input type="date" required value={startDate} onChange={event => setStartDate(event.target.value)}/></label><label>Specyfika progresu<select value={progressionStrategy} onChange={event => setProgressionStrategy(event.target.value as ProgressionStrategy)}>{PROGRESSION_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label></div><div className="sf-month-progression-explainer"><b>{progressionOption(progressionStrategy).shortLabel}</b><span>{progressionOption(progressionStrategy).explanation}</span></div></div>
+      {generationError && <div className="sf-gen-error" role="alert">{generationError}</div>}
+      <div className="sf-gen-footer"><button type="button" className="sf-button sf-button-outline" disabled={generating} onClick={() => setStep(1)}><ArrowLeft size={16}/> Wstecz</button><button type="button" className="sf-button sf-button-lime" disabled={generating || saving} onClick={() => void generate()}>{generating ? <><Sparkles size={16}/> AI układa plan…</> : <><Sparkles size={16}/> Wygeneruj mój plan <ArrowRight size={16}/></>}</button></div>
     </div>}
 
     {step === 3 && <div className="sf-gen-content sf-gen-result-content">
-      <div className="sf-gen-result-banner"><span><CheckCircle2 size={23}/></span><div><p className="sf-eyebrow">PROPOZYCJA JEST GOTOWA</p><h2>Sprawdź swój plan</h2><p>Plan możesz od razu zapisać, a potem zmienić dowolne ćwiczenie, serie, powtórzenia i przerwy.</p></div></div>
+      <div className="sf-gen-result-banner"><span><CheckCircle2 size={23}/></span><div><p className="sf-eyebrow">PLAN WYGENEROWANY PRZEZ AI</p><h2>Sprawdź swój plan</h2><p>AI dobrało dni i ćwiczenia do formularza. Każda pozycja ma trzy zamienniki, które można wybierać później w edytorze.</p></div></div>
       <div className="sf-gen-summary-grid">
         <div><small>Cel</small><b>{selectedGoal.title}</b></div>
         <div><small>Poziom</small><b>{selectedLevel.title}</b></div>
         <div><small>Miejsce</small><b>{location === 'home' ? 'W domu' : 'Na siłowni'}</b></div>
-        <div><small>Plan</small><b>{days} dni · {duration} min</b></div>
+        <div><small>Program</small><b>4 tygodnie · {days}/tydz.</b></div>
       </div>
+      <section className="sf-gen-month-summary"><div><h3>Plan na 4 tygodnie</h3><p>Program trwa od {formatProgramDate(startDate)} do {formatProgramDate(getProgramEndDate(startDate))}. Ten sam tygodniowy układ treningów powtarza się przez 4 tygodnie, a parametry są dostosowane do wybranej progresji.</p></div><div className="sf-gen-month-weeks">{[1,2,3,4].map(week => { const example = generatedDays.flatMap(day => day.exercises).find(ex => ex.name); const prescribed = example ? exerciseForProgramWeek(example, progressionStrategy, week) : null; const value = !prescribed ? '—' : progressionStrategy === 'weight' ? prescribed.weight_kg == null ? 'Mały krok ciężaru' : `${prescribed.weight_kg} kg` : `${prescribed.sets} ser. × ${prescribed.reps} powt.`; return <div key={week}><small>TYDZIEŃ {week}</small><b>{value}</b></div>; })}</div><p><b>{progressionOption(progressionStrategy).shortLabel}:</b> {progressionOption(progressionStrategy).explanation}</p></section>
       <label className="sf-gen-plan-name">Nazwa Twojego planu<input value={planName} onChange={event => setPlanName(event.target.value)} maxLength={120} minLength={2} required placeholder="np. Siła i forma — plan A"/></label>
-      <div className="sf-gen-day-list">{generatedDays.map((day, index) => <article className="sf-gen-day-card" key={day.day_key}><header><span className="sf-gen-day-index">{String(index + 1).padStart(2, '0')}</span><div><p className="sf-eyebrow">{location === 'home' ? 'DOM' : 'SIŁOWNIA'} · {day.exercises.length} ĆWICZEŃ</p><h3>{day.title.replace(/^Dzień \d+ — /, '')}</h3></div><span className="sf-gen-day-chevron"><ArrowRight size={17}/></span></header><div className="sf-gen-exercise-list">{day.exercises.map((exercise, exerciseIndex) => <div className="sf-gen-exercise-row" key={`${day.day_key}-${exercise.name}-${exerciseIndex}`}><span>{String(exerciseIndex + 1).padStart(2, '0')}</span><b>{exercise.name}</b><small>{exercise.sets} × {exercise.reps}{exercise.notes?.toLowerCase().includes('minut') ? ' min' : exercise.notes?.toLowerCase().includes('sekund') ? ' s' : ''}</small></div>)}</div><div className="sf-gen-day-foot"><span><Clock3 size={13}/> Przerwa: {day.exercises[0]?.rest_seconds ?? 90} s</span><span>{day.exercises.reduce((total, ex) => total + ex.sets, 0)} serii łącznie</span></div></article>)}</div>
-      <div className="sf-gen-prototype-note"><Sparkles size={16}/><p><b>Wersja demonstracyjna generatora.</b> Propozycja ćwiczeń jest obecnie układana na podstawie wybranych ustawień i katalogu ćwiczeń. Podłączenie właściwego modelu AI zrobimy jako kolejny etap.</p></div>
-      <div className="sf-gen-footer sf-gen-result-footer"><button type="button" className="sf-button sf-button-outline" onClick={() => setStep(2)}><ArrowLeft size={16}/> Zmień ustawienia</button><button type="button" className="sf-button sf-button-lime" disabled={saving || planName.trim().length < 2} onClick={() => void save()}>{saving ? 'Zapisuję plan…' : 'Zapisz i otwórz edytor'} <ArrowRight size={16}/></button></div>
+      <div className="sf-gen-day-list">{generatedDays.map((day, index) => <article className="sf-gen-day-card" key={day.day_key}><header><span className="sf-gen-day-index">{String(index + 1).padStart(2, '0')}</span><div><p className="sf-eyebrow">{location === 'home' ? 'DOM' : 'SIŁOWNIA'} · {day.exercises.length} ĆWICZEŃ</p><h3>{day.title.replace(/^Dzień \d+ — /, '')}</h3></div><span className="sf-gen-day-chevron"><ArrowRight size={17}/></span></header><div className="sf-gen-exercise-list">{day.exercises.map((exercise, exerciseIndex) => <div className="sf-gen-exercise-row" key={`${day.day_key}-${exercise.name}-${exerciseIndex}`}><span>{String(exerciseIndex + 1).padStart(2, '0')}</span><b>{exercise.name}</b><small>{exercise.sets} × {exercise.reps}{exercise.notes?.toLowerCase().includes('minut') ? ' min' : exercise.notes?.toLowerCase().includes('sekund') ? ' s' : ''}{exercise.alternatives?.length ? ' · 3 zamienniki' : ''}</small></div>)}</div><div className="sf-gen-day-foot"><span><Clock3 size={13}/> Przerwa: {day.exercises[0]?.rest_seconds ?? 90} s</span><span>{day.exercises.reduce((total, ex) => total + ex.sets, 0)} serii łącznie</span></div></article>)}</div>
+      {generationError && <div className="sf-gen-error" role="alert">{generationError}</div>}
+      {generating && <div className="sf-gen-history-strip" role="status"><Sparkles size={16}/><span><b>AI pracuje nad nową wersją.</b> Poprzedni podgląd zostaje zachowany do czasu otrzymania nowego wyniku.</span></div>}
+      <div className="sf-gen-prototype-note"><Sparkles size={16}/><p><b>Plan wygenerowany na żywo przez model AI.</b> Sprawdź, czy wybrane ćwiczenia odpowiadają Twoim możliwościom. W edytorze możesz zmienić każde ćwiczenie i skorzystać z trzech zamienników. Opłata za generowanie nie jest jeszcze naliczana przez aplikację — na razie zbieramy statystyki do ustalenia cennika.</p></div>
+      <div className="sf-gen-ai-meta"><div><small>Numer generacji</small><b>#{generationMeta?.generation_number ?? '—'} na tym koncie</b></div><div><small>Model</small><b>{generationMeta?.model?.replace('@cf/meta/', '') || 'Cloudflare Workers AI'}</b></div><div><small>Zużycie tokenów w odpowiedzi</small><b>{generationMeta?.usage?.total_tokens ? `${generationMeta.usage.total_tokens} tokenów` : 'Szczegóły w panelu Cloudflare'}</b></div></div>
+      <div className="sf-gen-footer sf-gen-result-footer"><button type="button" className="sf-button sf-button-outline" disabled={generating} onClick={() => setStep(2)}><ArrowLeft size={16}/> Zmień ustawienia</button><button type="button" className="sf-button sf-button-outline" disabled={generating || saving} onClick={() => void generate()}><Sparkles size={16}/> {generating ? 'AI tworzy nową wersję…' : 'Wygeneruj inną wersję'}</button><button type="button" className="sf-button sf-button-lime" disabled={saving || generating || planName.trim().length < 2} onClick={() => void save()}>{saving ? 'Zapisuję plan…' : 'Zapisz i otwórz edytor'} <ArrowRight size={16}/></button></div>
     </div>}
 
     <div className="sf-gen-bottom-hint"><span><CheckCircle2 size={15}/></span><p>Plan jest punktem wyjścia — dobieraj obciążenie do swoich możliwości i techniki. Jeśli ćwiczenie powoduje ból, przerwij je i wybierz bezpieczny wariant.</p></div>

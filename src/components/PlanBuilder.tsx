@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
+import { exerciseForProgramWeek, formatProgramDate, getProgramEndDate, isProgramComplete, PROGRESSION_OPTIONS, progressionOption, type ProgressionStrategy } from '../lib/trainingProgram';
 import {
   ArrowDown, ArrowUp, CheckCircle2, ChevronRight, CircleHelp, Clock3,
   GripVertical, Plus, RotateCcw, Trash2, WandSparkles, X,
@@ -13,12 +14,17 @@ type PlanExercise = {
   notes?: string;
   rest_seconds?: number;
   transition_rest_seconds?: number;
+  alternatives?: string[];
 };
 type PlanDay = { day_key: string; title: string; exercises: PlanExercise[] };
 type Props = {
   days: PlanDay[];
   setDays: Dispatch<SetStateAction<PlanDay[]>>;
   loading?: boolean;
+  progressionStrategy: ProgressionStrategy;
+  setProgressionStrategy: Dispatch<SetStateAction<ProgressionStrategy>>;
+  startDate: string;
+  setStartDate: Dispatch<SetStateAction<string>>;
 };
 
 const DEFAULT_SET_REST = 90;
@@ -44,10 +50,11 @@ function estimateDuration(day: PlanDay) {
   return Math.max(1, Math.round((work + intra + between) / 60));
 }
 
-export default function PlanBuilder({ days, setDays, loading = false }: Props) {
+export default function PlanBuilder({ days, setDays, loading = false, progressionStrategy, setProgressionStrategy, startDate, setStartDate }: Props) {
   const [activeDayIndex, setActiveDayIndex] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
   const [advanced, setAdvanced] = useState<Record<string, boolean>>({});
+  const [swapOpen, setSwapOpen] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (activeDayIndex >= days.length) setActiveDayIndex(Math.max(0, days.length - 1));
@@ -66,6 +73,16 @@ export default function PlanBuilder({ days, setDays, loading = false }: Props) {
       exercises: day.exercises.map((exercise, ei) => ei === exerciseIndex ? { ...exercise, ...patch } : exercise),
     }));
   }
+  function swapExercise(index: number, replacement: string) {
+    if (!activeDay) return;
+    const current = activeDay.exercises[index];
+    if (!current || !replacement.trim()) return;
+    const candidates = (current.alternatives || []).filter(name => name !== replacement && name.toLowerCase() !== current.name.toLowerCase());
+    const nextAlternatives = Array.from(new Set([...candidates, current.name])).slice(-3);
+    updateExercise(activeDayIndex, index, { name: replacement, alternatives: nextAlternatives });
+    setSwapOpen(old => ({ ...old, [`${activeDay.day_key}-${index}`]: false }));
+  }
+
   function addExercise() {
     if (!activeDay || activeDay.exercises.length >= MAX_EXERCISES) return;
     setDays(old => old.map((day, i) => i === activeDayIndex ? {
@@ -112,14 +129,39 @@ export default function PlanBuilder({ days, setDays, loading = false }: Props) {
       </div>
 
       <div className="sf-builder-summary-grid">
-        <div><span>Dni treningowe</span><strong>{days.length}<small> / {MAX_DAYS}</small></strong></div>
-        <div><span>Ćwiczenia</span><strong>{totalExercises}</strong></div>
-        <div><span>Serie łącznie</span><strong>{totalSets}</strong></div>
+        <div><span>Treningi w tygodniu</span><strong>{days.length}<small> / {MAX_DAYS}</small></strong></div>
+        <div><span>Ćwiczenia tygodniowo</span><strong>{totalExercises}</strong></div>
+        <div><span>Serie bazowe</span><strong>{totalSets}</strong></div>
       </div>
+
+      <section className="sf-month-program-card" aria-label="Ustawienia miesięcznego programu">
+        <div className="sf-month-program-heading">
+          <span className="sf-month-program-icon"><Clock3 size={19}/></span>
+          <div><p className="sf-eyebrow">PROGRAM NA 4 TYGODNIE</p><h3>Ustaw start i sposób progresji</h3><p>Układ tygodniowy powtarza się przez 4 tygodnie. Program trwa od {formatProgramDate(startDate)} do {formatProgramDate(getProgramEndDate(startDate))}. Progresja dostosowuje parametry kolejnych tygodni — nie trzeba ręcznie tworzyć 28 osobnych dni.</p></div>
+        </div>
+        <div className="sf-month-program-fields">
+          <label>Data rozpoczęcia programu<input type="date" value={startDate} onChange={event => setStartDate(event.target.value)} required /></label>
+          <label>Specyfika progresu<select value={progressionStrategy} onChange={event => setProgressionStrategy(event.target.value as ProgressionStrategy)}>{PROGRESSION_OPTIONS.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>
+        </div>
+        {isProgramComplete(startDate) && <div className="sf-month-program-complete"><b>Ten blok 4-tygodniowy dobiegł końca.</b><span>Ustaw nową datę rozpoczęcia, aby rozpocząć kolejny miesiąc programu.</span></div>}
+        <div className="sf-month-progression-explainer"><b>{progressionOption(progressionStrategy).shortLabel}</b><span>{progressionOption(progressionStrategy).explanation}</span></div>
+        <div className="sf-month-week-preview">
+          {[1, 2, 3, 4].map(week => {
+            const example = days.flatMap(day => day.exercises).find(exercise => exercise.name.trim());
+            const prescribed = example ? exerciseForProgramWeek(example, progressionStrategy, week) : null;
+            const value = !prescribed ? 'Dodaj ćwiczenia' : progressionStrategy === 'weight'
+              ? prescribed.weight_kg != null ? `${prescribed.weight_kg} kg` : 'Mały wzrost ciężaru, jeśli technika jest dobra'
+              : progressionStrategy === 'none' ? `${prescribed.sets} ser. × ${prescribed.reps} powt.`
+              : progressionStrategy === 'sets' ? `${prescribed.sets} ser. × ${prescribed.reps} powt.`
+              : `${prescribed.sets} ser. × ${prescribed.reps} powt.`;
+            return <div className="sf-month-week-chip" key={week}><span>TYDZIEŃ {week}</span><b>{value}</b><small>{week === 1 ? 'Punkt wyjścia' : progressionStrategy === 'none' ? 'Stałe parametry' : 'Progresja względem bazy'}</small></div>;
+          })}
+        </div>
+      </section>
 
       {!showPreview ? <>
         <div className="sf-builder-section-heading">
-          <div><p className="sf-eyebrow">KROK 1</p><h4>Ułóż swój tydzień treningowy</h4><p>Wybierz dzień, dodaj ćwiczenia i ustaw parametry każdej pozycji. Możesz wracać do dni i zmieniać ich zawartość.</p></div>
+          <div><p className="sf-eyebrow">KROK 1</p><h4>Ułóż tygodniowy schemat treningów</h4><p>Dodaj od 1 do 7 różnych jednostek. Ten schemat będzie powtarzany przez 4 tygodnie, a wybrana progresja ustawi parametry kolejnych tygodni.</p></div>
           <span className="sf-builder-heading-mark"><WandSparkles size={20}/></span>
         </div>
 
@@ -159,6 +201,16 @@ export default function PlanBuilder({ days, setDays, loading = false }: Props) {
                   </div>
                 </div>
 
+                {Boolean(exercise.alternatives?.length) && <div className="sf-builder-swap-area">
+                  <button type="button" className={`sf-builder-swap-toggle ${swapOpen[key] ? 'is-open' : ''}`} aria-expanded={Boolean(swapOpen[key])} onClick={() => setSwapOpen(old => ({ ...old, [key]: !old[key] }))}>
+                    <RotateCcw size={15}/><span>Zamień ćwiczenie</span><small>{exercise.alternatives?.length || 0} zamienniki</small><span className="sf-builder-swap-chevron">{swapOpen[key] ? '−' : '+'}</span>
+                  </button>
+                  {swapOpen[key] && <div className="sf-builder-swap-list" aria-label={`Zamienniki ćwiczenia ${exercise.name}`}>
+                    <p>Wybierz zamiennik. Serie, powtórzenia i przerwy pozostaną bez zmian.</p>
+                    {(exercise.alternatives || []).map((alternative, alternativeIndex) => <button type="button" className="sf-builder-swap-option" key={`${alternative}-${alternativeIndex}`} onClick={() => swapExercise(index, alternative)}><span>{String(alternativeIndex + 1).padStart(2, '0')}</span><b>{alternative}</b><ChevronRight size={15}/></button>)}
+                  </div>}
+                </div>}
+
                 <div className="sf-builder-prescription-grid">
                   <label><span>Serie</span><input type="number" min="1" max="30" step="1" required value={exercise.sets} onChange={e => updateExercise(activeDayIndex, index, { sets: e.target.value === '' ? 1 : Number(e.target.value) })}/></label>
                   <label><span>Powtórzenia</span><input type="number" min="1" max="200" step="1" required value={exercise.reps} onChange={e => updateExercise(activeDayIndex, index, { reps: e.target.value === '' ? 1 : Number(e.target.value) })}/></label>
@@ -189,7 +241,7 @@ export default function PlanBuilder({ days, setDays, loading = false }: Props) {
         </div>
       </> : <div className="sf-builder-review">
         <div className="sf-builder-section-heading"><div><p className="sf-eyebrow">KROK 2</p><h4>Sprawdź plan przed zapisem</h4><p>Przejrzyj strukturę i wróć do dowolnego dnia, jeśli chcesz coś poprawić.</p></div><span className="sf-builder-heading-mark"><CheckCircle2 size={20}/></span></div>
-        <div className="sf-builder-review-summary"><div><small>Dni</small><strong>{days.length}</strong></div><div><small>Ćwiczenia</small><strong>{totalExercises}</strong></div><div><small>Serie</small><strong>{totalSets}</strong></div><div><small>Łączny szac. czas</small><strong>{days.reduce((n, day) => n + estimateDuration(day), 0)} min</strong></div></div>
+        <div className="sf-builder-review-summary"><div><small>Tygodnie</small><strong>4</strong></div><div><small>Treningi / tydzień</small><strong>{days.length}</strong></div><div><small>Ćwiczenia / tydzień</small><strong>{totalExercises}</strong></div><div><small>Start programu</small><strong>{startDate || "—"}</strong></div></div>
         <div className="sf-builder-review-days">{days.map((day, index) => <article className="sf-builder-review-day" key={`${day.day_key}-${index}`}>
           <div className="sf-builder-review-day-heading"><div><span>DZIEŃ {index + 1}</span><h5>{day.title || `Dzień ${index + 1}`}</h5></div><button type="button" className="sf-button sf-button-outline sf-button-sm" onClick={() => { setActiveDayIndex(index); setShowPreview(false); }}>Edytuj <ChevronRight size={14}/></button></div>
           {day.exercises.length ? <div className="sf-builder-review-exercises">{day.exercises.map((exercise, exerciseIndex) => <div key={`${exercise.name}-${exerciseIndex}`}><span className="sf-builder-review-index">{String(exerciseIndex + 1).padStart(2, '0')}</span><div><b>{exercise.name || 'Ćwiczenie bez nazwy'}</b><small>{exercise.sets} serie × {exercise.reps} powt. {exercise.weight_kg != null ? `· ${exercise.weight_kg} kg` : '· bez określonego ciężaru'}</small><small>Przerwa: {secondsLabel(Number(exercise.rest_seconds ?? DEFAULT_SET_REST))} · po ćwiczeniu: {secondsLabel(Number(exercise.transition_rest_seconds ?? DEFAULT_EXERCISE_REST))}</small></div></div>)}</div> : <div className="sf-builder-review-empty">Dodaj ćwiczenia do tego dnia przed zapisaniem planu.</div>}
