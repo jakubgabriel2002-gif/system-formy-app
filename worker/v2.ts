@@ -379,7 +379,11 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     // Plany użytkownika: dowolna liczba planów, dni i ćwiczeń.
     if (path === '/api/v2/training/plans' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      const premiumEntitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1").bind(gate.session!.id).first<{ id: string }>();
+      const isPremium = Boolean(premiumEntitlement), planLimit = isPremium ? 3 : 1;
       const plans = await env.DB.prepare('SELECT id,name,description,created_at,updated_at FROM training_plans_v2 WHERE user_id=? ORDER BY updated_at DESC').bind(gate.session!.id).all<{ id: string; name: string; description: string; created_at: string; updated_at: string }>();
+      const customPlanCountRow = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 WHERE user_id=? AND name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia')").bind(gate.session!.id).first<{ count: number }>();
+      const customPlansUsed = Number(customPlanCountRow?.count || 0);
       const output = [] as Array<Record<string, unknown>>;
       for (const plan of plans.results) {
         const days = await env.DB.prepare('SELECT id,day_key,title,sort_order FROM training_plan_days_v2 WHERE plan_id=? ORDER BY sort_order,day_key').bind(plan.id).all<{ id: string; day_key: string; title: string; sort_order: number }>();
@@ -391,12 +395,34 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         output.push({ ...plan, days: dayOutput });
       }
       const legacy = await env.DB.prepare('SELECT day_key,title,exercises_json,updated_at FROM training_plan_days WHERE user_id=? ORDER BY day_key').bind(gate.session!.id).all();
-      return v2Reply({ plans: output, legacy: legacy.results });
+      return v2Reply({ plans: output, legacy: legacy.results, is_premium: isPremium, plan_limit: planLimit, plans_used: customPlansUsed });
     }
     if (path === '/api/v2/training/plans' && method === 'POST') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       const b = await v2Body(request), name = v2Field(b, 'name', 120), description = v2Field(b, 'description', 1000);
       if (name.length < 2) return v2Reply({ error: 'Nazwa planu musi mieć co najmniej 2 znaki.' }, 400);
+      // Gotowe plany przykładowe są dostępne bez uzupełniania profilu.
+      // Każdy inny plan wymaga podstawowych danych profilu po stronie serwera.
+      const sampleNames = ['Plan przykładowy — dom bez sprzętu', 'Plan przykładowy — siłownia'];
+      const isSamplePlan = b.source === 'sample' && sampleNames.includes(name);
+      if (sampleNames.includes(name) && !isSamplePlan) return v2Reply({ error: 'Ta nazwa jest zarezerwowana dla planu przykładowego. Wybierz inną nazwę dla własnego planu.' }, 400);
+      if (isSamplePlan) {
+        const duplicateSample = await env.DB.prepare('SELECT id FROM training_plans_v2 WHERE user_id=? AND name=? LIMIT 1').bind(gate.session!.id, name).first<{ id: string }>();
+        if (duplicateSample) return v2Reply({ error: 'Ten plan przykładowy jest już zapisany na koncie.' }, 409);
+      }
+      if (!isSamplePlan) {
+        const profile = await env.DB.prepare('SELECT first_name,primary_goal,training_location,training_days_per_week FROM user_profiles WHERE user_id=? LIMIT 1').bind(gate.session!.id).first<{ first_name: string | null; primary_goal: string | null; training_location: string | null; training_days_per_week: number | null }>();
+        if (!profile?.first_name?.trim() || !profile.primary_goal || !profile.training_location || !profile.training_days_per_week) {
+          return v2Reply({ error: 'Przed utworzeniem własnego planu uzupełnij profil: imię, główny cel, miejsce treningu i liczbę treningów w tygodniu.' }, 403);
+        }
+      }
+      const premiumEntitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1").bind(gate.session!.id).first<{ id: string }>();
+      const isPremium = Boolean(premiumEntitlement), planLimit = isPremium ? 3 : 1;
+      const planCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 WHERE user_id=? AND name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia')").bind(gate.session!.id).first<{ count: number }>();
+      const plansUsed = Number(planCount?.count || 0);
+      if (!isSamplePlan && plansUsed >= planLimit) {
+        return v2Reply({ error: isPremium ? 'Konto Premium może mieć maksymalnie 3 zapisane plany treningowe. Usuń jeden z obecnych planów, aby dodać kolejny.' : 'Na zwykłym koncie możesz mieć 1 zapisany plan treningowy. Usuń obecny plan albo uzyskaj dostęp Premium, aby móc zapisać do 3 planów.', is_premium: isPremium, plan_limit: planLimit, plans_used: plansUsed }, 409);
+      }
       const now = new Date().toISOString(), id = crypto.randomUUID();
       await env.DB.prepare('INSERT INTO training_plans_v2(id,user_id,name,description,created_at,updated_at) VALUES(?,?,?,?,?,?)').bind(id, gate.session!.id, name, description, now, now).run();
       return v2Reply({ ok: true, plan: { id, name, description, created_at: now, updated_at: now, days: [] } }, 201);
@@ -409,6 +435,15 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (method === 'DELETE') { await env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id IN (SELECT id FROM training_plan_days_v2 WHERE plan_id=?)').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plans_v2 WHERE id=? AND user_id=?').bind(plan.id, gate.session!.id).run(); return v2Reply({ ok: true }); }
       const b = await v2Body(request), name = v2Field(b, 'name', 120), description = v2Field(b, 'description', 1000), rawDays = Array.isArray(b.days) ? b.days : [];
       if (name.length < 2 || rawDays.length > 14) return v2Reply({ error: 'Sprawdź nazwę planu i liczbę dni (maksymalnie 14).' }, 400);
+      const sampleNames = ['Plan przykładowy — dom bez sprzętu', 'Plan przykładowy — siłownia'];
+      const wasSample = sampleNames.includes(plan.name), willBeSample = sampleNames.includes(name);
+      if (!wasSample && willBeSample) return v2Reply({ error: 'Ta nazwa jest zarezerwowana dla planu przykładowego. Wybierz inną nazwę.' }, 400);
+      if (wasSample && !willBeSample) {
+        const premiumEntitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1").bind(gate.session!.id).first<{ id: string }>();
+        const planLimit = premiumEntitlement ? 3 : 1;
+        const currentCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 WHERE user_id=? AND name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia')").bind(gate.session!.id).first<{ count: number }>();
+        if (Number(currentCount?.count || 0) >= planLimit) return v2Reply({ error: 'Nie możesz zmienić przykładowego planu w kolejny własny plan, ponieważ limit zapisanych planów został wykorzystany.' }, 409);
+      }
       const normalized: Array<{ day_key: string; title: string; exercises: Array<{ name: string; sets: number; reps: number; weight_kg: number | null; notes: string; rest_seconds: number; transition_rest_seconds: number }> }> = [];
       for (const raw of rawDays) {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return v2Reply({ error: 'Nieprawidłowy dzień planu.' }, 400);
