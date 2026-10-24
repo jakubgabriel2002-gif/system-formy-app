@@ -3,6 +3,7 @@ import WorkoutLanding from './WorkoutLanding';
 import WorkoutSession from './WorkoutSession';
 import WorkoutSummary from './WorkoutSummary';
 import type { WorkoutDraft, WorkoutExercise, WorkoutPlan, WorkoutPlanDay } from './workoutTypes';
+import { exerciseForProgramWeek, getProgramWeek, progressionOption, PROGRAM_WEEKS } from '../../lib/trainingProgram';
 import './workout.css';
 import './workout-fix-extra.css';
 
@@ -31,11 +32,24 @@ function localDate() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
+function sampleProgramStartDate(planId: string) {
+  const fallback = localDate();
+  try {
+    const key = `sf-sample-program-start:${planId}`;
+    const stored = window.localStorage.getItem(key);
+    if (stored && /^\d{4}-\d{2}-\d{2}$/.test(stored)) return stored;
+    window.localStorage.setItem(key, fallback);
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function exercisesForDay(day: WorkoutPlanDay): WorkoutExercise[] {
   return day.exercises.filter((exercise) => exercise.name.trim()).map((exercise) => ({
     name: exercise.name.trim(),
     notes: exercise.notes,
+    progression_note: 'progression_note' in exercise && typeof exercise.progression_note === 'string' ? exercise.progression_note : undefined,
     rest_seconds: Number(exercise.rest_seconds ?? 90),
     transition_rest_seconds: Number(exercise.transition_rest_seconds ?? 120),
     sets_detail: Array.from({ length: Math.max(1, Math.min(30, Number(exercise.sets) || 3)) }, () => ({
@@ -49,33 +63,55 @@ function exercisesForDay(day: WorkoutPlanDay): WorkoutExercise[] {
 const SAMPLE_PLANS: WorkoutPlan[] = [
   {
     id: 'sample:home',
-    name: 'Przykładowy trening w domu',
-    description: 'Prosty trening z masą własnego ciała — bez specjalistycznego sprzętu.',
-    days: [{
-      day_key: 'home-a',
-      title: 'Całe ciało — dom',
-      exercises: [
-        { name: 'Pompki', sets: 4, reps: 10 },
-        { name: 'Przysiady', sets: 3, reps: 15 },
-        { name: 'Wykroki', sets: 3, reps: 10 },
-        { name: 'Plank (sekundy)', sets: 3, reps: 30 },
-      ],
-    }],
+    name: 'Przykładowy plan — trening w domu',
+    description: 'Czterotygodniowy program z masą własnego ciała. Dobierz łatwiejszy wariant, jeśli jest potrzebny.',
+    duration_weeks: PROGRAM_WEEKS, progression_strategy: 'reps',
+    days: [
+      { day_key: 'A', title: 'Dzień A — całe ciało', exercises: [
+        { name: 'Pompki w dostosowanym wariancie', sets: 3, reps: 8, notes: 'Wybierz wariant, w którym zachowujesz pełną kontrolę ruchu.' },
+        { name: 'Przysiady bez obciążenia', sets: 3, reps: 12 },
+        { name: 'Most biodrowy', sets: 3, reps: 12 },
+        { name: 'Plank', sets: 3, reps: 25, notes: 'Czas utrzymania pozycji w sekundach; nie zwiększaj go automatycznie przez dodawanie powtórzeń.' },
+      ] },
+      { day_key: 'B', title: 'Dzień B — nogi i brzuch', exercises: [
+        { name: 'Wykroki w tył na stronę', sets: 3, reps: 8 },
+        { name: 'Wspięcia na palce', sets: 3, reps: 15 },
+        { name: 'Dead bug na stronę', sets: 3, reps: 8 },
+        { name: 'Koci grzbiet', sets: 2, reps: 10, notes: 'Spokojna mobilizacja.' },
+      ] },
+      { day_key: 'C', title: 'Dzień C — całe ciało', exercises: [
+        { name: 'Pompki przy ścianie lub blacie', sets: 3, reps: 10 },
+        { name: 'Przysiady bez obciążenia', sets: 3, reps: 12 },
+        { name: 'Wykroki w miejscu', sets: 3, reps: 8 },
+        { name: 'Superman — unoszenie tułowia', sets: 2, reps: 10 },
+      ] },
+    ],
   },
   {
     id: 'sample:gym',
-    name: 'Przykładowy trening na siłowni',
-    description: 'Przykładowa sesja całego ciała. Dobierz ciężar do swoich możliwości.',
-    days: [{
-      day_key: 'gym-a',
-      title: 'Całe ciało — siłownia',
-      exercises: [
-        { name: 'Wyciskanie na ławce', sets: 3, reps: 10, weight_kg: null },
-        { name: 'Ściąganie drążka wyciągu', sets: 3, reps: 10, weight_kg: null },
-        { name: 'Wypychanie nóg na suwnicy', sets: 3, reps: 12, weight_kg: null },
+    name: 'Przykładowy plan — siłownia',
+    description: 'Czterotygodniowy program siłowy. Ciężar dobieraj do techniki i zapisanych wyników.',
+    duration_weeks: PROGRAM_WEEKS, progression_strategy: 'weight',
+    days: [
+      { day_key: 'A', title: 'Dzień A — całe ciało', exercises: [
+        { name: 'Wyciskanie na ławce', sets: 3, reps: 8, weight_kg: null },
+        { name: 'Ściąganie drążka wyciągu górnego', sets: 3, reps: 10, weight_kg: null },
+        { name: 'Wypychanie nóg na suwnicy', sets: 3, reps: 10, weight_kg: null },
+        { name: 'Plank', sets: 3, reps: 25, notes: 'Czas utrzymania pozycji w sekundach.' },
+      ] },
+      { day_key: 'B', title: 'Dzień B — nogi i plecy', exercises: [
+        { name: 'Martwy ciąg rumuński z hantlami', sets: 3, reps: 10, weight_kg: null },
+        { name: 'Wiosłowanie siedząc na wyciągu', sets: 3, reps: 10, weight_kg: null },
+        { name: 'Uginanie nóg na maszynie', sets: 3, reps: 12, weight_kg: null },
+        { name: 'Pallof press na wyciągu', sets: 2, reps: 10, weight_kg: null },
+      ] },
+      { day_key: 'C', title: 'Dzień C — góra ciała', exercises: [
         { name: 'Wyciskanie hantli nad głowę', sets: 3, reps: 10, weight_kg: null },
-      ],
-    }],
+        { name: 'Wiosłowanie z podparciem klatki', sets: 3, reps: 10, weight_kg: null },
+        { name: 'Hip thrust', sets: 3, reps: 10, weight_kg: null },
+        { name: 'Face pull', sets: 2, reps: 12, weight_kg: null },
+      ] },
+    ],
   },
 ];
 
@@ -165,14 +201,19 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
   const start = (plan: WorkoutPlan, dayKey: string) => {
     const day = plan.days.find((item) => item.day_key === dayKey);
     if (!day) return;
-    const nextExercises = exercisesForDay(day);
+    const week = getProgramWeek(plan.start_date || localDate(), new Date(), plan.duration_weeks || PROGRAM_WEEKS);
+    const adjustedDay: WorkoutPlanDay = {
+      ...day,
+      exercises: day.exercises.map((exercise) => exerciseForProgramWeek(exercise, plan.progression_strategy || 'reps', week)),
+    };
+    const nextExercises = exercisesForDay(adjustedDay);
     if (!nextExercises.length) {
       setError('Ten dzień nie ma ćwiczeń. Dodaj je w kreatorze planów.');
       return;
     }
     const now = Date.now();
     const next: WorkoutDraft = {
-      title: `${plan.name} — ${day.title}`.slice(0, 120),
+      title: `${plan.name} — ${day.title} — Tydzień ${week}/${plan.duration_weeks || PROGRAM_WEEKS}`.slice(0, 120),
       performed_on: localDate(), notes: '', exercises: nextExercises,
       plan_id: plan.id, day_key: day.day_key, started: true, started_at: now,
     };
@@ -278,7 +319,7 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
     </section>;
   }
 
-  const availablePlans = [...plans, ...SAMPLE_PLANS];
+  const availablePlans = [...plans, ...SAMPLE_PLANS.map(plan => ({ ...plan, start_date: plan.start_date || sampleProgramStartDate(plan.id), duration_weeks: plan.duration_weeks || PROGRAM_WEEKS, progression_strategy: plan.progression_strategy || 'reps' }))];
   return <section className="sf-view">
     {error && <p role="alert" className="sf-wm-error">{error}</p>}
     <WorkoutLanding

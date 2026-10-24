@@ -1,5 +1,10 @@
 import { ArrowRight, Clock3, Dumbbell, Play, RotateCcw } from 'lucide-react';
 import type { WorkoutDraft, WorkoutPlan } from './workoutTypes';
+import { formatProgramDate, getProgramEndDate, getProgramWeek, isProgramComplete, progressionOption, PROGRAM_WEEKS } from '../../lib/trainingProgram';
+
+function visiblePlanDescription(value?: string) {
+  return (value || '').replace(/^\[\[SF_LOCATION:(home|gym)\]\]\n?/, '').trim();
+}
 
 type Props = {
   plans: WorkoutPlan[];
@@ -57,10 +62,11 @@ export default function WorkoutLanding({
               <article className="sf-wm-plan-card" key={plan.id}>
                 <div className="sf-wm-plan-top">
                   <div className="sf-wm-plan-icon"><Dumbbell size={20} /></div>
-                  <span>{plan.days.length} {plan.days.length === 1 ? 'dzień' : 'dni'}</span>
+                  <span>{plan.days.length} treningi/tydz. · {plan.duration_weeks || PROGRAM_WEEKS} tyg.</span>
                 </div>
                 <h2>{plan.name}</h2>
-                {plan.description && <p className="sf-wm-plan-description">{plan.description}</p>}
+                <div className="sf-wm-plan-month-meta">{isProgramComplete(plan.start_date, new Date(), plan.duration_weeks || PROGRAM_WEEKS) ? 'Program zakończony · ' : `Tydzień ${getProgramWeek(plan.start_date)} z ${plan.duration_weeks || PROGRAM_WEEKS} · `}{progressionOption(plan.progression_strategy).shortLabel} · {formatProgramDate(plan.start_date)}–{formatProgramDate(getProgramEndDate(plan.start_date, plan.duration_weeks || PROGRAM_WEEKS))}</div>
+                {visiblePlanDescription(plan.description) && <p className="sf-wm-plan-description">{visiblePlanDescription(plan.description)}</p>}
                 <div className="sf-wm-day-list">
                   {plan.days.map((day, index) => (
                     <div className="sf-wm-day-row" key={`${plan.id}-${day.day_key}-${index}`}>
@@ -94,7 +100,8 @@ export default function WorkoutLanding({
               <span>{plan.id === 'sample:home' ? 'BEZ SPRZĘTU' : 'SIŁOWNIA'}</span>
             </div>
             <h2>{plan.name}</h2>
-            {plan.description && <p className="sf-wm-plan-description">{plan.description}</p>}
+            <div className="sf-wm-plan-month-meta">{isProgramComplete(plan.start_date, new Date(), plan.duration_weeks || PROGRAM_WEEKS) ? 'Program zakończony · ' : `Tydzień ${getProgramWeek(plan.start_date)} z ${plan.duration_weeks || PROGRAM_WEEKS} · `}{progressionOption(plan.progression_strategy).shortLabel} · {formatProgramDate(plan.start_date)}–{formatProgramDate(getProgramEndDate(plan.start_date, plan.duration_weeks || PROGRAM_WEEKS))}</div>
+            {visiblePlanDescription(plan.description) && <p className="sf-wm-plan-description">{visiblePlanDescription(plan.description)}</p>}
             {plan.days.map((day) => (
               <div className="sf-wm-day-row" key={day.day_key}>
                 <div>

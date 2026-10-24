@@ -136,6 +136,7 @@ export default function WorkoutSession({ title, elapsedLabel = "00:00", exercise
                 <div className="sf-wm-session-clock sf-wm-register-clock" role="timer" aria-live="off"><span>CZAS TRENINGU</span><strong>{elapsedLabel}</strong></div>
               </div>
               <div className="sf-wm-register-heading"><div><span className="sf-wm-label">ZAPISZ WYKONANĄ SERIĘ</span><h3>Wpisz wynik</h3></div><div className="sf-wm-register-target"><Dumbbell size={15}/><span>Plan: {current.sets_detail[activeSetIndex].reps} powt.</span></div></div>
+              {current.progression_note && <div className="sf-wm-progression-note"><span><TrendingUpPlaceholder /></span><p>{current.progression_note}</p></div>}
               <div className="sf-wm-register-inputs">
                 <label>Powtórzenia<input inputMode="numeric" type="number" min="1" max="200" value={activeSet.reps} onChange={(event) => patchSet(activeExercise, activeSetIndex, { reps: event.target.value === "" ? 1 : clampNumber(Number(event.target.value), 1, 200) })}/></label>
                 <label>Ciężar (kg)<input inputMode="decimal" type="number" min="0" max="1000" step="0.5" placeholder="Np. 20 kg" value={activeSet.weight_kg ?? ""} onChange={(event) => patchSet(activeExercise, activeSetIndex, { weight_kg: event.target.value === "" ? null : clampNumber(Number(event.target.value), 0, 1000) })}/></label>
@@ -163,4 +164,9 @@ export default function WorkoutSession({ title, elapsedLabel = "00:00", exercise
       </div>
     </section>
   );
+}
+
+
+function TrendingUpPlaceholder() {
+  return <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m3 17 6-6 4 3 7-8"/><path d="M14 6h6v6"/></svg>;
 }

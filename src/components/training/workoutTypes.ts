@@ -8,6 +8,7 @@ export type WorkoutExercise = {
   name: string;
   sets_detail: WorkoutSet[];
   notes?: string;
+  progression_note?: string;
   rest_seconds?: number;
   transition_rest_seconds?: number;
 };
@@ -31,6 +32,9 @@ export type WorkoutPlan = {
   name: string;
   description?: string;
   days: WorkoutPlanDay[];
+  duration_weeks?: number;
+  start_date?: string | null;
+  progression_strategy?: 'reps' | 'weight' | 'sets' | 'none';
 };
 
 export type WorkoutDraft = {
