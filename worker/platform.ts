@@ -1,5 +1,5 @@
 import { handleV2Api } from './v2';
-interface PlatformEnv { DB: D1Database; PRODUCT_FILES?: R2Bucket; ADMIN_EMAIL?: string; STRIPE_SECRET_KEY?: string; STRIPE_WEBHOOK_SECRET?: string; }
+interface PlatformEnv { DB: D1Database; AI?: { run(model: string, input: Record<string, unknown>): Promise<unknown> }; PRODUCT_FILES?: R2Bucket; ADMIN_EMAIL?: string; STRIPE_SECRET_KEY?: string; STRIPE_WEBHOOK_SECRET?: string; }
 type Session = { id: string; email: string };
 type Body = Record<string, unknown>;
 type Product = { id:string;product_key:string;title:string;description:string;product_type:string;price_amount:number;currency:string;is_free:number;is_published:number;checkout_url:string|null;file_key:string;original_filename:string;file_content_type:string;created_at:string;updated_at:string };

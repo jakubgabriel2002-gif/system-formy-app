@@ -1,5 +1,6 @@
 interface V2Env {
   DB: D1Database;
+  AI?: { run(model: string, input: Record<string, unknown>): Promise<unknown> };
   PRODUCT_FILES?: R2Bucket;
   ADMIN_EMAIL?: string;
   STRIPE_SECRET_KEY?: string;
@@ -63,7 +64,7 @@ async function v2Gate(request: Request, env: V2Env, admin = false): Promise<{ se
 function v2SafeFilename(name: string): string {
   return (name.split(/[\\/]/).pop() || 'material').normalize('NFKD').replace(/[^\w.\- ]/g, '').trim().replace(/\s+/g, '_').slice(0, 140) || 'material';
 }
-function v2ValidateDate(value: string): boolean { return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value + 'T12:00:00Z')); }
+function v2ValidateDate(value: string): boolean { if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false; const [year, month, day] = value.split('-').map(Number); const date = new Date(Date.UTC(year, month - 1, day)); return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day; }
 async function v2DisplayNumber(env: V2Env, createdAt: string): Promise<string> {
   const year = Number(createdAt.slice(0, 4)) || new Date().getUTCFullYear();
   const row = await env.DB.prepare('INSERT INTO order_number_sequences(year,last_number) VALUES (?,1) ON CONFLICT(year) DO UPDATE SET last_number=last_number+1 RETURNING last_number').bind(year).first<{ last_number: number }>();
@@ -376,12 +377,132 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       return v2Reply({ materials: rows.results });
     }
 
+    // Generator treningów AI: wywołanie modelu wyłącznie po stronie Workera, z historią przypisaną do konta.
+    if (path === '/api/v2/training/ai/history' && method === 'GET') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      const totals = await env.DB.prepare("SELECT COUNT(*) AS total_generations, SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS successful_generations FROM ai_plan_generations WHERE user_id=?").bind(gate.session!.id).first<{ total_generations: number; successful_generations: number | null }>();
+      const recent = await env.DB.prepare('SELECT id,generation_number,model,status,goal,level,location,days_count,duration_minutes,duration_weeks,start_date,progression_strategy,prompt_tokens,completion_tokens,total_tokens,saved_plan_id,created_at,completed_at FROM ai_plan_generations WHERE user_id=? ORDER BY generation_number DESC LIMIT 8').bind(gate.session!.id).all();
+      return v2Reply({ total_generations: Number(totals?.total_generations || 0), successful_generations: Number(totals?.successful_generations || 0), recent: recent.results });
+    }
+    if (path === '/api/v2/training/ai/generate' && method === 'POST') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      if (!env.AI) return v2Reply({ error: 'Workers AI nie jest podłączone. Dodaj binding AI do ustawień Cloudflare i ponownie wdroż aplikację.' }, 503);
+      const b = await v2Body(request);
+      const allowedGoals = ['muscle', 'strength', 'fat-loss', 'general'];
+      const allowedLevels = ['beginner', 'intermediate', 'advanced'];
+      const allowedPlaces = ['home', 'gym'];
+      const allowedEquipment = ['none', 'bands', 'dumbbells', 'both', 'gym'];
+      const allowedFocus = ['balanced', 'upper', 'lower', 'conditioning'];
+      const allowedProgressions = ['reps', 'weight', 'sets', 'none'];
+      const goal = typeof b.goal === 'string' ? b.goal : 'muscle';
+      const level = typeof b.level === 'string' ? b.level : 'beginner';
+      const location = typeof b.location === 'string' ? b.location : 'home';
+      const equipment = typeof b.equipment === 'string' ? b.equipment : (location === 'gym' ? 'gym' : 'none');
+      const focus = typeof b.focus === 'string' ? b.focus : 'balanced';
+      const progressionStrategy = typeof b.progression_strategy === 'string' && allowedProgressions.includes(b.progression_strategy) ? b.progression_strategy : 'reps';
+      const rawStartDate = typeof b.start_date === 'string' ? b.start_date.trim() : '';
+      const startDate = rawStartDate || new Date().toISOString().slice(0, 10);
+      const durationWeeks = 4;
+      const days = Number(b.days), duration = Number(b.duration);
+      if (!allowedGoals.includes(goal) || !allowedLevels.includes(level) || !allowedPlaces.includes(location) || !allowedEquipment.includes(equipment) || !allowedFocus.includes(focus) || !allowedProgressions.includes(progressionStrategy) || !v2ValidateDate(startDate) || !Number.isInteger(days) || days < 1 || days > 7 || ![30,45,60,75].includes(duration) || (location === 'home' && equipment === 'gym')) {
+        return v2Reply({ error: 'Sprawdź ustawienia celu, poziomu, miejsca, sprzętu, liczby dni i czasu treningu.' }, 400);
+      }
+      const recentAttempt = await env.DB.prepare('SELECT created_at FROM ai_plan_generations WHERE user_id=? ORDER BY created_at DESC LIMIT 1').bind(gate.session!.id).first<{ created_at: string }>();
+      if (recentAttempt?.created_at && Date.now() - Date.parse(recentAttempt.created_at) < 8000) return v2Reply({ error: 'Odczekaj kilka sekund przed kolejną generacją. Chroni to przed przypadkowym podwójnym naliczeniem zapytania.' }, 429);
+      const model = '@cf/meta/llama-3.1-8b-instruct-fast';
+      const now = new Date().toISOString(), generationId = crypto.randomUUID();
+      const requestData = { goal, level, location, equipment, focus, days, duration, duration_weeks: durationWeeks, start_date: startDate, progression_strategy: progressionStrategy };
+      const inserted = await env.DB.prepare("INSERT INTO ai_plan_generations(id,user_id,generation_number,model,goal,level,location,equipment,focus,days_count,duration_minutes,duration_weeks,start_date,progression_strategy,request_json,status,created_at) VALUES(?,?,(SELECT COALESCE(MAX(generation_number),0)+1 FROM ai_plan_generations WHERE user_id=?),?,?,?,?,?,?,?,?,?,?,?,?,'pending',?) RETURNING generation_number").bind(generationId, gate.session!.id, gate.session!.id, model, goal, level, location, equipment, focus, days, duration, durationWeeks, startDate, progressionStrategy, JSON.stringify(requestData), now).first<{ generation_number: number }>();
+      const generationNumber = Number(inserted?.generation_number || 1);
+      const goalLabel: Record<string,string> = { muscle: 'budowa mięśni', strength: 'rozwój siły', 'fat-loss': 'redukcja tkanki tłuszczowej', general: 'ogólna sprawność' };
+      const levelLabel: Record<string,string> = { beginner: 'początkujący', intermediate: 'średniozaawansowany', advanced: 'zaawansowany' };
+      const focusLabel: Record<string,string> = { balanced: 'zrównoważony plan całego ciała', upper: 'większy nacisk na górne partie ciała', lower: 'większy nacisk na nogi i pośladki', conditioning: 'kondycja' };
+      const progressionLabel: Record<string,string> = { reps: 'progresja powtórzeń', weight: 'progresja ciężaru', sets: 'progresja liczby serii', none: 'stałe parametry bez automatycznej progresji' };
+      const exerciseCount = duration <= 30 ? 4 : duration <= 45 ? 5 : 6;
+      const schema = {
+        type: 'object',
+        properties: { days: { type: 'array', items: { type: 'object', properties: {
+          title: { type: 'string' },
+          exercises: { type: 'array', items: { type: 'object', properties: {
+            name: { type: 'string' }, sets: { type: 'integer' }, reps: { type: 'integer' }, notes: { type: 'string' },
+            rest_seconds: { type: 'integer' }, transition_rest_seconds: { type: 'integer' },
+            alternatives: { type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 3 }
+          }, required: ['name','sets','reps','notes','rest_seconds','transition_rest_seconds','alternatives'], additionalProperties: false } },
+        }, required: ['title','exercises'], additionalProperties: false } } }, required: ['days'], additionalProperties: false
+      };
+      const systemPrompt = 'Jesteś doświadczonym trenerem siłowym tworzącym zrównoważone, bezpieczne czterotygodniowe programy treningowe w języku polskim. Zwróć wyłącznie JSON zgodny ze schematem. Model ma tworzyć bazowy tygodniowy rozkład od 1 do 7 różnych jednostek, a aplikacja będzie powtarzać go przez 4 tygodnie i stosować wybraną progresję. Nie generuj 28 osobnych dni ani nie zwiększaj samodzielnie parametrów progresji w bazowym planie. Uwzględniaj poziom użytkownika, regenerację i wybrane wyposażenie. Nie podawaj diagnoz medycznych ani nie obiecuj rezultatów. Każde ćwiczenie musi mieć dokładnie 3 różne zamienniki, bez powtarzania nazwy głównej. Zamienniki mają trenować zbliżony wzorzec ruchu i wymagać tego samego lub łatwiej dostępnego sprzętu. Dla treningu domowego bez sprzętu nie używaj maszyn, wyciągów ani hantli. Dla samych gum nie zakładaj hantli. Nie wpisuj konkretnych ciężarów. Ustawiaj liczbę serii i powtórzeń adekwatnie do celu i doświadczenia. Przy 6–7 dniach uwzględnij regenerację, a co najmniej jeden dzień zrób wyraźnie lżejszy. Zamiast maksymalnej objętości wybieraj jakość i wykonalność. Nie powtarzaj tego samego ćwiczenia głównego wiele razy w jednym dniu.';
+      const userPrompt = `Przygotuj program treningowy na 4 tygodnie (28 dni kalendarzowych) z bazowym tygodniowym harmonogramem dokładnie ${days} różnych jednostek treningowych. Początek programu: ${startDate}. Strategia progresji na kolejne tygodnie: ${progressionLabel[progressionStrategy]}. Każdy dzień wyjściowy jest wzorcem tygodniowym, a nie osobną datą kalendarzową; aplikacja sama zastosuje progresję w kolejnych tygodniach. Cel: ${goalLabel[goal]}. Poziom: ${levelLabel[level]}. Miejsce: ${location === 'home' ? 'dom' : 'siłownia'}. Sprzęt: ${equipment === 'none' ? 'brak sprzętu' : equipment === 'bands' ? 'gumy oporowe' : equipment === 'dumbbells' ? 'hantle' : equipment === 'both' ? 'gumy oporowe i hantle' : 'standardowe wyposażenie siłowni'}. Nacisk: ${focusLabel[focus]}. Czas na jednostkę: około ${duration} minut. Zaproponuj około ${exerciseCount} ćwiczeń na dzień (w dniu lekkiej mobilności może być mniej). Dni mają mieć polskie, krótkie nazwy. Każde ćwiczenie: name, sets, reps (liczba całkowita; dla izometrii/czasu wpisz sekundy w reps i objaśnij w notes), notes (krótko, może być pusty tekst), rest_seconds, transition_rest_seconds, alternatives (dokładnie 3 nazwy). Przerwy zwykle 45–150 sekund zależnie od ćwiczenia i celu. Zachowaj pełną zgodność ćwiczeń z miejscem i sprzętem. Odpowiedź ma mieć dokładnie ${days} elementów w days.`;
+      try {
+        const rawResult = await env.AI.run(model, {
+          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+          max_tokens: 4600,
+          temperature: 0.25,
+          response_format: { type: 'json_schema', json_schema: schema },
+        });
+        const aiResult = rawResult as Record<string, any>;
+        let payload: unknown = aiResult?.response ?? aiResult?.result ?? rawResult;
+        if (typeof payload === 'string') {
+          const stripped = payload.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+          payload = JSON.parse(stripped);
+        }
+        if (payload && typeof payload === 'object' && !Array.isArray(payload) && 'days' in (payload as Record<string,unknown>) === false && 'response' in (payload as Record<string,unknown>)) {
+          const nested = (payload as Record<string,unknown>).response;
+          if (typeof nested === 'string') payload = JSON.parse(nested);
+          else if (nested && typeof nested === 'object') payload = nested;
+        }
+        const planObject = payload as Record<string, unknown>;
+        if (!planObject || !Array.isArray(planObject.days) || planObject.days.length !== days) throw new Error('Model zwrócił niepełny plan. Wróć do formularza i ponów generowanie.');
+        const normalizedDays = planObject.days.map((rawDay, dayIndex) => {
+          if (!rawDay || typeof rawDay !== 'object' || Array.isArray(rawDay)) throw new Error('Odpowiedź AI zawiera nieprawidłowy dzień treningowy.');
+          const day = rawDay as Record<string,unknown>;
+          const title = typeof day.title === 'string' ? day.title.trim().slice(0,120) : '';
+          if (!title || !Array.isArray(day.exercises) || day.exercises.length < 3 || day.exercises.length > 8) throw new Error(`AI zwróciło nieprawidłową listę ćwiczeń w dniu ${dayIndex + 1}. Spróbuj ponownie.`);
+          const exercises = day.exercises.map((rawExercise) => {
+            if (!rawExercise || typeof rawExercise !== 'object' || Array.isArray(rawExercise)) throw new Error('AI zwróciło nieprawidłowe ćwiczenie.');
+            const ex = rawExercise as Record<string,unknown>;
+            const name = typeof ex.name === 'string' ? ex.name.trim().slice(0,120) : '';
+            const sets = Number(ex.sets), reps = Number(ex.reps), restSeconds = Number(ex.rest_seconds), transitionRestSeconds = Number(ex.transition_rest_seconds);
+            const notes = typeof ex.notes === 'string' ? ex.notes.trim().slice(0,500) : '';
+            const alternativesRaw = Array.isArray(ex.alternatives) ? ex.alternatives : [];
+            const alternatives = Array.from(new Set(alternativesRaw.filter((a): a is string => typeof a === 'string').map(a => a.trim().slice(0,120)).filter(a => a.length > 0 && a.toLowerCase() !== name.toLowerCase()))).slice(0,3);
+            if (!name || !Number.isInteger(sets) || sets < 1 || sets > 6 || !Number.isInteger(reps) || reps < 1 || reps > 100 || !Number.isInteger(restSeconds) || restSeconds < 30 || restSeconds > 300 || !Number.isInteger(transitionRestSeconds) || transitionRestSeconds < 30 || transitionRestSeconds > 240 || alternatives.length !== 3) throw new Error(`Nie udało się sprawdzić ćwiczenia „${name || 'bez nazwy'}” i jego trzech zamienników. Wygeneruj plan ponownie.`);
+            return { name, sets, reps, weight_kg: null, notes, rest_seconds: restSeconds, transition_rest_seconds: transitionRestSeconds, alternatives };
+          });
+          return { day_key: String.fromCharCode(65 + dayIndex), title: `Dzień ${dayIndex + 1} — ${title.replace(/^Dzień\s+\d+\s*[-—:]?\s*/i, '')}`, exercises };
+        });
+        const usage = aiResult?.usage && typeof aiResult.usage === 'object' ? aiResult.usage as Record<string,unknown> : {};
+        const inputTokens = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0) || null;
+        const outputTokens = Number(usage.completion_tokens ?? usage.output_tokens ?? 0) || null;
+        const totalTokens = Number(usage.total_tokens ?? ((inputTokens || 0) + (outputTokens || 0))) || null;
+        const completedAt = new Date().toISOString();
+        const output = { days: normalizedDays, duration_weeks: durationWeeks, start_date: startDate, progression_strategy: progressionStrategy, generation_id: generationId, generation_number: generationNumber, model, usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: totalTokens } };
+        await env.DB.prepare("UPDATE ai_plan_generations SET status='success',result_json=?,prompt_tokens=?,completion_tokens=?,total_tokens=?,completed_at=? WHERE id=? AND user_id=?").bind(JSON.stringify(output), inputTokens, outputTokens, totalTokens, completedAt, generationId, gate.session!.id).run();
+        const totals = await env.DB.prepare("SELECT COUNT(*) AS total_generations, SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS successful_generations FROM ai_plan_generations WHERE user_id=?").bind(gate.session!.id).first<{ total_generations: number; successful_generations: number | null }>();
+        return v2Reply({ ...output, total_generations: Number(totals?.total_generations || generationNumber), successful_generations: Number(totals?.successful_generations || 0) });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się wygenerować planu. Spróbuj ponownie.';
+        await env.DB.prepare("UPDATE ai_plan_generations SET status='failed',error_message=?,completed_at=? WHERE id=? AND user_id=?").bind(message.slice(0,400), new Date().toISOString(), generationId, gate.session!.id).run().catch(() => {});
+        console.error('System Formy AI plan generation error:', error);
+        return v2Reply({ error: message.includes('Model zwrócił') || message.includes('AI zwróciło') || message.includes('Nie udało się sprawdzić') ? message : 'Model AI nie zwrócił teraz poprawnego planu. Spróbuj ponownie za chwilę; ta próba została zapisana w historii generacji.' }, 502);
+      }
+    }
+    const aiHistoryLinkMatch = path.match(/^\/api\/v2\/training\/ai\/history\/([a-f0-9-]+)\/link$/i);
+    if (aiHistoryLinkMatch && method === 'POST') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      const b = await v2Body(request), planId = typeof b.plan_id === 'string' ? b.plan_id : '';
+      const ownedPlan = await env.DB.prepare('SELECT id FROM training_plans_v2 WHERE id=? AND user_id=?').bind(planId, gate.session!.id).first<{ id: string }>();
+      if (!ownedPlan) return v2Reply({ error: 'Nie znaleziono zapisanego planu.' }, 404);
+      const linked = await env.DB.prepare('UPDATE ai_plan_generations SET saved_plan_id=? WHERE id=? AND user_id=? AND status=\'success\'').bind(planId, aiHistoryLinkMatch[1], gate.session!.id).run();
+      if (!linked.meta.changes) return v2Reply({ error: 'Nie udało się powiązać generacji z planem.' }, 404);
+      return v2Reply({ ok: true });
+    }
+
     // Plany użytkownika: dowolna liczba planów, dni i ćwiczeń.
     if (path === '/api/v2/training/plans' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       const premiumEntitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1").bind(gate.session!.id).first<{ id: string }>();
       const isPremium = Boolean(premiumEntitlement), planLimit = isPremium ? 3 : 1;
-      const plans = await env.DB.prepare('SELECT id,name,description,created_at,updated_at FROM training_plans_v2 WHERE user_id=? ORDER BY updated_at DESC').bind(gate.session!.id).all<{ id: string; name: string; description: string; created_at: string; updated_at: string }>();
+      const plans = await env.DB.prepare('SELECT id,name,description,duration_weeks,start_date,progression_strategy,created_at,updated_at FROM training_plans_v2 WHERE user_id=? ORDER BY updated_at DESC').bind(gate.session!.id).all<{ id: string; name: string; description: string; duration_weeks: number; start_date: string | null; progression_strategy: string; created_at: string; updated_at: string }>();
       const customPlanCountRow = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 WHERE user_id=? AND name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia')").bind(gate.session!.id).first<{ count: number }>();
       const customPlansUsed = Number(customPlanCountRow?.count || 0);
       const output = [] as Array<Record<string, unknown>>;
@@ -389,8 +510,8 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const days = await env.DB.prepare('SELECT id,day_key,title,sort_order FROM training_plan_days_v2 WHERE plan_id=? ORDER BY sort_order,day_key').bind(plan.id).all<{ id: string; day_key: string; title: string; sort_order: number }>();
         const dayOutput = [] as Array<Record<string, unknown>>;
         for (const day of days.results) {
-          const exercises = await env.DB.prepare('SELECT id,name,sort_order,target_sets,target_reps,target_weight_kg,notes,rest_seconds,transition_rest_seconds FROM training_plan_exercises_v2 WHERE day_id=? ORDER BY sort_order').bind(day.id).all<{ id: string; name: string; sort_order: number; target_sets: number; target_reps: number; target_weight_kg: number | null; notes: string; rest_seconds: number; transition_rest_seconds: number }>();
-          dayOutput.push({ ...day, exercises: exercises.results.map(ex => ({ id: ex.id, name: ex.name, sort_order: ex.sort_order, sets: ex.target_sets, reps: ex.target_reps, weight_kg: ex.target_weight_kg, notes: ex.notes, rest_seconds: ex.rest_seconds ?? 90, transition_rest_seconds: ex.transition_rest_seconds ?? 120 })) });
+          const exercises = await env.DB.prepare('SELECT id,name,sort_order,target_sets,target_reps,target_weight_kg,notes,rest_seconds,transition_rest_seconds,alternatives_json FROM training_plan_exercises_v2 WHERE day_id=? ORDER BY sort_order').bind(day.id).all<{ id: string; name: string; sort_order: number; target_sets: number; target_reps: number; target_weight_kg: number | null; notes: string; rest_seconds: number; transition_rest_seconds: number; alternatives_json: string }>();
+          dayOutput.push({ ...day, exercises: exercises.results.map(ex => { let alternatives: string[] = []; try { const value = JSON.parse(ex.alternatives_json || '[]'); if (Array.isArray(value)) alternatives = value.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 3); } catch { alternatives = []; } return { id: ex.id, name: ex.name, sort_order: ex.sort_order, sets: ex.target_sets, reps: ex.target_reps, weight_kg: ex.target_weight_kg, notes: ex.notes, rest_seconds: ex.rest_seconds ?? 90, transition_rest_seconds: ex.transition_rest_seconds ?? 120, alternatives }; }) });
         }
         output.push({ ...plan, days: dayOutput });
       }
@@ -400,6 +521,12 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     if (path === '/api/v2/training/plans' && method === 'POST') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       const b = await v2Body(request), name = v2Field(b, 'name', 120), description = v2Field(b, 'description', 1000);
+      const durationWeeks = 4;
+      const requestedStartDate = typeof b.start_date === 'string' ? b.start_date.trim() : '';
+      const startDate = requestedStartDate || new Date().toISOString().slice(0, 10);
+      const allowedProgressions = ['reps', 'weight', 'sets', 'none'];
+      const progressionStrategy = typeof b.progression_strategy === 'string' && allowedProgressions.includes(b.progression_strategy) ? b.progression_strategy : 'reps';
+      if (!v2ValidateDate(startDate)) return v2Reply({ error: 'Wybierz prawidłową datę rozpoczęcia programu.' }, 400);
       if (name.length < 2) return v2Reply({ error: 'Nazwa planu musi mieć co najmniej 2 znaki.' }, 400);
       // Gotowe plany przykładowe są dostępne bez uzupełniania profilu.
       // Każdy inny plan wymaga podstawowych danych profilu po stronie serwera.
@@ -424,16 +551,22 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         return v2Reply({ error: isPremium ? 'Konto Premium może mieć maksymalnie 3 zapisane plany treningowe. Usuń jeden z obecnych planów, aby dodać kolejny.' : 'Na zwykłym koncie możesz mieć 1 zapisany plan treningowy. Usuń obecny plan albo uzyskaj dostęp Premium, aby móc zapisać do 3 planów.', is_premium: isPremium, plan_limit: planLimit, plans_used: plansUsed }, 409);
       }
       const now = new Date().toISOString(), id = crypto.randomUUID();
-      await env.DB.prepare('INSERT INTO training_plans_v2(id,user_id,name,description,created_at,updated_at) VALUES(?,?,?,?,?,?)').bind(id, gate.session!.id, name, description, now, now).run();
-      return v2Reply({ ok: true, plan: { id, name, description, created_at: now, updated_at: now, days: [] } }, 201);
+      await env.DB.prepare('INSERT INTO training_plans_v2(id,user_id,name,description,duration_weeks,start_date,progression_strategy,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id, gate.session!.id, name, description, durationWeeks, startDate, progressionStrategy, now, now).run();
+      return v2Reply({ ok: true, plan: { id, name, description, duration_weeks: durationWeeks, start_date: startDate, progression_strategy: progressionStrategy, created_at: now, updated_at: now, days: [] } }, 201);
     }
     const planMatch = path.match(/^\/api\/v2\/training\/plans\/([a-f0-9-]+)$/i);
     if (planMatch && ['PUT', 'DELETE'].includes(method)) {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
-      const plan = await env.DB.prepare('SELECT id,name,description FROM training_plans_v2 WHERE id=? AND user_id=?').bind(planMatch[1], gate.session!.id).first<{ id: string; name: string; description: string }>();
+      const plan = await env.DB.prepare('SELECT id,name,description,duration_weeks,start_date,progression_strategy FROM training_plans_v2 WHERE id=? AND user_id=?').bind(planMatch[1], gate.session!.id).first<{ id: string; name: string; description: string; duration_weeks: number; start_date: string | null; progression_strategy: string }>();
       if (!plan) return v2Reply({ error: 'Nie znaleziono planu.' }, 404);
       if (method === 'DELETE') { await env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id IN (SELECT id FROM training_plan_days_v2 WHERE plan_id=?)').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plans_v2 WHERE id=? AND user_id=?').bind(plan.id, gate.session!.id).run(); return v2Reply({ ok: true }); }
       const b = await v2Body(request), name = v2Field(b, 'name', 120), description = v2Field(b, 'description', 1000), rawDays = Array.isArray(b.days) ? b.days : [];
+      const durationWeeks = 4;
+      const requestedStartDate = typeof b.start_date === 'string' ? b.start_date.trim() : '';
+      const startDate = requestedStartDate || plan.start_date || new Date().toISOString().slice(0, 10);
+      const allowedProgressions = ['reps', 'weight', 'sets', 'none'];
+      const progressionStrategy = typeof b.progression_strategy === 'string' && allowedProgressions.includes(b.progression_strategy) ? b.progression_strategy : (allowedProgressions.includes(plan.progression_strategy) ? plan.progression_strategy : 'reps');
+      if (!v2ValidateDate(startDate)) return v2Reply({ error: 'Wybierz prawidłową datę rozpoczęcia programu.' }, 400);
       if (name.length < 2 || rawDays.length < 1 || rawDays.length > 7) return v2Reply({ error: 'Sprawdź nazwę planu i liczbę dni (od 1 do 7).' }, 400);
       const sampleNames = ['Plan przykładowy — dom bez sprzętu', 'Plan przykładowy — siłownia'];
       const wasSample = sampleNames.includes(plan.name), willBeSample = sampleNames.includes(name);
@@ -444,31 +577,31 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const currentCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 WHERE user_id=? AND name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia')").bind(gate.session!.id).first<{ count: number }>();
         if (Number(currentCount?.count || 0) >= planLimit) return v2Reply({ error: 'Nie możesz zmienić przykładowego planu w kolejny własny plan, ponieważ limit zapisanych planów został wykorzystany.' }, 409);
       }
-      const normalized: Array<{ day_key: string; title: string; exercises: Array<{ name: string; sets: number; reps: number; weight_kg: number | null; notes: string; rest_seconds: number; transition_rest_seconds: number }> }> = [];
+      const normalized: Array<{ day_key: string; title: string; exercises: Array<{ name: string; sets: number; reps: number; weight_kg: number | null; notes: string; rest_seconds: number; transition_rest_seconds: number; alternatives: string[] }> }> = [];
       for (const raw of rawDays) {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return v2Reply({ error: 'Nieprawidłowy dzień planu.' }, 400);
         const d = raw as Record<string, unknown>, dayKey = typeof d.day_key === 'string' ? d.day_key.trim().slice(0, 30) : '', title = typeof d.title === 'string' ? d.title.trim().slice(0, 120) : '', rawExercises = Array.isArray(d.exercises) ? d.exercises : [];
         if (!title || !dayKey || rawExercises.length > 40) return v2Reply({ error: 'Każdy dzień musi mieć nazwę i maksymalnie 40 ćwiczeń.' }, 400);
-        const exercises: Array<{ name: string; sets: number; reps: number; weight_kg: number | null; notes: string }> = [];
+        const exercises: Array<{ name: string; sets: number; reps: number; weight_kg: number | null; notes: string; rest_seconds: number; transition_rest_seconds: number; alternatives: string[] }> = [];
         for (const value of rawExercises) {
           if (!value || typeof value !== 'object' || Array.isArray(value)) return v2Reply({ error: 'Nieprawidłowe ćwiczenie.' }, 400);
-          const x = value as Record<string, unknown>, exerciseName = typeof x.name === 'string' ? x.name.trim() : '', sets = Number(x.sets ?? 3), reps = Number(x.reps ?? 10), weight = x.weight_kg === '' || x.weight_kg == null ? null : Number(x.weight_kg), notes = typeof x.notes === 'string' ? x.notes.slice(0, 500) : '', restSeconds = Number(x.rest_seconds ?? 90), transitionRestSeconds = Number(x.transition_rest_seconds ?? 120);
+          const x = value as Record<string, unknown>, exerciseName = typeof x.name === 'string' ? x.name.trim() : '', sets = Number(x.sets ?? 3), reps = Number(x.reps ?? 10), weight = x.weight_kg === '' || x.weight_kg == null ? null : Number(x.weight_kg), notes = typeof x.notes === 'string' ? x.notes.slice(0, 500) : '', restSeconds = Number(x.rest_seconds ?? 90), transitionRestSeconds = Number(x.transition_rest_seconds ?? 120), alternatives = Array.isArray(x.alternatives) ? Array.from(new Set(x.alternatives.filter((name): name is string => typeof name === 'string').map(name => name.trim()).filter(name => name.length > 0 && name.length <= 120 && name.toLowerCase() !== exerciseName.toLowerCase()))).slice(0, 3) : [];
           if (!exerciseName || exerciseName.length > 120 || !Number.isInteger(sets) || sets < 1 || sets > 30 || !Number.isInteger(reps) || reps < 1 || reps > 200 || (weight !== null && (!Number.isFinite(weight) || weight < 0 || weight > 1000)) || !Number.isInteger(restSeconds) || restSeconds < 0 || restSeconds > 600 || !Number.isInteger(transitionRestSeconds) || transitionRestSeconds < 0 || transitionRestSeconds > 900) return v2Reply({ error: 'Sprawdź nazwę ćwiczenia, serie, powtórzenia i ciężar.' }, 400);
-          exercises.push({ name: exerciseName, sets, reps, weight_kg: weight, notes, rest_seconds: restSeconds, transition_rest_seconds: transitionRestSeconds });
+          exercises.push({ name: exerciseName, sets, reps, weight_kg: weight, notes, rest_seconds: restSeconds, transition_rest_seconds: transitionRestSeconds, alternatives });
         }
         normalized.push({ day_key: dayKey, title, exercises });
       }
       const now = new Date().toISOString();
-      await env.DB.prepare('UPDATE training_plans_v2 SET name=?,description=?,updated_at=? WHERE id=? AND user_id=?').bind(name, description, now, plan.id, gate.session!.id).run();
+      await env.DB.prepare('UPDATE training_plans_v2 SET name=?,description=?,duration_weeks=?,start_date=?,progression_strategy=?,updated_at=? WHERE id=? AND user_id=?').bind(name, description, durationWeeks, startDate, progressionStrategy, now, plan.id, gate.session!.id).run();
       const oldDays = await env.DB.prepare('SELECT id FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id).all<{ id: string }>();
       const statements: D1PreparedStatement[] = [];
       if (oldDays.results.length) { for (const day of oldDays.results) statements.push(env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id=?').bind(day.id)); statements.push(env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id)); }
       normalized.forEach((day, di) => {
         const dayId = crypto.randomUUID(); statements.push(env.DB.prepare('INSERT INTO training_plan_days_v2(id,plan_id,day_key,title,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').bind(dayId, plan.id, day.day_key, day.title, di, now, now));
-        day.exercises.forEach((ex, ei) => statements.push(env.DB.prepare('INSERT INTO training_plan_exercises_v2(id,day_id,name,sort_order,target_sets,target_reps,target_weight_kg,notes,rest_seconds,transition_rest_seconds) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), dayId, ex.name, ei, ex.sets, ex.reps, ex.weight_kg, ex.notes, ex.rest_seconds, ex.transition_rest_seconds)));
+        day.exercises.forEach((ex, ei) => statements.push(env.DB.prepare('INSERT INTO training_plan_exercises_v2(id,day_id,name,sort_order,target_sets,target_reps,target_weight_kg,notes,rest_seconds,transition_rest_seconds,alternatives_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), dayId, ex.name, ei, ex.sets, ex.reps, ex.weight_kg, ex.notes, ex.rest_seconds, ex.transition_rest_seconds, JSON.stringify(ex.alternatives))));
       });
       if (statements.length) await env.DB.batch(statements);
-      return v2Reply({ ok: true, updated_at: now });
+      return v2Reply({ ok: true, duration_weeks: durationWeeks, start_date: startDate, progression_strategy: progressionStrategy, updated_at: now });
     }
 
     // Roboczy trening jest zapisywany po stronie serwera i wraca po odświeżeniu.

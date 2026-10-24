@@ -3,6 +3,7 @@ import { handlePlatformApi, handleSitePageLock } from './platform';
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  AI?: { run(model: string, input: Record<string, unknown>): Promise<unknown> };
   AUTH_PASSWORD_PEPPER?: string;
   ADMIN_EMAIL?: string;
   PRODUCT_FILES?: R2Bucket;
