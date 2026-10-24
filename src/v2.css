@@ -594,3 +594,28 @@
 .sf-gen-exercise-preference input{width:100%;min-height:36px;box-sizing:border-box;padding:8px 9px;border:1px solid #3b4631;border-radius:8px;background:#10130d;color:#ecf3e2;font:inherit;font-size:11px}
 .sf-gen-preview-replace{margin-top:12px}
 @media(max-width:420px){.sf-gen-exercise-row{grid-template-columns:minmax(0,1fr) auto;gap:6px}.sf-gen-exercise-select{grid-column:1/-1}.sf-gen-exercise-row>b{grid-column:1;grid-row:2}.sf-gen-exercise-row>small{grid-column:2;grid-row:2}}
+
+
+/* Generator oparty na katalogu i zamówienia planów indywidualnych */
+.sf-individual-plan-view{max-width:900px;margin-inline:auto}
+.sf-individual-plan-form{gap:18px}
+.sf-individual-contact{display:flex;flex-direction:column;gap:4px;padding:14px 16px;border:1px solid var(--line,#343a30);border-radius:12px;background:rgba(255,255,255,.025)}
+.sf-individual-contact b{color:var(--text,#f0f2e9);font-size:14px}
+.sf-individual-contact span,.sf-individual-contact small{color:var(--muted,#9ca594);font-size:12px;overflow-wrap:anywhere}
+.sf-individual-consent{align-items:flex-start;gap:11px;line-height:1.6}
+.sf-individual-consent input{flex:0 0 auto;margin-top:4px}
+.sf-individual-plan-success{max-width:620px;margin:34px auto;padding:clamp(24px,5vw,42px);text-align:center}
+.sf-individual-plan-success>span{display:inline-grid;place-items:center;width:58px;height:58px;margin-bottom:12px;border:1px solid rgba(198,243,106,.4);border-radius:50%;color:var(--lime,#c6f36a);background:rgba(198,243,106,.08)}
+.sf-individual-plan-success h1{margin:8px 0 12px}
+.sf-individual-plan-success>p:not(.sf-eyebrow){color:var(--muted,#9ca594);line-height:1.7}
+.sf-individual-orders{align-items:start}
+.sf-individual-orders .sf-ticket{display:flex;flex-direction:column;gap:14px;min-width:0}
+.sf-individual-orders .sf-ticket h3{overflow-wrap:anywhere}
+.sf-individual-answer-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.sf-individual-answer-grid>div{min-width:0;padding:12px;border-radius:10px;background:rgba(255,255,255,.025);border:1px solid var(--line,#343a30)}
+.sf-individual-answer-grid b{display:block;margin-bottom:5px;font-size:11px;color:var(--muted,#9ca594)}
+.sf-individual-answer-grid p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.6}
+.sf-individual-orders .sf-ticket>label{display:flex;flex-direction:column;gap:7px;font-size:12px;color:var(--muted,#9ca594)}
+.sf-individual-orders .sf-ticket select,.sf-individual-orders .sf-ticket textarea{width:100%;box-sizing:border-box}
+.sf-individual-plan-cta{margin-top:4px}
+@media(max-width:640px){.sf-individual-answer-grid{grid-template-columns:1fr}.sf-individual-plan-form{padding:16px}.sf-individual-orders .sf-ticket{padding:16px}}
