@@ -15,6 +15,9 @@ class V2InputError extends Error { readonly status = 400; }
 const V2_COOKIE = 'sf_session';
 const V2_MAX_FILE = 25 * 1024 * 1024;
 const V2_GENERATOR_PRODUCT_KEY = 'generator-planu-treningowego';
+const V2_INDIVIDUAL_PLAN_PRODUCT_KEY = 'plan-indywidualny';
+const V2_GENERATOR_PRICE_CENTS = 2999;
+const V2_INDIVIDUAL_PLAN_PRICE_CENTS = 14999;
 
 async function ensureIndividualPlanRequestTable(env: V2Env): Promise<void> {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS individual_plan_requests (
@@ -23,8 +26,65 @@ async function ensureIndividualPlanRequestTable(env: V2Env): Promise<void> {
     days_per_week INTEGER NOT NULL, session_minutes INTEGER NOT NULL, training_history TEXT NOT NULL DEFAULT '',
     schedule TEXT NOT NULL DEFAULT '', preferences TEXT NOT NULL DEFAULT '', avoid TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'new', admin_note TEXT NOT NULL DEFAULT '',
-    consent INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    consent INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    payment_status TEXT NOT NULL DEFAULT 'legacy', checkout_session_id TEXT, order_id TEXT
   )`).run();
+
+  // D1 databases may already contain an older table created before the paid-order flow existed.
+  // CREATE TABLE IF NOT EXISTS doesn't migrate that table, so add missing columns without losing rows.
+  const additions: Array<[string, string]> = [
+    ['user_id', "TEXT NOT NULL DEFAULT ''"], ['email', "TEXT NOT NULL DEFAULT ''"], ['full_name', "TEXT NOT NULL DEFAULT ''"],
+    ['goal', "TEXT NOT NULL DEFAULT ''"], ['level', "TEXT NOT NULL DEFAULT ''"], ['location', "TEXT NOT NULL DEFAULT ''"],
+    ['equipment', "TEXT NOT NULL DEFAULT ''"], ['days_per_week', 'INTEGER NOT NULL DEFAULT 3'], ['session_minutes', 'INTEGER NOT NULL DEFAULT 60'],
+    ['training_history', "TEXT NOT NULL DEFAULT ''"], ['schedule', "TEXT NOT NULL DEFAULT ''"], ['preferences', "TEXT NOT NULL DEFAULT ''"],
+    ['avoid', "TEXT NOT NULL DEFAULT ''"], ['notes', "TEXT NOT NULL DEFAULT ''"], ['status', "TEXT NOT NULL DEFAULT 'new'"],
+    ['admin_note', "TEXT NOT NULL DEFAULT ''"], ['consent', 'INTEGER NOT NULL DEFAULT 0'], ['created_at', "TEXT NOT NULL DEFAULT ''"],
+    ['updated_at', "TEXT NOT NULL DEFAULT ''"], ['payment_status', "TEXT NOT NULL DEFAULT 'legacy'"], ['checkout_session_id', 'TEXT'], ['order_id', 'TEXT'],
+  ];
+  let existing = new Set<string>();
+  try {
+    const info = await env.DB.prepare('PRAGMA table_info(individual_plan_requests)').all<{ name: string }>();
+    existing = new Set((info.results || []).map((column) => column.name));
+  } catch {
+    // Fallback below attempts idempotent ALTERs and ignores only duplicate-column errors.
+  }
+  for (const [column, definition] of additions) {
+    if (existing.has(column)) continue;
+    try {
+      await env.DB.prepare(`ALTER TABLE individual_plan_requests ADD COLUMN ${column} ${definition}`).run();
+    } catch (error) {
+      if (!String(error instanceof Error ? error.message : error).toLowerCase().includes('duplicate column name')) throw error;
+    }
+  }
+}
+
+async function ensureSystemTrainingProducts(env: V2Env): Promise<void> {
+  const now = new Date().toISOString();
+  const products = [
+    {
+      key: V2_GENERATOR_PRODUCT_KEY,
+      title: 'Generator planu treningowego — 1 użycie',
+      description: 'Jednorazowe użycie generatora planu treningowego Systemu Formy. Plan na 4 tygodnie z podziałem na dni i progresją.',
+      price: V2_GENERATOR_PRICE_CENTS / 100,
+    },
+    {
+      key: V2_INDIVIDUAL_PLAN_PRODUCT_KEY,
+      title: 'Indywidualny plan treningowy',
+      description: 'Indywidualny plan treningowy przygotowany na podstawie opłaconego formularza i odpowiedzi klienta.',
+      price: V2_INDIVIDUAL_PLAN_PRICE_CENTS / 100,
+    },
+  ];
+  for (const item of products) {
+    const existing = await env.DB.prepare('SELECT id FROM products WHERE product_key=? LIMIT 1').bind(item.key).first<{ id: string }>();
+    if (existing) {
+      await env.DB.prepare(`UPDATE products SET title=?,description=?,product_type='training_plan',price_amount=?,currency='PLN',is_free=0,is_published=0,updated_at=? WHERE product_key=?`)
+        .bind(item.title, item.description, item.price, now, item.key).run();
+    } else {
+      await env.DB.prepare(`INSERT INTO products(id,product_key,title,description,product_type,price_amount,currency,is_free,is_published,checkout_url,file_key,original_filename,file_content_type,created_at,updated_at)
+        VALUES(?,?,?,?,?,?, 'PLN',0,0,NULL,'','','application/octet-stream',?,?)`)
+        .bind(crypto.randomUUID(), item.key, item.title, item.description, 'training_plan', item.price, now, now).run();
+    }
+  }
 }
 
 function v2Reply(body: unknown, status = 200, headers?: HeadersInit): Response {
@@ -143,6 +203,7 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
   const expectedAmount = Number(checkout.metadata?.unit_amount_cents);
   const currency = typeof checkout.currency === 'string' ? checkout.currency.toUpperCase() : 'PLN';
   if (!userId || !productKey || !sessionId || !Number.isInteger(amount) || amount < 0 || !Number.isInteger(expectedAmount) || expectedAmount < 0) return reject('Brak prawidłowych danych zamówienia w sesji Stripe.', sessionId);
+  if (productKey === V2_GENERATOR_PRODUCT_KEY || productKey === V2_INDIVIDUAL_PLAN_PRODUCT_KEY) await ensureSystemTrainingProducts(env);
   const prior = await env.DB.prepare('SELECT event_id FROM stripe_webhook_events WHERE event_id=? LIMIT 1').bind(eventId).first<{ event_id: string }>();
   if (prior) {
     await diagnose('duplicate', 'Zdarzenie Stripe zostało już przetworzone.', sessionId);
@@ -159,6 +220,31 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
   if (!user || !item || String(checkout.client_reference_id || '') !== userId || String(checkout.metadata?.product_id || '') !== item.id || currency !== (item.currency || 'PLN').toUpperCase()) return reject('Nie udało się dopasować opłaconej sesji do użytkownika lub produktu.', sessionId);
   if (expectedAmount !== amount) return reject('Kwota płatności nie zgadza się z kwotą zapisaną w sesji Stripe.', sessionId);
   if (amount === 0 && checkout.metadata?.zero_total !== '1') return reject('Nieprawidłowa kwota zamówienia.', sessionId);
+
+  if (checkout.metadata?.checkout_kind === 'individual_plan') {
+    if (productKey !== V2_INDIVIDUAL_PLAN_PRODUCT_KEY || amount !== V2_INDIVIDUAL_PLAN_PRICE_CENTS || expectedAmount !== V2_INDIVIDUAL_PLAN_PRICE_CENTS || currency !== 'PLN') {
+      return reject('Kwota lub produkt planu indywidualnego nie zgadzają się z oczekiwanym zamówieniem.', sessionId);
+    }
+    await ensureIndividualPlanRequestTable(env);
+    const requestId = typeof checkout.metadata?.individual_plan_request_id === 'string' ? checkout.metadata.individual_plan_request_id : '';
+    if (!requestId) return reject('Brak identyfikatora formularza planu indywidualnego.', sessionId);
+    const savedRequest = await env.DB.prepare('SELECT id,user_id,payment_status,checkout_session_id FROM individual_plan_requests WHERE id=? LIMIT 1')
+      .bind(requestId).first<{id:string;user_id:string;payment_status:string;checkout_session_id:string|null}>();
+    if (!savedRequest || savedRequest.user_id !== userId || savedRequest.payment_status !== 'pending' || savedRequest.checkout_session_id !== sessionId) {
+      return reject('Nie znaleziono oczekującego formularza powiązanego z tą płatnością. Skontaktuj się z obsługą, nie płać ponownie.', sessionId);
+    }
+    const now = new Date().toISOString(), orderId = crypto.randomUUID(), display = await v2DisplayNumber(env, now);
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO stripe_webhook_events(event_id,event_type,received_at) VALUES(?,?,?)').bind(eventId, eventType, now),
+      env.DB.prepare("INSERT INTO orders(id,user_id,order_number,status,total_amount,currency,created_at,updated_at) VALUES(?,?,?,'paid',?,?,?,?)").bind(orderId, userId, `STRIPE-${sessionId}`, amount / 100, currency, now, now),
+      env.DB.prepare('INSERT INTO order_display_numbers(order_id,display_number,created_at) VALUES(?,?,?)').bind(orderId, display, now),
+      env.DB.prepare('INSERT INTO order_items(id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES(?,?,?,?,?,1,?,?)').bind(crypto.randomUUID(), orderId, productKey, item.title, item.product_type, amount / 100, now),
+      env.DB.prepare("UPDATE individual_plan_requests SET status='new',payment_status='paid',order_id=?,updated_at=? WHERE id=? AND user_id=? AND checkout_session_id=? AND payment_status='pending'").bind(orderId, now, requestId, userId, sessionId),
+      env.DB.prepare("UPDATE stripe_webhook_diagnostics SET status='processed',error_message='',checkout_session_id=?,order_id=?,processed_at=? WHERE event_id=?").bind(sessionId, orderId, now, eventId),
+    ]);
+    return v2Reply({ received: true, paid: true, order_id: orderId, display_order_number: display, individual_plan_request_id: requestId });
+  }
+
   const now = new Date().toISOString(), orderId = crypto.randomUUID();
   const promoId = typeof checkout.metadata?.promo_id === 'string' ? checkout.metadata.promo_id : '';
   const discount = Math.max(0, Number(checkout.metadata?.discount_cents || 0)) / 100;
@@ -310,14 +396,16 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       if (!env.STRIPE_SECRET_KEY || !env.STRIPE_WEBHOOK_SECRET) return v2Reply({ error: 'Płatności Stripe nie są w pełni skonfigurowane.' }, 503);
       const body = await v2Body(request), key = v2Field(body, 'product_key', 100).toLowerCase(), code = v2Field(body, 'promotion_code', 80).toUpperCase(), analyticsSession = v2Field(body, 'analytics_session_key', 100);
+      await ensureSystemTrainingProducts(env);
       const generatorCreditProduct = key === V2_GENERATOR_PRODUCT_KEY;
+      if (key === V2_INDIVIDUAL_PLAN_PRODUCT_KEY) return v2Reply({ error: 'Plan indywidualny należy zamówić przez formularz, który zapisze odpowiedzi i przekieruje do płatności.' }, 400);
       const item = await v2Product(env, key); if (!item || (!item.is_published && !generatorCreditProduct)) return v2Reply({ error: 'Produkt nie jest dostępny.' }, 404);
       if (item.is_free) return v2Reply({ error: 'Ten produkt jest bezpłatny — użyj opcji odbioru.' }, 400);
       if (!generatorCreditProduct && (!Number.isFinite(item.price_amount) || item.price_amount <= 0)) return v2Reply({ error: 'Produkt nie ma prawidłowej ceny.' }, 400);
       if (generatorCreditProduct && code) return v2Reply({ error: 'Zakup generatora za 29,99 zł nie obsługuje kodów rabatowych.' }, 400);
       const entitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(gate.session!.id, key).first<{ id: string }>();
       if (entitlement) return v2Reply({ error: 'Masz już dostęp do tego materiału.' }, 409);
-      let totalCents = generatorCreditProduct ? 2999 : Math.round(item.price_amount * 100), discountCents = 0, promo: V2PromoCandidate | null = null;
+      let totalCents = generatorCreditProduct ? V2_GENERATOR_PRICE_CENTS : Math.round(item.price_amount * 100), discountCents = 0, promo: V2PromoCandidate | null = null;
       // Rabat bezpośredni produktu: daty i procent sprawdzane po stronie serwera.
       const directDiscount = generatorCreditProduct ? null : await env.DB.prepare('SELECT discount_percent,starts_at,ends_at,is_active FROM product_discounts WHERE product_key=? LIMIT 1').bind(key).first<{discount_percent:number;starts_at:string|null;ends_at:string|null;is_active:number}>().catch(()=>null);
       const discountNow = Date.now();
@@ -391,22 +479,67 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       return v2Reply({ materials: rows.results });
     }
 
-    // Zamówienia planów indywidualnych są zapisywane w D1 i widoczne w ACP.
-    if (path === '/api/v2/training/individual-plan-requests' && method === 'POST') {
+    // Indywidualny plan: ankieta jest zapisana jako oczekujący draft, a właściwe zamówienie powstaje dopiero po webhooku Stripe.
+    if (path === '/api/v2/training/individual-plan-checkout' && method === 'POST') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      if (!env.STRIPE_SECRET_KEY || !env.STRIPE_WEBHOOK_SECRET) return v2Reply({ error: 'Płatności Stripe nie są w pełni skonfigurowane. Nie wysłano zamówienia; spróbuj ponownie później.' }, 503);
       await ensureIndividualPlanRequestTable(env);
+      await ensureSystemTrainingProducts(env);
       const b = await v2Body(request);
       const goal = v2Field(b, 'goal', 40), level = v2Field(b, 'level', 30), location = v2Field(b, 'location', 20), equipment = v2Field(b, 'equipment', 30);
       const days = Number(b.days_per_week), minutes = Number(b.session_minutes), consent = b.consent === true || b.consent === 'true';
+      const trainingHistory = v2Field(b, 'training_history', 1500), schedule = v2Field(b, 'schedule', 800), preferences = v2Field(b, 'preferences', 1000), avoid = v2Field(b, 'avoid', 1200), notes = v2Field(b, 'notes', 1500);
+      const requestedId = v2Field(b, 'request_id', 80);
       if (!['muscle','strength','fat_loss','general'].includes(goal) || !['beginner','intermediate','advanced'].includes(level) || !['home','gym','both'].includes(location)) return v2Reply({ error: 'W formularzu wybrano nieprawidłowy cel, poziom lub miejsce treningu.' }, 400);
       if (!['none','bands','dumbbells','both','gym'].includes(equipment) || !Number.isInteger(days) || days < 1 || days > 7 || !Number.isInteger(minutes) || minutes < 30 || minutes > 120) return v2Reply({ error: 'Sprawdź dostępny sprzęt, liczbę dni i czas treningu.' }, 400);
       if (!consent) return v2Reply({ error: 'Zaznacz zgodę na wykorzystanie odpowiedzi do obsługi zamówienia.' }, 400);
-      const profile = await env.DB.prepare('SELECT first_name FROM user_profiles WHERE user_id=? LIMIT 1').bind(gate.session!.id).first<{ first_name: string | null }>();
-      const id = crypto.randomUUID(), now = new Date().toISOString();
-      await env.DB.prepare(`INSERT INTO individual_plan_requests(id,user_id,email,full_name,goal,level,location,equipment,days_per_week,session_minutes,training_history,schedule,preferences,avoid,notes,status,admin_note,consent,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new','',1,?,?)`)
-        .bind(id, gate.session!.id, gate.session!.email, (profile?.first_name || '').trim().slice(0,80), goal, level, location, equipment, days, minutes,
-          v2Field(b,'training_history',1500), v2Field(b,'schedule',800), v2Field(b,'preferences',1000), v2Field(b,'avoid',1200), v2Field(b,'notes',1500), now, now).run();
-      return v2Reply({ ok: true, id, status: 'new', created_at: now }, 201);
+      const profile = await env.DB.prepare('SELECT first_name FROM user_profiles WHERE user_id=? LIMIT 1').bind(gate.session!.id).first<{ first_name: string | null }>().catch(() => null);
+      const fullName = (profile?.first_name || '').trim().slice(0, 80), now = new Date().toISOString();
+      let requestId = crypto.randomUUID();
+      if (requestedId) {
+        const draft = await env.DB.prepare('SELECT id,user_id,payment_status FROM individual_plan_requests WHERE id=? LIMIT 1').bind(requestedId).first<{id:string;user_id:string;payment_status:string}>();
+        if (!draft || draft.user_id !== gate.session!.id || draft.payment_status !== 'pending') return v2Reply({ error: 'Nie można wznowić tego formularza. Odśwież stronę i rozpocznij nowe zamówienie.' }, 409);
+        requestId = draft.id;
+        await env.DB.prepare(`UPDATE individual_plan_requests SET email=?,full_name=?,goal=?,level=?,location=?,equipment=?,days_per_week=?,session_minutes=?,training_history=?,schedule=?,preferences=?,avoid=?,notes=?,status='new',admin_note='',consent=1,updated_at=?,payment_status='pending',checkout_session_id=NULL,order_id=NULL WHERE id=? AND user_id=?`)
+          .bind(gate.session!.email, fullName, goal, level, location, equipment, days, minutes, trainingHistory, schedule, preferences, avoid, notes, now, requestId, gate.session!.id).run();
+      } else {
+        await env.DB.prepare(`INSERT INTO individual_plan_requests(id,user_id,email,full_name,goal,level,location,equipment,days_per_week,session_minutes,training_history,schedule,preferences,avoid,notes,status,admin_note,consent,created_at,updated_at,payment_status,checkout_session_id,order_id)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new','',1,?,?,'pending',NULL,NULL)`)
+          .bind(requestId, gate.session!.id, gate.session!.email, fullName, goal, level, location, equipment, days, minutes, trainingHistory, schedule, preferences, avoid, notes, now, now).run();
+      }
+      const item = await v2Product(env, V2_INDIVIDUAL_PLAN_PRODUCT_KEY);
+      if (!item) return v2Reply({ error: 'Nie udało się przygotować produktu planu indywidualnego. Spróbuj ponownie.' }, 500);
+      const origin = url.origin, form = new URLSearchParams();
+      form.set('mode', 'payment');
+      form.set('success_url', `${origin}/app/zamowienia?payment=success&session_id={CHECKOUT_SESSION_ID}&kind=individual_plan`);
+      form.set('cancel_url', `${origin}/app/plan/indywidualny?payment=cancelled&request_id=${encodeURIComponent(requestId)}`);
+      form.set('client_reference_id', gate.session!.id);
+      form.set('customer_email', gate.session!.email);
+      form.set('line_items[0][price_data][currency]', 'pln');
+      form.set('line_items[0][price_data][unit_amount]', String(V2_INDIVIDUAL_PLAN_PRICE_CENTS));
+      form.set('line_items[0][price_data][product_data][name]', 'Indywidualny plan treningowy');
+      form.set('line_items[0][price_data][product_data][description]', 'Indywidualny plan przygotowany na podstawie Twoich odpowiedzi w ankiecie.');
+      form.set('line_items[0][quantity]', '1');
+      form.set('metadata[v2_checkout]', '1');
+      form.set('metadata[checkout_kind]', 'individual_plan');
+      form.set('metadata[user_id]', gate.session!.id);
+      form.set('metadata[product_key]', V2_INDIVIDUAL_PLAN_PRODUCT_KEY);
+      form.set('metadata[product_id]', item.id);
+      form.set('metadata[unit_amount_cents]', String(V2_INDIVIDUAL_PLAN_PRICE_CENTS));
+      form.set('metadata[individual_plan_request_id]', requestId);
+      form.set('payment_intent_data[metadata][user_id]', gate.session!.id);
+      form.set('payment_intent_data[metadata][product_key]', V2_INDIVIDUAL_PLAN_PRODUCT_KEY);
+      form.set('payment_intent_data[metadata][individual_plan_request_id]', requestId);
+      const stripeResponse = await fetch('https://api.stripe.com/v1/checkout/sessions', { method: 'POST', headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: form.toString() });
+      const payload = await stripeResponse.json() as Record<string, any>;
+      if (!stripeResponse.ok || typeof payload.url !== 'string' || typeof payload.id !== 'string') return v2Reply({ error: typeof payload.error?.message === 'string' ? `Stripe: ${payload.error.message}` : 'Nie udało się otworzyć płatności za plan indywidualny.' }, 502);
+      await env.DB.prepare("UPDATE individual_plan_requests SET checkout_session_id=?,updated_at=? WHERE id=? AND user_id=? AND payment_status='pending'").bind(payload.id, new Date().toISOString(), requestId, gate.session!.id).run();
+      return v2Reply({ ok: true, url: payload.url, session_id: payload.id, request_id: requestId, amount_cents: V2_INDIVIDUAL_PLAN_PRICE_CENTS });
+    }
+
+    // Stary endpoint nie pozwala już ominąć płatności bezpośrednim POST-em.
+    if (path === '/api/v2/training/individual-plan-requests' && method === 'POST') {
+      return v2Reply({ error: 'Zamówienie planu indywidualnego wymaga opłacenia 149,99 zł. Użyj przycisku w formularzu, który przekieruje Cię do płatności.' }, 402);
     }
 
     // Generator treningów AI: zachowany stary endpoint historyczny, ale nowy kreator nie wywołuje modelu.
@@ -862,7 +995,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const gate = await v2Gate(request, env, true); if (gate.response) return gate.response;
       if (path === '/api/v2/admin/individual-plan-requests' && method === 'GET') {
         await ensureIndividualPlanRequestTable(env);
-        const rows = await env.DB.prepare("SELECT * FROM individual_plan_requests ORDER BY CASE status WHEN 'new' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END, created_at DESC LIMIT 300").all();
+        const rows = await env.DB.prepare("SELECT * FROM individual_plan_requests WHERE COALESCE(payment_status,'legacy') IN ('paid','legacy') ORDER BY CASE status WHEN 'new' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END, created_at DESC LIMIT 300").all();
         return v2Reply({ requests: rows.results });
       }
       const individualRequestMatch = path.match(/^\/api\/v2\/admin\/individual-plan-requests\/([a-f0-9-]+)$/i);
@@ -955,6 +1088,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         return v2Reply({ sales: sales || {}, last_30_days_orders: orders, users, products, open_tickets: tickets, active_promotions: promos, recent_orders: recent.results });
       }
       if (path === '/api/v2/admin/products' && method === 'GET') {
+        await ensureSystemTrainingProducts(env);
         const rows = await env.DB.prepare("SELECT p.id,p.product_key,p.title,p.description,p.product_type,p.price_amount,p.currency,p.is_free,p.is_published,p.checkout_url,p.original_filename,p.file_key,COALESCE(m.category_slug,'inne') AS category_slug,COALESCE(m.target_audience,'') AS target_audience,COALESCE(m.contents_json,'[]') AS contents_json FROM products p LEFT JOIN product_metadata m ON m.product_key=p.product_key ORDER BY p.created_at DESC").all();
         const components = await env.DB.prepare('SELECT bundle_key,component_product_key,quantity,sort_order FROM bundle_items ORDER BY bundle_key,sort_order').all();
         let categories = await env.DB.prepare('SELECT slug,title,description,is_active,sort_order FROM product_categories ORDER BY sort_order,title').all();
@@ -1162,7 +1296,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     return null;
   } catch (error) {
     if (error instanceof V2InputError) return v2Reply({ error: error.message }, error.status);
-    console.error('System Formy V2 API error:', error);
+    console.error('System Formy V2 API error:', error instanceof Error ? `${error.name}: ${error.message}` : String(error), error instanceof Error ? error.stack : '');
     return v2Reply({ error: 'Wystąpił błąd serwera. Spróbuj ponownie.' }, 500);
   }
 }
