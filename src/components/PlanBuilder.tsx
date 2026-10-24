@@ -23,7 +23,7 @@ type Props = {
 
 const DEFAULT_SET_REST = 90;
 const DEFAULT_EXERCISE_REST = 120;
-const MAX_DAYS = 14;
+const MAX_DAYS = 7;
 const MAX_EXERCISES = 40;
 
 function secondsLabel(value: number) {
