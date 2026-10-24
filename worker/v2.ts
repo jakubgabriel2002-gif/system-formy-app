@@ -24,9 +24,11 @@ async function ensureIndividualPlanRequestTable(env: V2Env): Promise<void> {
     goal TEXT NOT NULL, level TEXT NOT NULL, location TEXT NOT NULL, equipment TEXT NOT NULL,
     days_per_week INTEGER NOT NULL, session_minutes INTEGER NOT NULL, training_history TEXT NOT NULL DEFAULT '',
     schedule TEXT NOT NULL DEFAULT '', preferences TEXT NOT NULL DEFAULT '', avoid TEXT NOT NULL DEFAULT '',
-    notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'new', admin_note TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'awaiting_questionnaire', admin_note TEXT NOT NULL DEFAULT '',
     consent INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-    payment_status TEXT NOT NULL DEFAULT 'legacy', checkout_session_id TEXT, order_id TEXT
+    payment_status TEXT NOT NULL DEFAULT 'legacy', checkout_session_id TEXT, order_id TEXT,
+    training_plan_id TEXT, training_plan_name TEXT, training_plan_description TEXT, training_plan_start_date TEXT,
+    training_plan_progression TEXT, training_plan_json TEXT
   )`).run();
 
   // D1 databases may already contain an older table created before the paid-order flow existed.
@@ -36,9 +38,11 @@ async function ensureIndividualPlanRequestTable(env: V2Env): Promise<void> {
     ['goal', "TEXT NOT NULL DEFAULT ''"], ['level', "TEXT NOT NULL DEFAULT ''"], ['location', "TEXT NOT NULL DEFAULT ''"],
     ['equipment', "TEXT NOT NULL DEFAULT ''"], ['days_per_week', 'INTEGER NOT NULL DEFAULT 3'], ['session_minutes', 'INTEGER NOT NULL DEFAULT 60'],
     ['training_history', "TEXT NOT NULL DEFAULT ''"], ['schedule', "TEXT NOT NULL DEFAULT ''"], ['preferences', "TEXT NOT NULL DEFAULT ''"],
-    ['avoid', "TEXT NOT NULL DEFAULT ''"], ['notes', "TEXT NOT NULL DEFAULT ''"], ['status', "TEXT NOT NULL DEFAULT 'new'"],
+    ['avoid', "TEXT NOT NULL DEFAULT ''"], ['notes', "TEXT NOT NULL DEFAULT ''"], ['status', "TEXT NOT NULL DEFAULT 'awaiting_questionnaire'"],
     ['admin_note', "TEXT NOT NULL DEFAULT ''"], ['consent', 'INTEGER NOT NULL DEFAULT 0'], ['created_at', "TEXT NOT NULL DEFAULT ''"],
     ['updated_at', "TEXT NOT NULL DEFAULT ''"], ['payment_status', "TEXT NOT NULL DEFAULT 'legacy'"], ['checkout_session_id', 'TEXT'], ['order_id', 'TEXT'],
+    ['training_plan_id', 'TEXT'], ['training_plan_name', 'TEXT'], ['training_plan_description', 'TEXT'], ['training_plan_start_date', 'TEXT'],
+    ['training_plan_progression', 'TEXT'], ['training_plan_json', 'TEXT'],
   ];
   let existing = new Set<string>();
   try {
@@ -238,7 +242,7 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
       env.DB.prepare("INSERT INTO orders(id,user_id,order_number,status,total_amount,currency,created_at,updated_at) VALUES(?,?,?,'paid',?,?,?,?)").bind(orderId, userId, `STRIPE-${sessionId}`, amount / 100, currency, now, now),
       env.DB.prepare('INSERT INTO order_display_numbers(order_id,display_number,created_at) VALUES(?,?,?)').bind(orderId, display, now),
       env.DB.prepare('INSERT INTO order_items(id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES(?,?,?,?,?,1,?,?)').bind(crypto.randomUUID(), orderId, productKey, item.title, item.product_type, amount / 100, now),
-      env.DB.prepare("UPDATE individual_plan_requests SET status='new',payment_status='paid',order_id=?,updated_at=? WHERE id=? AND user_id=? AND checkout_session_id=? AND payment_status='pending'").bind(orderId, now, requestId, userId, sessionId),
+      env.DB.prepare("UPDATE individual_plan_requests SET status='awaiting_questionnaire',payment_status='paid',order_id=?,updated_at=? WHERE id=? AND user_id=? AND checkout_session_id=? AND payment_status='pending'").bind(orderId, now, requestId, userId, sessionId),
       env.DB.prepare("UPDATE stripe_webhook_diagnostics SET status='processed',error_message='',checkout_session_id=?,order_id=?,processed_at=? WHERE event_id=?").bind(sessionId, orderId, now, eventId),
     ]);
     return v2Reply({ received: true, paid: true, order_id: orderId, display_order_number: display, individual_plan_request_id: requestId });
@@ -468,9 +472,18 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     // Konto: zamówienia i własne materiały.
     if (path === '/api/v2/account/orders' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      await ensureIndividualPlanRequestTable(env);
       const rows = await env.DB.prepare('SELECT o.id,o.order_number,COALESCE(d.display_number,o.order_number) AS display_order_number,o.status,o.total_amount,o.currency,o.created_at,o.updated_at FROM orders o LEFT JOIN order_display_numbers d ON d.order_id=o.id WHERE o.user_id=? ORDER BY o.created_at DESC LIMIT 100').bind(gate.session!.id).all();
       const items = await env.DB.prepare('SELECT i.order_id,i.product_key,i.product_title,i.product_type,i.quantity,i.unit_amount FROM order_items i JOIN orders o ON o.id=i.order_id WHERE o.user_id=? ORDER BY i.created_at DESC LIMIT 300').bind(gate.session!.id).all();
-      return v2Reply({ orders: rows.results, items: items.results });
+      // Każdy status jest pobierany wyłącznie z zamówień planu przypisanych do zalogowanego konta.
+      const individualPlans = await env.DB.prepare(`SELECT r.id,r.order_id,COALESCE(d.display_number,o.order_number) AS display_order_number,
+        r.status,r.payment_status,r.created_at,r.updated_at,r.training_plan_id,r.training_plan_name
+        FROM individual_plan_requests r
+        LEFT JOIN orders o ON o.id=r.order_id AND o.user_id=r.user_id
+        LEFT JOIN order_display_numbers d ON d.order_id=o.id
+        WHERE r.user_id=? AND COALESCE(r.payment_status,'legacy') IN ('paid','legacy')
+        ORDER BY r.created_at DESC LIMIT 100`).bind(gate.session!.id).all();
+      return v2Reply({ orders: rows.results, items: items.results, individual_plans: individualPlans.results });
     }
     if (path === '/api/v2/account/materials' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
@@ -499,11 +512,11 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const draft = await env.DB.prepare('SELECT id,user_id,payment_status FROM individual_plan_requests WHERE id=? LIMIT 1').bind(requestedId).first<{id:string;user_id:string;payment_status:string}>();
         if (!draft || draft.user_id !== gate.session!.id || draft.payment_status !== 'pending') return v2Reply({ error: 'Nie można wznowić tego formularza. Odśwież stronę i rozpocznij nowe zamówienie.' }, 409);
         requestId = draft.id;
-        await env.DB.prepare(`UPDATE individual_plan_requests SET email=?,full_name=?,goal=?,level=?,location=?,equipment=?,days_per_week=?,session_minutes=?,training_history=?,schedule=?,preferences=?,avoid=?,notes=?,status='new',admin_note='',consent=1,updated_at=?,payment_status='pending',checkout_session_id=NULL,order_id=NULL WHERE id=? AND user_id=?`)
+        await env.DB.prepare(`UPDATE individual_plan_requests SET email=?,full_name=?,goal=?,level=?,location=?,equipment=?,days_per_week=?,session_minutes=?,training_history=?,schedule=?,preferences=?,avoid=?,notes=?,status='awaiting_questionnaire',admin_note='',consent=1,updated_at=?,payment_status='pending',checkout_session_id=NULL,order_id=NULL WHERE id=? AND user_id=?`)
           .bind(gate.session!.email, fullName, goal, level, location, equipment, days, minutes, trainingHistory, schedule, preferences, avoid, notes, now, requestId, gate.session!.id).run();
       } else {
         await env.DB.prepare(`INSERT INTO individual_plan_requests(id,user_id,email,full_name,goal,level,location,equipment,days_per_week,session_minutes,training_history,schedule,preferences,avoid,notes,status,admin_note,consent,created_at,updated_at,payment_status,checkout_session_id,order_id)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new','',1,?,?,'pending',NULL,NULL)`)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'awaiting_questionnaire','',1,?,?,'pending',NULL,NULL)`)
           .bind(requestId, gate.session!.id, gate.session!.email, fullName, goal, level, location, equipment, days, minutes, trainingHistory, schedule, preferences, avoid, notes, now, now).run();
       }
       const item = await v2Product(env, V2_INDIVIDUAL_PLAN_PRODUCT_KEY);
@@ -545,10 +558,11 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     // Plany użytkownika: dowolna liczba planów, dni i ćwiczeń.
     if (path === '/api/v2/training/plans' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      await ensureIndividualPlanRequestTable(env);
       const premiumEntitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1").bind(gate.session!.id).first<{ id: string }>();
       const isPremium = Boolean(premiumEntitlement), planLimit = isPremium ? 3 : 1;
-      const plans = await env.DB.prepare('SELECT id,name,description,duration_weeks,start_date,progression_strategy,created_at,updated_at FROM training_plans_v2 WHERE user_id=? ORDER BY updated_at DESC').bind(gate.session!.id).all<{ id: string; name: string; description: string; duration_weeks: number; start_date: string | null; progression_strategy: string; created_at: string; updated_at: string }>();
-      const customPlanCountRow = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 WHERE user_id=? AND name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia')").bind(gate.session!.id).first<{ count: number }>();
+      const plans = await env.DB.prepare("SELECT p.id,p.name,p.description,p.duration_weeks,p.start_date,p.progression_strategy,p.created_at,p.updated_at,EXISTS (SELECT 1 FROM individual_plan_requests ir WHERE ir.training_plan_id=p.id AND ir.user_id=p.user_id) AS is_individual_plan FROM training_plans_v2 p WHERE p.user_id=? AND NOT EXISTS (SELECT 1 FROM individual_plan_requests r WHERE r.training_plan_id=p.id AND r.user_id=p.user_id AND r.status!='ready') ORDER BY p.updated_at DESC").bind(gate.session!.id).all<{ id: string; name: string; description: string; duration_weeks: number; start_date: string | null; progression_strategy: string; created_at: string; updated_at: string; is_individual_plan: number }>();
+      const customPlanCountRow = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 p WHERE p.user_id=? AND p.name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia') AND NOT EXISTS (SELECT 1 FROM individual_plan_requests r WHERE r.training_plan_id=p.id AND r.user_id=p.user_id)").bind(gate.session!.id).first<{ count: number }>();
       const customPlansUsed = Number(customPlanCountRow?.count || 0);
       const output = [] as Array<Record<string, unknown>>;
       for (const plan of plans.results) {
@@ -595,7 +609,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       }
       const premiumEntitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1").bind(gate.session!.id).first<{ id: string }>();
       const isPremium = Boolean(premiumEntitlement), planLimit = isPremium ? 3 : 1;
-      const planCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 WHERE user_id=? AND name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia')").bind(gate.session!.id).first<{ count: number }>();
+      const planCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 p WHERE p.user_id=? AND p.name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia') AND NOT EXISTS (SELECT 1 FROM individual_plan_requests r WHERE r.training_plan_id=p.id AND r.user_id=p.user_id)").bind(gate.session!.id).first<{ count: number }>();
       const plansUsed = Number(planCount?.count || 0);
       if (!isSamplePlan && plansUsed >= planLimit) {
         return v2Reply({ error: isPremium ? 'Konto Premium może mieć maksymalnie 3 zapisane plany treningowe. Usuń jeden z obecnych planów, aby dodać kolejny.' : 'Na zwykłym koncie możesz mieć 1 zapisany plan treningowy. Usuń obecny plan albo uzyskaj dostęp Premium, aby móc zapisać do 3 planów.', is_premium: isPremium, plan_limit: planLimit, plans_used: plansUsed }, 409);
@@ -609,7 +623,12 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       const plan = await env.DB.prepare('SELECT id,name,description,duration_weeks,start_date,progression_strategy FROM training_plans_v2 WHERE id=? AND user_id=?').bind(planMatch[1], gate.session!.id).first<{ id: string; name: string; description: string; duration_weeks: number; start_date: string | null; progression_strategy: string }>();
       if (!plan) return v2Reply({ error: 'Nie znaleziono planu.' }, 404);
-      if (method === 'DELETE') { await env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id IN (SELECT id FROM training_plan_days_v2 WHERE plan_id=?)').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plans_v2 WHERE id=? AND user_id=?').bind(plan.id, gate.session!.id).run(); return v2Reply({ ok: true }); }
+      if (method === 'DELETE') {
+        await ensureIndividualPlanRequestTable(env);
+        const assignedIndividualPlan = await env.DB.prepare('SELECT id FROM individual_plan_requests WHERE training_plan_id=? AND user_id=? LIMIT 1').bind(plan.id, gate.session!.id).first<{id:string}>();
+        if (assignedIndividualPlan) return v2Reply({ error: 'Plan indywidualny jest powiązany z zamówieniem. Skontaktuj się z administratorem, jeśli chcesz go usunąć.' }, 409);
+        await env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id IN (SELECT id FROM training_plan_days_v2 WHERE plan_id=?)').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plans_v2 WHERE id=? AND user_id=?').bind(plan.id, gate.session!.id).run(); return v2Reply({ ok: true });
+      }
       const b = await v2Body(request), name = v2Field(b, 'name', 120), description = v2Field(b, 'description', 1000), rawDays = Array.isArray(b.days) ? b.days : [];
       const consumeGeneratorCredit = b.consume_generator_credit === true;
       const generatorCredit = consumeGeneratorCredit ? await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(gate.session!.id, V2_GENERATOR_PRODUCT_KEY).first<{ id: string }>() : null;
@@ -627,7 +646,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (wasSample && !willBeSample) {
         const premiumEntitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1").bind(gate.session!.id).first<{ id: string }>();
         const planLimit = premiumEntitlement ? 3 : 1;
-        const currentCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 WHERE user_id=? AND name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia')").bind(gate.session!.id).first<{ count: number }>();
+        const currentCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 p WHERE p.user_id=? AND p.name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia') AND NOT EXISTS (SELECT 1 FROM individual_plan_requests r WHERE r.training_plan_id=p.id AND r.user_id=p.user_id)").bind(gate.session!.id).first<{ count: number }>();
         if (Number(currentCount?.count || 0) >= planLimit) return v2Reply({ error: 'Nie możesz zmienić przykładowego planu w kolejny własny plan, ponieważ limit zapisanych planów został wykorzystany.' }, 409);
       }
       const normalized: Array<{ day_key: string; title: string; exercises: Array<{ name: string; sets: number; reps: number; weight_kg: number | null; notes: string; rest_seconds: number; transition_rest_seconds: number; alternatives: string[] }> }> = [];
@@ -759,18 +778,90 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const gate = await v2Gate(request, env, true); if (gate.response) return gate.response;
       if (path === '/api/v2/admin/individual-plan-requests' && method === 'GET') {
         await ensureIndividualPlanRequestTable(env);
-        const rows = await env.DB.prepare("SELECT * FROM individual_plan_requests WHERE COALESCE(payment_status,'legacy') IN ('paid','legacy') ORDER BY CASE status WHEN 'new' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END, created_at DESC LIMIT 300").all();
+        const rows = await env.DB.prepare("SELECT r.*,COALESCE(d.display_number,o.order_number) AS display_order_number FROM individual_plan_requests r LEFT JOIN orders o ON o.id=r.order_id AND o.user_id=r.user_id LEFT JOIN order_display_numbers d ON d.order_id=o.id WHERE COALESCE(r.payment_status,'legacy') IN ('paid','legacy') ORDER BY CASE WHEN r.payment_status='paid' AND r.status='awaiting_questionnaire' THEN 0 WHEN r.status='in_preparation' THEN 1 WHEN r.status='ready' THEN 2 ELSE 3 END, r.created_at DESC LIMIT 300").all();
         return v2Reply({ requests: rows.results });
+      }
+      const individualPlanEditorMatch = path.match(/^\/api\/v2\/admin\/individual-plan-requests\/([a-f0-9-]+)\/plan$/i);
+      if (individualPlanEditorMatch && ['PUT', 'POST'].includes(method)) {
+        await ensureIndividualPlanRequestTable(env);
+        const requestId = individualPlanEditorMatch[1];
+        const requestRow = await env.DB.prepare('SELECT id,user_id,full_name,status,payment_status,training_plan_id FROM individual_plan_requests WHERE id=? LIMIT 1').bind(requestId).first<{id:string;user_id:string;full_name:string;status:string;payment_status:string;training_plan_id:string|null}>();
+        if (!requestRow) return v2Reply({ error: 'Nie znaleziono zamówienia planu indywidualnego.' }, 404);
+        if (!requestRow.user_id || !requestRow.user_id.trim()) return v2Reply({ error: 'To zgłoszenie nie ma przypisanego konta użytkownika. Nie zapisano planu.' }, 409);
+        if (!['paid','legacy'].includes(requestRow.payment_status || 'legacy')) return v2Reply({ error: 'Plan można przypisać dopiero do opłaconego zamówienia.' }, 409);
+        if (['canceled','refunded'].includes(requestRow.status)) return v2Reply({ error: 'Anulowanego lub zwróconego zamówienia nie można edytować.' }, 409);
+        const b = await v2Body(request);
+        const name = v2Field(b, 'name', 120), description = v2Field(b, 'description', 1000);
+        const startDate = typeof b.start_date === 'string' ? b.start_date.trim() : new Date().toISOString().slice(0,10);
+        const allowedProgressions = ['reps','weight','sets','none'];
+        const progression = typeof b.progression_strategy === 'string' && allowedProgressions.includes(b.progression_strategy) ? b.progression_strategy : 'reps';
+        const rawDays = Array.isArray(b.days) ? b.days : [];
+        if (name.length < 2 || !v2ValidateDate(startDate)) return v2Reply({ error: 'Podaj nazwę planu i prawidłową datę rozpoczęcia.' }, 400);
+        if (!rawDays.length || rawDays.length > 7) return v2Reply({ error: 'Plan musi mieć od 1 do 7 dni treningowych.' }, 400);
+        const normalized: Array<{day_key:string;title:string;exercises:Array<{name:string;sets:number;reps:number;weight_kg:number|null;notes:string;rest_seconds:number;transition_rest_seconds:number;alternatives:string[]}>}> = [];
+        for (const raw of rawDays) {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return v2Reply({ error: 'Nieprawidłowy dzień planu.' }, 400);
+          const d = raw as Record<string, unknown>;
+          const dayKey = typeof d.day_key === 'string' ? d.day_key.trim().slice(0,30) : '';
+          const title = typeof d.title === 'string' ? d.title.trim().slice(0,120) : '';
+          const rawExercises = Array.isArray(d.exercises) ? d.exercises : [];
+          if (!dayKey || !title || rawExercises.length > 40) return v2Reply({ error: 'Każdy dzień musi mieć nazwę i maksymalnie 40 ćwiczeń.' }, 400);
+          const exercises: Array<{name:string;sets:number;reps:number;weight_kg:number|null;notes:string;rest_seconds:number;transition_rest_seconds:number;alternatives:string[]}> = [];
+          for (const rawExercise of rawExercises) {
+            if (!rawExercise || typeof rawExercise !== 'object' || Array.isArray(rawExercise)) return v2Reply({ error: 'Nieprawidłowe ćwiczenie.' }, 400);
+            const x = rawExercise as Record<string, unknown>;
+            const exerciseName = typeof x.name === 'string' ? x.name.trim().slice(0,120) : '';
+            const sets = Number(x.sets ?? 3), reps = Number(x.reps ?? 10), rest = Number(x.rest_seconds ?? 90);
+            const weight = x.weight_kg === '' || x.weight_kg == null ? null : Number(x.weight_kg);
+            const notes = typeof x.notes === 'string' ? x.notes.trim().slice(0,500) : '';
+            if (!exerciseName || !Number.isInteger(sets) || sets < 1 || sets > 30 || !Number.isInteger(reps) || reps < 1 || reps > 200 || !Number.isInteger(rest) || rest < 0 || rest > 600 || (weight !== null && (!Number.isFinite(weight) || weight < 0 || weight > 1000))) return v2Reply({ error: 'Sprawdź nazwę ćwiczenia, liczbę serii/powtórzeń, przerwę i ciężar.' }, 400);
+            exercises.push({ name: exerciseName, sets, reps, weight_kg: weight, notes, rest_seconds: rest, transition_rest_seconds: Number(x.transition_rest_seconds ?? 120), alternatives: Array.isArray(x.alternatives) ? x.alternatives.filter((v):v is string=>typeof v==='string').slice(0,3) : [] });
+          }
+          normalized.push({ day_key: dayKey, title, exercises });
+        }
+        const now = new Date().toISOString();
+        let planId = requestRow.training_plan_id || '';
+        if (planId) {
+          const existingPlan = await env.DB.prepare('SELECT id FROM training_plans_v2 WHERE id=? AND user_id=? LIMIT 1').bind(planId, requestRow.user_id).first<{id:string}>();
+          if (!existingPlan) planId = '';
+        }
+        const createPlan = !planId;
+        if (createPlan) planId = crypto.randomUUID();
+        const statements: D1PreparedStatement[] = [];
+        if (createPlan) {
+          statements.push(env.DB.prepare('INSERT INTO training_plans_v2(id,user_id,name,description,duration_weeks,start_date,progression_strategy,created_at,updated_at) VALUES(?,?,?,?,4,?,?,?,?)').bind(planId, requestRow.user_id, name, description, startDate, progression, now, now));
+        } else {
+          statements.push(env.DB.prepare('UPDATE training_plans_v2 SET name=?,description=?,duration_weeks=4,start_date=?,progression_strategy=?,updated_at=? WHERE id=? AND user_id=?').bind(name, description, startDate, progression, now, planId, requestRow.user_id));
+          const oldDays = await env.DB.prepare('SELECT id FROM training_plan_days_v2 WHERE plan_id=?').bind(planId).all<{id:string}>();
+          for (const day of oldDays.results) statements.push(env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id=?').bind(day.id));
+          statements.push(env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(planId));
+        }
+        normalized.forEach((day, dayIndex) => {
+          const dayId = crypto.randomUUID();
+          statements.push(env.DB.prepare('INSERT INTO training_plan_days_v2(id,plan_id,day_key,title,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').bind(dayId, planId, day.day_key, day.title, dayIndex, now, now));
+          day.exercises.forEach((exercise, exerciseIndex) => statements.push(env.DB.prepare('INSERT INTO training_plan_exercises_v2(id,day_id,name,sort_order,target_sets,target_reps,target_weight_kg,notes,rest_seconds,transition_rest_seconds,alternatives_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), dayId, exercise.name, exerciseIndex, exercise.sets, exercise.reps, exercise.weight_kg, exercise.notes, exercise.rest_seconds, exercise.transition_rest_seconds, JSON.stringify(exercise.alternatives))));
+        });
+        statements.push(env.DB.prepare('UPDATE individual_plan_requests SET training_plan_id=?,training_plan_name=?,training_plan_description=?,training_plan_start_date=?,training_plan_progression=?,training_plan_json=?,updated_at=? WHERE id=? AND user_id=?').bind(planId, name, description, startDate, progression, JSON.stringify(normalized), now, requestId, requestRow.user_id));
+        await env.DB.batch(statements);
+        return v2Reply({ ok: true, training_plan_id: planId, name, updated_at: now });
       }
       const individualRequestMatch = path.match(/^\/api\/v2\/admin\/individual-plan-requests\/([a-f0-9-]+)$/i);
       if (individualRequestMatch && method === 'PATCH') {
         await ensureIndividualPlanRequestTable(env);
         const b = await v2Body(request), status = v2Field(b, 'status', 30), adminNote = v2Field(b, 'admin_note', 4000);
-        if (!['new','in_progress','waiting','completed','cancelled'].includes(status)) return v2Reply({ error: 'Nieprawidłowy status zamówienia planu indywidualnego.' }, 400);
+        if (!['awaiting_questionnaire','in_preparation','ready','canceled','refunded'].includes(status)) return v2Reply({ error: 'Nieprawidłowy status zamówienia planu indywidualnego.' }, 400);
         const now = new Date().toISOString();
-        const result = await env.DB.prepare('UPDATE individual_plan_requests SET status=?,admin_note=?,updated_at=? WHERE id=?').bind(status, adminNote, now, individualRequestMatch[1]).run();
-        if (!result.meta.changes) return v2Reply({ error: 'Nie znaleziono zamówienia planu indywidualnego.' }, 404);
-        return v2Reply({ ok: true, status, updated_at: now });
+        const existing = await env.DB.prepare('SELECT id,training_plan_id,training_plan_json FROM individual_plan_requests WHERE id=? LIMIT 1').bind(individualRequestMatch[1]).first<{id:string;training_plan_id:string|null;training_plan_json:string|null}>();
+        if (!existing) return v2Reply({ error: 'Nie znaleziono zamówienia planu indywidualnego.' }, 404);
+        if (status === 'ready' && (!existing.training_plan_id || !existing.training_plan_json)) return v2Reply({ error: 'Najpierw zapisz plan treningowy w edytorze poniżej. Dopiero potem ustaw status „Zrealizowany”.' }, 409);
+        const orderStatus = status === 'in_preparation' ? 'processing' : status === 'ready' ? 'fulfilled' : status === 'canceled' ? 'canceled' : status === 'refunded' ? 'refunded' : 'paid';
+        const results = await env.DB.batch([
+          env.DB.prepare('UPDATE individual_plan_requests SET status=?,admin_note=?,updated_at=? WHERE id=?').bind(status, adminNote, now, individualRequestMatch[1]),
+          env.DB.prepare(`UPDATE orders SET status=?,updated_at=? WHERE id=(SELECT order_id FROM individual_plan_requests WHERE id=?) AND EXISTS (SELECT 1 FROM order_items i WHERE i.order_id=orders.id AND i.product_key=?)`).bind(orderStatus, now, individualRequestMatch[1], V2_INDIVIDUAL_PLAN_PRODUCT_KEY),
+        ]);
+        if (!results[0]?.meta?.changes) return v2Reply({ error: 'Nie udało się zapisać statusu zamówienia.' }, 500);
+        // Status zamówienia i status realizacji są synchronizowane. E-mail wysyła administrator ręcznie poza aplikacją.
+        return v2Reply({ ok: true, status, order_status: orderStatus, updated_at: now });
       }
       const replacementFileMatch = path.match(/^\/api\/v2\/admin\/products\/([a-z0-9-]+)\/file$/);
       if (replacementFileMatch && method === 'POST') {
