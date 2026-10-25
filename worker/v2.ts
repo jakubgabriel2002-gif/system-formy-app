@@ -504,25 +504,30 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const trainingHistory = v2Field(b, 'training_history', 1500), schedule = v2Field(b, 'schedule', 800), preferences = v2Field(b, 'preferences', 1000), avoid = v2Field(b, 'avoid', 1200), notes = v2Field(b, 'notes', 1500);
       const requestedId = v2Field(b, 'request_id', 80);
       let equipmentList: string[] = [];
-      if (location === 'gym') equipmentList = ['gym'];
-      else {
-        try {
-          const parsed: unknown = JSON.parse(rawEquipment || '[]');
-          if (Array.isArray(parsed)) equipmentList = parsed.filter((item): item is string => typeof item === 'string');
-          else if (typeof parsed === 'string' && parsed !== 'none' && parsed !== 'gym') equipmentList = [parsed];
-        } catch { if (rawEquipment && !['none', 'gym'].includes(rawEquipment)) equipmentList = [rawEquipment]; }
-      }
-      const allowedEquipment = ['bands','dumbbells','bench','squat_rack','pullup_bar','kettlebell','suspension'];
-      if (location !== 'gym' && (equipmentList.some(item => !allowedEquipment.includes(item)) || new Set(equipmentList).size !== equipmentList.length)) return v2Reply({ error: 'Wybierz sprzęt z dostępnej listy.' }, 400);
-      const equipment = location === 'gym' ? 'gym' : JSON.stringify(equipmentList);
+      try {
+        const parsed: unknown = JSON.parse(rawEquipment || '[]');
+        if (Array.isArray(parsed)) equipmentList = parsed.filter((item): item is string => typeof item === 'string');
+        else if (typeof parsed === 'string' && parsed) equipmentList = [parsed];
+      } catch { if (rawEquipment && rawEquipment !== 'none') equipmentList = [rawEquipment]; }
+      // Compatibility with older clients that submitted a scalar "gym" value.
+      if (equipmentList.length === 1 && equipmentList[0] === 'gym') equipmentList = ['full_gym'];
+      if (!equipmentList.length) equipmentList = location === 'gym' ? ['full_gym'] : ['none'];
+      const allowedEquipment = ['full_gym','none','bands','dumbbells','bench','squat_rack','pullup_bar','kettlebell','suspension','barbell','weight_plates','cable_machine','machines','smith_machine','leg_press','leg_extension_curl','chest_press','lat_pulldown','dip_station','cardio','other'];
+      if (equipmentList.some(item => !allowedEquipment.includes(item)) || new Set(equipmentList).size !== equipmentList.length || (equipmentList.includes('none') && equipmentList.length > 1) || (equipmentList.includes('full_gym') && equipmentList.length > 1)) return v2Reply({ error: 'Wybierz poprawny zestaw dostępnego sprzętu.' }, 400);
+      if (location === 'gym' && equipmentList.includes('none')) return v2Reply({ error: 'Dla treningu na siłowni wybierz dostępny sprzęt albo pełne wyposażenie siłowni.' }, 400);
+      const equipment = JSON.stringify(equipmentList);
       const answerLimits: Record<string, number> = {
         age: 3, sex: 40, weight_kg: 20, height_cm: 20, illnesses: 1200, injuries: 1200, congenital_conditions: 1200, medications: 1200,
-        max_bench_press: 80, max_squat: 80, max_situps: 80, max_deadlift: 80, max_bench_press_unknown: 10, max_squat_unknown: 10, max_situps_unknown: 10, max_deadlift_unknown: 10,
+        max_profile: 10, equipment_other: 300,
+        max_bench_press: 80, max_squat: 80, max_situps: 80, max_deadlift: 80, max_pushups: 80, max_knee_pushups: 80, max_squat_bodyweight: 80, max_jumping_jacks: 80,
+        max_bench_press_unknown: 10, max_squat_unknown: 10, max_situps_unknown: 10, max_deadlift_unknown: 10, max_pushups_unknown: 10, max_knee_pushups_unknown: 10, max_squat_bodyweight_unknown: 10, max_jumping_jacks_unknown: 10,
         progression: 30, conditioning_rating: 3, strength_rating: 3, unable_exercises: 1200,
       };
       const questionnaire: Record<string, string> = {};
       for (const [key, max] of Object.entries(answerLimits)) questionnaire[key] = v2Field(b, key, max);
       questionnaire.equipment = equipment;
+      questionnaire.equipment_other = v2Field(b, 'equipment_other', 300);
+      questionnaire.max_profile = questionnaire.max_profile === 'home' ? 'home' : 'gym';
       questionnaire.location = location;
       questionnaire.goal = goal;
       questionnaire.level = level;
@@ -538,6 +543,17 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const age = Number(questionnaire.age), weight = Number(questionnaire.weight_kg), height = Number(questionnaire.height_cm);
       if (!Number.isInteger(age) || age < 13 || age > 100 || !Number.isFinite(weight) || weight < 25 || weight > 400 || !Number.isFinite(height) || height < 100 || height > 250 || !['female','male','other','prefer_not_to_say'].includes(questionnaire.sex)) return v2Reply({ error: 'Sprawdź wiek, płeć, wagę i wzrost.' }, 400);
       if (!Number.isInteger(days) || days < 1 || days > 7 || !Number.isInteger(minutes) || minutes < 30 || minutes > 120) return v2Reply({ error: 'Sprawdź liczbę dni i czas treningu.' }, 400);
+      const maxProfile = questionnaire.max_profile === 'home' ? 'home' : 'gym';
+      const requiredMaxFields = maxProfile === 'home'
+        ? [['max_pushups','max_pushups_unknown'],['max_knee_pushups','max_knee_pushups_unknown'],['max_squat_bodyweight','max_squat_bodyweight_unknown'],['max_situps','max_situps_unknown'],['max_jumping_jacks','max_jumping_jacks_unknown']]
+        : [['max_bench_press','max_bench_press_unknown'],['max_squat','max_squat_unknown'],['max_situps','max_situps_unknown'],['max_deadlift','max_deadlift_unknown']];
+      for (const [valueKey, unknownKey] of requiredMaxFields) {
+        const rawValue = (questionnaire[valueKey] || '').trim();
+        const explicitlyUnknown = questionnaire[unknownKey] === 'true';
+        if (!rawValue && !explicitlyUnknown) return v2Reply({ error: 'Dla każdego maksimum wpisz wynik albo zaznacz „Nie wiem”.' }, 400);
+        if (rawValue && (!Number.isFinite(Number(rawValue)) || Number(rawValue) < 0 || Number(rawValue) > 1000)) return v2Reply({ error: 'Sprawdź wartości maksimów — muszą być liczbami od 0 do 1000.' }, 400);
+      }
+      if (equipmentList.includes('other') && !questionnaire.equipment_other.trim()) return v2Reply({ error: 'Opisz inny dostępny sprzęt.' }, 400);
       if (!consent) return v2Reply({ error: 'Zaznacz zgodę na wykorzystanie odpowiedzi do obsługi zamówienia.' }, 400);
       const profile = await env.DB.prepare('SELECT first_name FROM user_profiles WHERE user_id=? LIMIT 1').bind(gate.session!.id).first<{ first_name: string | null }>().catch(() => null);
       const fullName = (profile?.first_name || '').trim().slice(0, 80), now = new Date().toISOString();
@@ -659,9 +675,22 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (!plan) return v2Reply({ error: 'Nie znaleziono planu.' }, 404);
       if (method === 'DELETE') {
         await ensureIndividualPlanRequestTable(env);
-        const assignedIndividualPlan = await env.DB.prepare('SELECT id FROM individual_plan_requests WHERE training_plan_id=? AND user_id=? LIMIT 1').bind(plan.id, gate.session!.id).first<{id:string}>();
-        if (assignedIndividualPlan) return v2Reply({ error: 'Plan indywidualny jest powiązany z zamówieniem. Skontaktuj się z administratorem, jeśli chcesz go usunąć.' }, 409);
-        await env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id IN (SELECT id FROM training_plan_days_v2 WHERE plan_id=?)').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id).run(); await env.DB.prepare('DELETE FROM training_plans_v2 WHERE id=? AND user_id=?').bind(plan.id, gate.session!.id).run(); return v2Reply({ ok: true });
+        const now = new Date().toISOString();
+        const assignments = await env.DB.prepare('SELECT id,order_id FROM individual_plan_requests WHERE training_plan_id=? AND user_id=?').bind(plan.id, gate.session!.id).all<{id:string;order_id:string|null}>();
+        const statements: D1PreparedStatement[] = [];
+        // If the user removes a delivered personal plan, keep the paid order but return it to "in preparation"
+        // so the administrator can recreate and reassign the plan without losing the order history.
+        if (assignments.results.length) {
+          statements.push(env.DB.prepare(`UPDATE orders SET status='processing',updated_at=? WHERE id IN (SELECT order_id FROM individual_plan_requests WHERE training_plan_id=? AND user_id=? AND order_id IS NOT NULL)`).bind(now, plan.id, gate.session!.id));
+          statements.push(env.DB.prepare(`UPDATE individual_plan_requests SET training_plan_id=NULL,training_plan_name=NULL,training_plan_description=NULL,training_plan_start_date=NULL,training_plan_progression=NULL,training_plan_json=NULL,status='in_preparation',updated_at=? WHERE training_plan_id=? AND user_id=?`).bind(now, plan.id, gate.session!.id));
+        }
+        statements.push(env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id IN (SELECT id FROM training_plan_days_v2 WHERE plan_id=?)').bind(plan.id));
+        statements.push(env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id));
+        statements.push(env.DB.prepare('DELETE FROM training_plans_v2 WHERE id=? AND user_id=?').bind(plan.id, gate.session!.id));
+        const results = await env.DB.batch(statements);
+        const deleted = results[results.length - 1]?.meta?.changes || 0;
+        if (!deleted) return v2Reply({ error: 'Nie udało się usunąć planu. Odśwież bibliotekę planów i spróbuj ponownie.' }, 409);
+        return v2Reply({ ok: true, deleted: true, order_returned_to_preparation: assignments.results.length > 0 });
       }
       const b = await v2Body(request), name = v2Field(b, 'name', 120), description = v2Field(b, 'description', 1000), rawDays = Array.isArray(b.days) ? b.days : [];
       const consumeGeneratorCredit = b.consume_generator_credit === true;
