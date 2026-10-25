@@ -167,3 +167,36 @@
  .sf-dashboard-main-card .sf-welcome-actions-full{grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
  .sf-dashboard-main-card .sf-welcome-actions-full .sf-button{width:100%;min-height:48px;padding:10px 8px;font-size:.76rem;white-space:normal;line-height:1.25}
 }
+
+/* Individual plan questionnaire and robust plan-library actions */
+.sf-individual-delivery-note{display:flex;align-items:flex-start;gap:12px;margin-top:16px;padding:15px;border:1px solid rgba(198,243,106,.23);border-radius:14px;background:rgba(198,243,106,.055);color:var(--lime)}
+.sf-individual-delivery-note>svg{flex:0 0 auto;margin-top:2px}
+.sf-individual-delivery-note b,.sf-individual-delivery-note small{display:block}
+.sf-individual-delivery-note b{font-size:13px;color:var(--white)}
+.sf-individual-delivery-note small{margin-top:5px;color:var(--muted);font-size:11px;line-height:1.6}
+.sf-form-section{display:grid;gap:13px;padding:17px;border:1px solid var(--line);border-radius:15px;background:rgba(0,0,0,.09)}
+.sf-form-section>.sf-eyebrow{margin:0 0 -8px;font-size:9px}
+.sf-form-section>h3{margin:0;font-size:18px}
+.sf-form-section>p{margin:0;font-size:12px;line-height:1.6}
+.sf-form-section>label,.sf-form-section .sf-form-grid>label{min-width:0}
+.sf-equipment-picker{display:grid;gap:12px;min-width:0;margin:0;padding:14px;border:1px solid var(--line);border-radius:13px}
+.sf-equipment-picker legend{padding:0 6px;color:var(--white);font-size:12px;font-weight:750}
+.sf-equipment-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.sf-equipment-option{display:flex!important;align-items:flex-start!important;flex-direction:row!important;gap:9px!important;min-height:43px;padding:10px;border:1px solid #343a2e;border-radius:10px;background:#141711;color:#dfe5d8!important;font-size:11px!important;line-height:1.4}
+.sf-equipment-option input{flex:0 0 auto;width:16px!important;height:16px;margin:1px 0 0;accent-color:var(--lime)}
+.sf-equipment-option:has(input:checked){border-color:#71884e;background:#20291a}
+.sf-max-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.sf-max-item{display:grid;align-content:start;gap:9px;min-width:0;padding:12px;border:1px solid var(--line);border-radius:12px;background:#141711}
+.sf-max-item>label:first-child{display:grid;gap:7px;color:#d7dfd0;font-size:11px}
+.sf-max-item label small{color:var(--muted);font-weight:500}
+.sf-max-item input[type=number]{width:100%;min-width:0}
+.sf-max-item .sf-check{font-size:11px!important}
+.sf-individual-answer-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.sf-individual-answer-grid>div{min-width:0;overflow-wrap:anywhere}
+.sf-individual-answer-grid p{white-space:pre-wrap}
+.sf-plan-select-row{display:grid;grid-template-columns:minmax(0,1fr) 42px;gap:7px;align-items:stretch}
+.sf-plan-select-row .sf-plan-select{margin:0;min-width:0}
+.sf-plan-delete-button{display:grid;place-items:center;width:42px;min-height:55px;border:1px solid rgba(255,127,127,.25);border-radius:12px;background:rgba(255,127,127,.06);color:#ffaaa0}
+.sf-plan-delete-button:hover{border-color:#ff7f7f;background:rgba(255,127,127,.12)}
+.sf-plan-delete-button:disabled{opacity:.45;cursor:wait}
+@media(max-width:600px){.sf-equipment-grid,.sf-max-grid,.sf-individual-answer-grid{grid-template-columns:minmax(0,1fr)}.sf-form-section{padding:13px}.sf-equipment-option{min-height:40px}}
