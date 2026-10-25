@@ -28,7 +28,7 @@ async function ensureIndividualPlanRequestTable(env: V2Env): Promise<void> {
     consent INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     payment_status TEXT NOT NULL DEFAULT 'legacy', checkout_session_id TEXT, order_id TEXT,
     training_plan_id TEXT, training_plan_name TEXT, training_plan_description TEXT, training_plan_start_date TEXT,
-    training_plan_progression TEXT, training_plan_json TEXT
+    training_plan_progression TEXT, training_plan_json TEXT, questionnaire_json TEXT NOT NULL DEFAULT '{}'
   )`).run();
 
   // D1 databases may already contain an older table created before the paid-order flow existed.
@@ -42,7 +42,7 @@ async function ensureIndividualPlanRequestTable(env: V2Env): Promise<void> {
     ['admin_note', "TEXT NOT NULL DEFAULT ''"], ['consent', 'INTEGER NOT NULL DEFAULT 0'], ['created_at', "TEXT NOT NULL DEFAULT ''"],
     ['updated_at', "TEXT NOT NULL DEFAULT ''"], ['payment_status', "TEXT NOT NULL DEFAULT 'legacy'"], ['checkout_session_id', 'TEXT'], ['order_id', 'TEXT'],
     ['training_plan_id', 'TEXT'], ['training_plan_name', 'TEXT'], ['training_plan_description', 'TEXT'], ['training_plan_start_date', 'TEXT'],
-    ['training_plan_progression', 'TEXT'], ['training_plan_json', 'TEXT'],
+    ['training_plan_progression', 'TEXT'], ['training_plan_json', 'TEXT'], ['questionnaire_json', "TEXT NOT NULL DEFAULT '{}'"],
   ];
   let existing = new Set<string>();
   try {
@@ -498,12 +498,46 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       await ensureIndividualPlanRequestTable(env);
       await ensureSystemTrainingProducts(env);
       const b = await v2Body(request);
-      const goal = v2Field(b, 'goal', 40), level = v2Field(b, 'level', 30), location = v2Field(b, 'location', 20), equipment = v2Field(b, 'equipment', 30);
+      const goal = v2Field(b, 'goal', 40), level = v2Field(b, 'level', 30), location = v2Field(b, 'location', 20);
+      const rawEquipment = v2Field(b, 'equipment', 500);
       const days = Number(b.days_per_week), minutes = Number(b.session_minutes), consent = b.consent === true || b.consent === 'true';
       const trainingHistory = v2Field(b, 'training_history', 1500), schedule = v2Field(b, 'schedule', 800), preferences = v2Field(b, 'preferences', 1000), avoid = v2Field(b, 'avoid', 1200), notes = v2Field(b, 'notes', 1500);
       const requestedId = v2Field(b, 'request_id', 80);
+      let equipmentList: string[] = [];
+      if (location === 'gym') equipmentList = ['gym'];
+      else {
+        try {
+          const parsed: unknown = JSON.parse(rawEquipment || '[]');
+          if (Array.isArray(parsed)) equipmentList = parsed.filter((item): item is string => typeof item === 'string');
+          else if (typeof parsed === 'string' && parsed !== 'none' && parsed !== 'gym') equipmentList = [parsed];
+        } catch { if (rawEquipment && !['none', 'gym'].includes(rawEquipment)) equipmentList = [rawEquipment]; }
+      }
+      const allowedEquipment = ['bands','dumbbells','bench','squat_rack','pullup_bar','kettlebell','suspension'];
+      if (location !== 'gym' && (equipmentList.some(item => !allowedEquipment.includes(item)) || new Set(equipmentList).size !== equipmentList.length)) return v2Reply({ error: 'Wybierz sprzęt z dostępnej listy.' }, 400);
+      const equipment = location === 'gym' ? 'gym' : JSON.stringify(equipmentList);
+      const answerLimits: Record<string, number> = {
+        age: 3, sex: 40, weight_kg: 20, height_cm: 20, illnesses: 1200, injuries: 1200, congenital_conditions: 1200, medications: 1200,
+        max_bench_press: 80, max_squat: 80, max_situps: 80, max_deadlift: 80, max_bench_press_unknown: 10, max_squat_unknown: 10, max_situps_unknown: 10, max_deadlift_unknown: 10,
+        progression: 30, conditioning_rating: 3, strength_rating: 3, unable_exercises: 1200,
+      };
+      const questionnaire: Record<string, string> = {};
+      for (const [key, max] of Object.entries(answerLimits)) questionnaire[key] = v2Field(b, key, max);
+      questionnaire.equipment = equipment;
+      questionnaire.location = location;
+      questionnaire.goal = goal;
+      questionnaire.level = level;
+      questionnaire.days_per_week = String(days);
+      questionnaire.session_minutes = String(minutes);
+      questionnaire.training_history = trainingHistory;
+      questionnaire.schedule = schedule;
+      questionnaire.preferences = preferences;
+      questionnaire.avoid = avoid;
+      questionnaire.notes = notes;
+      const questionnaireJson = JSON.stringify(questionnaire);
       if (!['muscle','strength','fat_loss','general'].includes(goal) || !['beginner','intermediate','advanced'].includes(level) || !['home','gym','both'].includes(location)) return v2Reply({ error: 'W formularzu wybrano nieprawidłowy cel, poziom lub miejsce treningu.' }, 400);
-      if (!['none','bands','dumbbells','both','gym'].includes(equipment) || !Number.isInteger(days) || days < 1 || days > 7 || !Number.isInteger(minutes) || minutes < 30 || minutes > 120) return v2Reply({ error: 'Sprawdź dostępny sprzęt, liczbę dni i czas treningu.' }, 400);
+      const age = Number(questionnaire.age), weight = Number(questionnaire.weight_kg), height = Number(questionnaire.height_cm);
+      if (!Number.isInteger(age) || age < 13 || age > 100 || !Number.isFinite(weight) || weight < 25 || weight > 400 || !Number.isFinite(height) || height < 100 || height > 250 || !['female','male','other','prefer_not_to_say'].includes(questionnaire.sex)) return v2Reply({ error: 'Sprawdź wiek, płeć, wagę i wzrost.' }, 400);
+      if (!Number.isInteger(days) || days < 1 || days > 7 || !Number.isInteger(minutes) || minutes < 30 || minutes > 120) return v2Reply({ error: 'Sprawdź liczbę dni i czas treningu.' }, 400);
       if (!consent) return v2Reply({ error: 'Zaznacz zgodę na wykorzystanie odpowiedzi do obsługi zamówienia.' }, 400);
       const profile = await env.DB.prepare('SELECT first_name FROM user_profiles WHERE user_id=? LIMIT 1').bind(gate.session!.id).first<{ first_name: string | null }>().catch(() => null);
       const fullName = (profile?.first_name || '').trim().slice(0, 80), now = new Date().toISOString();
@@ -512,12 +546,12 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const draft = await env.DB.prepare('SELECT id,user_id,payment_status FROM individual_plan_requests WHERE id=? LIMIT 1').bind(requestedId).first<{id:string;user_id:string;payment_status:string}>();
         if (!draft || draft.user_id !== gate.session!.id || draft.payment_status !== 'pending') return v2Reply({ error: 'Nie można wznowić tego formularza. Odśwież stronę i rozpocznij nowe zamówienie.' }, 409);
         requestId = draft.id;
-        await env.DB.prepare(`UPDATE individual_plan_requests SET email=?,full_name=?,goal=?,level=?,location=?,equipment=?,days_per_week=?,session_minutes=?,training_history=?,schedule=?,preferences=?,avoid=?,notes=?,status='awaiting_questionnaire',admin_note='',consent=1,updated_at=?,payment_status='pending',checkout_session_id=NULL,order_id=NULL WHERE id=? AND user_id=?`)
-          .bind(gate.session!.email, fullName, goal, level, location, equipment, days, minutes, trainingHistory, schedule, preferences, avoid, notes, now, requestId, gate.session!.id).run();
+        await env.DB.prepare(`UPDATE individual_plan_requests SET email=?,full_name=?,goal=?,level=?,location=?,equipment=?,days_per_week=?,session_minutes=?,training_history=?,schedule=?,preferences=?,avoid=?,notes=?,questionnaire_json=?,status='awaiting_questionnaire',admin_note='',consent=1,updated_at=?,payment_status='pending',checkout_session_id=NULL,order_id=NULL WHERE id=? AND user_id=?`)
+          .bind(gate.session!.email, fullName, goal, level, location, equipment, days, minutes, trainingHistory, schedule, preferences, avoid, notes, questionnaireJson, now, requestId, gate.session!.id).run();
       } else {
-        await env.DB.prepare(`INSERT INTO individual_plan_requests(id,user_id,email,full_name,goal,level,location,equipment,days_per_week,session_minutes,training_history,schedule,preferences,avoid,notes,status,admin_note,consent,created_at,updated_at,payment_status,checkout_session_id,order_id)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'awaiting_questionnaire','',1,?,?,'pending',NULL,NULL)`)
-          .bind(requestId, gate.session!.id, gate.session!.email, fullName, goal, level, location, equipment, days, minutes, trainingHistory, schedule, preferences, avoid, notes, now, now).run();
+        await env.DB.prepare(`INSERT INTO individual_plan_requests(id,user_id,email,full_name,goal,level,location,equipment,days_per_week,session_minutes,training_history,schedule,preferences,avoid,notes,questionnaire_json,status,admin_note,consent,created_at,updated_at,payment_status,checkout_session_id,order_id)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'awaiting_questionnaire','',1,?,?,'pending',NULL,NULL)`)
+          .bind(requestId, gate.session!.id, gate.session!.email, fullName, goal, level, location, equipment, days, minutes, trainingHistory, schedule, preferences, avoid, notes, questionnaireJson, now, now).run();
       }
       const item = await v2Product(env, V2_INDIVIDUAL_PLAN_PRODUCT_KEY);
       if (!item) return v2Reply({ error: 'Nie udało się przygotować produktu planu indywidualnego. Spróbuj ponownie.' }, 500);
@@ -631,6 +665,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       }
       const b = await v2Body(request), name = v2Field(b, 'name', 120), description = v2Field(b, 'description', 1000), rawDays = Array.isArray(b.days) ? b.days : [];
       const consumeGeneratorCredit = b.consume_generator_credit === true;
+      const allowEmptyDays = b.allow_empty_days === true;
       const generatorCredit = consumeGeneratorCredit ? await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(gate.session!.id, V2_GENERATOR_PRODUCT_KEY).first<{ id: string }>() : null;
       if (consumeGeneratorCredit && !generatorCredit) return v2Reply({ error: 'Użycie generatora zostało już wykorzystane lub nie jest aktywne. Opłać kolejne użycie, aby zapisać nowy plan.' }, 403);
       const durationWeeks = 4;
@@ -654,6 +689,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return v2Reply({ error: 'Nieprawidłowy dzień planu.' }, 400);
         const d = raw as Record<string, unknown>, dayKey = typeof d.day_key === 'string' ? d.day_key.trim().slice(0, 30) : '', title = typeof d.title === 'string' ? d.title.trim().slice(0, 120) : '', rawExercises = Array.isArray(d.exercises) ? d.exercises : [];
         if (!title || !dayKey || rawExercises.length > 40) return v2Reply({ error: 'Każdy dzień musi mieć nazwę i maksymalnie 40 ćwiczeń.' }, 400);
+        if (!allowEmptyDays && rawExercises.length === 0) return v2Reply({ error: `Dzień „${title}” nie ma ćwiczeń. Dodaj przynajmniej jedno ćwiczenie przed zapisem.` }, 400);
         const exercises: Array<{ name: string; sets: number; reps: number; weight_kg: number | null; notes: string; rest_seconds: number; transition_rest_seconds: number; alternatives: string[] }> = [];
         for (const value of rawExercises) {
           if (!value || typeof value !== 'object' || Array.isArray(value)) return v2Reply({ error: 'Nieprawidłowe ćwiczenie.' }, 400);
@@ -664,9 +700,8 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         normalized.push({ day_key: dayKey, title, exercises });
       }
       const now = new Date().toISOString();
-      await env.DB.prepare('UPDATE training_plans_v2 SET name=?,description=?,duration_weeks=?,start_date=?,progression_strategy=?,updated_at=? WHERE id=? AND user_id=?').bind(name, description, durationWeeks, startDate, progressionStrategy, now, plan.id, gate.session!.id).run();
       const oldDays = await env.DB.prepare('SELECT id FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id).all<{ id: string }>();
-      const statements: D1PreparedStatement[] = [];
+      const statements: D1PreparedStatement[] = [env.DB.prepare('UPDATE training_plans_v2 SET name=?,description=?,duration_weeks=?,start_date=?,progression_strategy=?,updated_at=? WHERE id=? AND user_id=?').bind(name, description, durationWeeks, startDate, progressionStrategy, now, plan.id, gate.session!.id)];
       if (oldDays.results.length) { for (const day of oldDays.results) statements.push(env.DB.prepare('DELETE FROM training_plan_exercises_v2 WHERE day_id=?').bind(day.id)); statements.push(env.DB.prepare('DELETE FROM training_plan_days_v2 WHERE plan_id=?').bind(plan.id)); }
       normalized.forEach((day, di) => {
         const dayId = crypto.randomUUID(); statements.push(env.DB.prepare('INSERT INTO training_plan_days_v2(id,plan_id,day_key,title,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').bind(dayId, plan.id, day.day_key, day.title, di, now, now));
