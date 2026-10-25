@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { exerciseForProgramWeek, formatProgramDate, getProgramEndDate, localDateString, PROGRAM_WEEKS, PROGRESSION_OPTIONS, progressionOption, type ProgressionStrategy } from '../lib/trainingProgram';
+import { exerciseCatalogGroups, exerciseCatalogReplacementOptions } from '../lib/exerciseCatalog';
 import {
   ArrowLeft, ArrowRight, CalendarDays, Check, CheckCircle2, Clock3, Dumbbell,
   Flame, Home, RotateCcw, Sparkles, Target, Trophy, Zap,
@@ -38,14 +39,14 @@ export type GeneratedPlanResult = { days: GeneratedPlanDay[]; duration_weeks?: n
 type Goal = 'muscle' | 'strength' | 'fat-loss' | 'general';
 type Level = 'beginner' | 'intermediate' | 'advanced';
 type Place = 'home' | 'gym';
-type Equipment = 'none' | 'bands' | 'dumbbells' | 'both';
+type Equipment = 'bands' | 'dumbbells' | 'bench' | 'squat_rack' | 'pullup_bar';
 type Focus = 'balanced' | 'upper' | 'lower' | 'conditioning';
 type Pattern = 'full' | 'upper' | 'lower' | 'push' | 'pull' | 'legs' | 'conditioning' | 'mobility';
-type ExerciseTemplate = { name: string; group: 'legs' | 'push' | 'pull' | 'core' | 'conditioning' | 'mobility'; gear?: 'bands' | 'dumbbells' | 'gym'; reps?: number; notes?: string };
+type ExerciseTemplate = { name: string; group: 'legs' | 'push' | 'pull' | 'core' | 'conditioning' | 'mobility'; gear?: Equipment | 'gym'; reps?: number; notes?: string };
 
 const SAVED_GENERATOR_SETTINGS_KEY = 'sf-generator-plan-settings-v1';
 type SavedGeneratorSettings = {
-  goal: Goal; level: Level; location: Place; equipment: Equipment; days: number; duration: number;
+  goal: Goal; level: Level; location: Place; equipment: Equipment[]; days: number; duration: number;
   focus: Focus; startDate: string; progressionStrategy: ProgressionStrategy;
 };
 
@@ -56,8 +57,8 @@ type Props = {
   canCreatePlan: boolean;
   onPurchase: () => Promise<void>;
   onCancel: () => void;
-  onSave: (draft: GeneratedPlanDraft) => Promise<void>;
-  onReplaceExercises: (request: { location: Place; equipment: Equipment | 'gym'; exercises: Array<{ key: string; day_title: string; name: string; sets: number; reps: number; notes: string; preferred_name?: string; other_names: string[] }> }) => Promise<{ replacements: Array<{ key: string; name: string }> }>;
+  onSave: (draft: GeneratedPlanDraft) => Promise<boolean | void>;
+  onReplaceExercises: (request: { location: Place; equipment: Equipment[] | 'gym'; exercises: Array<{ key: string; day_title: string; name: string; sets: number; reps: number; notes: string; preferred_name?: string; other_names: string[] }> }) => Promise<{ replacements: Array<{ key: string; name: string }> }>;
 };
 
 const GOALS: Array<{ id: Goal; title: string; desc: string; icon: typeof Target }> = [
@@ -72,10 +73,11 @@ const LEVELS: Array<{ id: Level; title: string; desc: string }> = [
   { id: 'advanced', title: 'Zaawansowany', desc: 'Mam doświadczenie i dobrze znam technikę.' },
 ];
 const EQUIPMENT_OPTIONS: Array<{ id: Equipment; title: string; desc: string }> = [
-  { id: 'none', title: 'Bez sprzętu', desc: 'Masa własnego ciała' },
-  { id: 'bands', title: 'Gumy oporowe', desc: 'Gumy i minibandy' },
   { id: 'dumbbells', title: 'Hantle', desc: 'Jedna lub para hantli' },
-  { id: 'both', title: 'Gumy i hantle', desc: 'Więcej wariantów ćwiczeń' },
+  { id: 'bands', title: 'Gumy oporowe', desc: 'Gumy i minibandy' },
+  { id: 'bench', title: 'Ławka treningowa', desc: 'Ławka pozioma lub regulowana' },
+  { id: 'squat_rack', title: 'Stojaki / sztanga', desc: 'Stojaki do przysiadów i wyciskania' },
+  { id: 'pullup_bar', title: 'Drążek do podciągania', desc: 'Podciąganie i ćwiczenia w zwisie' },
 ];
 const FOCUSES: Array<{ id: Focus; title: string }> = [
   { id: 'balanced', title: 'Całe ciało' },
@@ -89,38 +91,28 @@ const GOAL_NAMES: Record<Goal, string> = {
 const LEVEL_NAMES: Record<Level, string> = { beginner: 'początkujący', intermediate: 'średniozaawansowany', advanced: 'zaawansowany' };
 const FOCUS_NAMES: Record<Focus, string> = { balanced: 'całe ciało', upper: 'górne partie ciała', lower: 'nogi i pośladki', conditioning: 'kondycja' };
 
-function homeExercises(equipment: Equipment): ExerciseTemplate[] {
-  const exercises: ExerciseTemplate[] = [
-    { name: 'Przysiady z masą ciała', group: 'legs' },
-    { name: 'Wykroki w tył', group: 'legs', reps: 8 },
-    { name: 'Most biodrowy', group: 'legs' },
-    { name: 'Wspięcia na palce', group: 'legs' },
-    { name: 'Pompki w wariancie dostosowanym', group: 'push', reps: 8, notes: 'Wybierz wariant, w którym zachowujesz kontrolę ruchu.' },
-    { name: 'Pompki przy ścianie lub blacie', group: 'push', reps: 10 },
-    { name: 'Superman — unoszenie tułowia', group: 'pull', reps: 10, notes: 'Ruch wykonuj spokojnie, bez zadzierania głowy.' },
-    { name: 'Y-T-W w leżeniu na brzuchu', group: 'pull', reps: 8, notes: 'Powtórzenie to pełna sekwencja Y, T i W.' },
-    { name: 'Dead bug — naprzemienne opuszczanie kończyn', group: 'core', reps: 8 },
-    { name: 'Plank', group: 'core', reps: 30, notes: 'W polu powtórzeń wpisz czas w sekundach.' },
-    { name: 'Marsz w miejscu z energiczną pracą ramion', group: 'conditioning', reps: 45, notes: 'Czas w sekundach.' },
-    { name: 'Mountain climbers w spokojnym tempie', group: 'conditioning', reps: 20 },
-    { name: 'Mobilizacja bioder', group: 'mobility', reps: 8, notes: 'Na każdą stronę.' },
-    { name: 'Koci grzbiet', group: 'mobility', reps: 10 },
-    { name: 'Rotacje odcinka piersiowego', group: 'mobility', reps: 8, notes: 'Na każdą stronę.' },
-  ];
-  if (equipment === 'bands' || equipment === 'both') exercises.push(
-    { name: 'Wiosłowanie gumą oporową', group: 'pull', gear: 'bands' },
-    { name: 'Rozciąganie gumy przed klatką', group: 'pull', gear: 'bands' },
-    { name: 'Pallof press z gumą', group: 'core', gear: 'bands' },
-    { name: 'Chodzenie bokiem z minibandem', group: 'legs', gear: 'bands', reps: 10, notes: 'Kroki na każdą stronę.' },
-  );
-  if (equipment === 'dumbbells' || equipment === 'both') exercises.push(
-    { name: 'Przysiad goblet z hantlem', group: 'legs', gear: 'dumbbells' },
-    { name: 'Martwy ciąg rumuński z hantlami', group: 'legs', gear: 'dumbbells' },
-    { name: 'Wiosłowanie hantlem jednorącz', group: 'pull', gear: 'dumbbells', reps: 10, notes: 'Na każdą stronę.' },
-    { name: 'Wyciskanie hantli nad głowę', group: 'push', gear: 'dumbbells' },
-    { name: 'Wyciskanie hantli na podłodze', group: 'push', gear: 'dumbbells' },
-  );
-  return exercises;
+function exerciseTemplatesFromCatalog(location: Place, equipment: Equipment[]): ExerciseTemplate[] {
+  const groupByCategory: Record<string, ExerciseTemplate['group']> = {
+    'Klatka piersiowa': 'push', 'Barki': 'push', 'Triceps': 'push', 'Plecy': 'pull', 'Biceps': 'pull',
+    'Nogi i pośladki': 'legs', 'Brzuch i core': 'core', 'Kondycja': 'conditioning', 'Mobilność i regeneracja': 'mobility',
+  };
+  const groups = exerciseCatalogGroups(location, location === 'gym' ? 'gym' : (equipment.length ? equipment : 'none'));
+  const seen = new Set<string>();
+  const result: ExerciseTemplate[] = [];
+  for (const category of groups) {
+    for (const name of category.exercises) {
+      const normalized = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      const group = groupByCategory[category.category] || 'legs';
+      result.push({ name, group, reps: group === 'conditioning' ? 30 : group === 'mobility' ? 8 : group === 'core' ? 12 : 10,
+        notes: group === 'conditioning' ? 'Dobierz tempo do swoich możliwości; przerwij, jeśli pojawi się ból lub zawroty głowy.' : undefined });
+    }
+  }
+  return result;
+}
+function homeExercises(equipment: Equipment[]): ExerciseTemplate[] {
+  return exerciseTemplatesFromCatalog('home', equipment);
 }
 
 const GYM_EXERCISES: ExerciseTemplate[] = [
@@ -160,9 +152,9 @@ function patternLabel(pattern: Pattern): string {
   return ({ full: 'Całe ciało', upper: 'Góra ciała', lower: 'Dół ciała', push: 'Klatka, barki i triceps', pull: 'Plecy i biceps', legs: 'Nogi i pośladki', conditioning: 'Kondycja', mobility: 'Lekka regeneracja i mobilność' } as Record<Pattern, string>)[pattern];
 }
 
-function buildDays(location: Place, equipment: Equipment, level: Level, goal: Goal, days: number, duration: number, focus: Focus): GeneratedPlanDay[] {
+function buildDays(location: Place, equipment: Equipment[], level: Level, goal: Goal, days: number, duration: number, focus: Focus): GeneratedPlanDay[] {
   const patterns = workoutPatterns(days);
-  const library = location === 'gym' ? GYM_EXERCISES : homeExercises(equipment);
+  const library = location === 'gym' ? exerciseTemplatesFromCatalog('gym', []) : homeExercises(equipment);
   const sets = level === 'beginner' ? 2 : level === 'intermediate' ? 3 : 4;
   const defaultReps = goal === 'strength' ? (level === 'beginner' ? 8 : level === 'intermediate' ? 6 : 5) : goal === 'fat-loss' ? 12 : goal === 'muscle' ? (level === 'advanced' ? 8 : 10) : 10;
   const exerciseCount = duration <= 30 ? 4 : duration <= 45 ? 5 : duration <= 60 ? 6 : 7;
@@ -226,7 +218,7 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
   const [goal, setGoal] = useState<Goal>('muscle');
   const [level, setLevel] = useState<Level>('beginner');
   const [location, setLocation] = useState<Place>(defaultLocation);
-  const [equipment, setEquipment] = useState<Equipment>('none');
+  const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [days, setDays] = useState(3);
   const [duration, setDuration] = useState(45);
   const [focus, setFocus] = useState<Focus>('balanced');
@@ -244,17 +236,37 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
   const [replacementNotice, setReplacementNotice] = useState('');
   const selectedGoal = GOALS.find(item => item.id === goal) || GOALS[0];
   const selectedLevel = LEVELS.find(item => item.id === level) || LEVELS[0];
-  const chosenEquipment = EQUIPMENT_OPTIONS.find(item => item.id === equipment) || EQUIPMENT_OPTIONS[0];
+  const chosenEquipment = equipment.length ? equipment.map(id => EQUIPMENT_OPTIONS.find(item => item.id === id)?.title || id).join(', ') : 'bez sprzętu';
+  const [paymentBanner, setPaymentBanner] = useState('');
+  const autoSavingAfterPayment = useRef(false);
 
   useEffect(() => {
     try {
+      const pendingRaw = window.sessionStorage.getItem('sf-generator-pending-draft-v1');
+      if (pendingRaw) {
+        const pending = JSON.parse(pendingRaw) as GeneratedPlanDraft & { goal?: Goal; level?: Level; focus?: Focus; equipment?: Equipment[]; days_count?: number; duration?: number };
+        if (pending && Array.isArray(pending.days) && pending.days.length) {
+          setPlanName(pending.name || 'Mój plan treningowy'); setGeneratedDays(pending.days); setGenerationMeta({ days: pending.days, duration_weeks: pending.duration_weeks || PROGRAM_WEEKS, start_date: pending.start_date, progression_strategy: pending.progression_strategy });
+          if (pending.goal && GOALS.some(item => item.id === pending.goal)) setGoal(pending.goal);
+          if (pending.level && LEVELS.some(item => item.id === pending.level)) setLevel(pending.level);
+          if (pending.location === 'home' || pending.location === 'gym') setLocation(pending.location);
+          if (Array.isArray(pending.equipment)) setEquipment(pending.equipment);
+          if (typeof pending.days_count === 'number') setDays(pending.days_count);
+          if (typeof pending.duration === 'number') setDuration(pending.duration);
+          setStartDate(pending.start_date || localDateString()); setProgressionStrategy(pending.progression_strategy || 'reps'); setStep(3);
+          return;
+        }
+      }
       const raw = window.sessionStorage.getItem(SAVED_GENERATOR_SETTINGS_KEY);
       if (!raw) return;
-      const saved = JSON.parse(raw) as Partial<SavedGeneratorSettings>;
+      const saved = JSON.parse(raw) as Partial<SavedGeneratorSettings> & { equipment?: Equipment[] | string };
       if (saved.goal && GOALS.some(item => item.id === saved.goal)) setGoal(saved.goal);
       if (saved.level && LEVELS.some(item => item.id === saved.level)) setLevel(saved.level);
       if (saved.location === 'home' || saved.location === 'gym') setLocation(saved.location);
-      if (saved.equipment && EQUIPMENT_OPTIONS.some(item => item.id === saved.equipment)) setEquipment(saved.equipment);
+      if (Array.isArray(saved.equipment)) setEquipment(saved.equipment.filter((item): item is Equipment => EQUIPMENT_OPTIONS.some(option => option.id === item)));
+      else if (saved.equipment === 'both') setEquipment(['bands','dumbbells']);
+      else if (saved.equipment === 'bands' || saved.equipment === 'dumbbells') setEquipment([saved.equipment]);
+      else if (saved.equipment === 'none') setEquipment([]);
       if (typeof saved.days === 'number' && Number.isInteger(saved.days) && saved.days >= 1 && saved.days <= 7) setDays(saved.days);
       if ([30, 45, 60, 75].includes(Number(saved.duration))) setDuration(Number(saved.duration));
       if (saved.focus && FOCUSES.some(item => item.id === saved.focus)) setFocus(saved.focus);
@@ -263,6 +275,31 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
       setStep(2);
     } catch { /* Ustawienia są opcjonalne; uszkodzony wpis nie blokuje generatora. */ }
   }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('payment') === 'cancelled') setPaymentBanner('Płatność nie została zakończona. Nie pobrano opłaty. Twój skonfigurowany plan pozostał w kreatorze — możesz spróbować ponownie.');
+  }, []);
+
+  useEffect(() => {
+    if (autoSavingAfterPayment.current || !hasPaidAccess) return;
+    let confirmed = false;
+    try { confirmed = window.sessionStorage.getItem('sf-generator-payment-confirmed') === '1'; } catch { /* sessionStorage opcjonalny */ }
+    if (!confirmed) return;
+    let raw = '';
+    try { raw = window.sessionStorage.getItem('sf-generator-pending-draft-v1') || ''; } catch { /* opcjonalny zapis */ }
+    if (!raw) { try { window.sessionStorage.removeItem('sf-generator-payment-confirmed'); } catch {} return; }
+    let draft: GeneratedPlanDraft;
+    try { draft = JSON.parse(raw) as GeneratedPlanDraft; } catch { setGenerationError('Płatność potwierdzona, ale nie udało się odczytać podglądu planu. Wróć do konfiguratora i spróbuj zapisać plan ponownie.'); return; }
+    autoSavingAfterPayment.current = true;
+    setPaymentBanner('Płatność potwierdzona. Zapisuję skonfigurowany plan i otwieram edytor…');
+    void onSave(draft).then(result => {
+      if (result === false) { autoSavingAfterPayment.current = false; setGenerationError('Płatność została potwierdzona, ale zapis planu nie powiódł się. Twój podgląd pozostał zachowany — kliknij przycisk ponownie.'); return; }
+      try { window.sessionStorage.removeItem('sf-generator-pending-draft-v1'); window.sessionStorage.removeItem('sf-generator-payment-confirmed'); window.sessionStorage.removeItem(SAVED_GENERATOR_SETTINGS_KEY); } catch { /* opcjonalny zapis */ }
+    }).catch(error => { autoSavingAfterPayment.current = false; setGenerationError(error instanceof Error ? error.message : 'Płatność została potwierdzona, ale nie udało się zapisać planu.'); });
+  }, [hasPaidAccess]);
+
+  function navigateStep(next: number) { setStep(next); window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' })); }
 
   function generatedExerciseSelectionKey(day: GeneratedPlanDay, exerciseIndex: number, exercise: GeneratedPlanExercise) {
     return `${day.day_key}::${exerciseIndex}::${exercise.name}`;
@@ -331,14 +368,6 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
       setGenerationError('Osiągnięto limit zapisanych planów na tym koncie. Usuń jeden z własnych planów, aby kontynuować. Jeśli korzystasz z Premium, sprawdź, czy nie masz już 3 zapisanych planów.');
       return;
     }
-    if (!hasPaidAccess) {
-      try {
-        const settings: SavedGeneratorSettings = { goal, level, location, equipment, days, duration, focus, startDate, progressionStrategy };
-        window.sessionStorage.setItem(SAVED_GENERATOR_SETTINGS_KEY, JSON.stringify(settings));
-      } catch { /* Brak sessionStorage nie powinien blokować przejścia do płatności. */ }
-      await onPurchase();
-      return;
-    }
     setSelectedForReplacement({}); setPreferredReplacementNames({}); setReplacementError(''); setReplacementNotice('');
     setGenerating(true); setGenerationError('');
     try {
@@ -352,7 +381,7 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
         days: resultDays, duration_weeks: PROGRAM_WEEKS,
         start_date: startDate, progression_strategy: progressionStrategy,
       };
-      setGeneratedDays(localResult.days); setGenerationMeta(localResult); setStep(3);
+      setGeneratedDays(localResult.days); setGenerationMeta(localResult); navigateStep(3);
     } catch (error) {
       setGenerationError(error instanceof Error ? error.message : 'Nie udało się przygotować planu. Spróbuj ponownie.');
     } finally { setGenerating(false); }
@@ -367,16 +396,30 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
       if (!resultDays.length || !resultDays.every(day => day.exercises.length && day.exercises.every(ex => ex.name.trim()))) throw new Error('Nie udało się ułożyć planu z katalogu. Zmień ustawienia i spróbuj ponownie.');
       setGeneratedDays(resultDays);
       setGenerationMeta({ days: resultDays, duration_weeks: PROGRAM_WEEKS, start_date: startDate, progression_strategy: progressionStrategy });
-      setStep(3);
+      navigateStep(3);
     } catch (error) { setGenerationError(error instanceof Error ? error.message : 'Nie udało się ułożyć planu.'); }
     finally { setGenerating(false); }
   };
 
+  const makeDraft = (): GeneratedPlanDraft => {
+    const description = `Plan przygotowany na 4 tygodnie: cel — ${GOAL_NAMES[goal]}; poziom — ${LEVEL_NAMES[level]}; nacisk — ${FOCUS_NAMES[focus]}; ${location === 'home' ? `trening w domu (sprzęt: ${chosenEquipment})` : 'trening na siłowni'}; ${days} jednostki tygodniowo; około ${duration} min na jednostkę; progresja — ${progressionOption(progressionStrategy).shortLabel}. Dopasuj obciążenie do swoich możliwości i techniki.`;
+    return { name: planName.trim(), description, location, days: generatedDays, duration_weeks: PROGRAM_WEEKS, start_date: startDate, progression_strategy: progressionStrategy };
+  };
   const save = async () => {
-    const cleanName = planName.trim();
-    if (cleanName.length < 2 || !generationMeta) return;
-    const description = `Plan przygotowany przez katalog ćwiczeń Systemu Formy na 4 tygodnie: cel — ${GOAL_NAMES[goal]}; poziom — ${LEVEL_NAMES[level]}; nacisk — ${FOCUS_NAMES[focus]}; ${location === 'home' ? `trening w domu (${chosenEquipment.title.toLowerCase()})` : 'trening na siłowni'}; ${days} jednostki tygodniowo; około ${duration} min na jednostkę; progresja — ${progressionOption(progressionStrategy).shortLabel}. Schemat tygodniowy powtarza się przez 4 tygodnie, a parametry zmieniają się zgodnie z wybraną progresją. Dopasuj obciążenie do swoich możliwości i techniki.`;
-    await onSave({ name: cleanName, description, location, days: generatedDays, duration_weeks: PROGRAM_WEEKS, start_date: startDate, progression_strategy: progressionStrategy });
+    const draft = makeDraft();
+    if (draft.name.length < 2 || !generationMeta) return;
+    if (!hasPaidAccess) {
+      try {
+        window.sessionStorage.setItem(SAVED_GENERATOR_SETTINGS_KEY, JSON.stringify({ goal, level, location, equipment, days, duration, focus, startDate, progressionStrategy } satisfies SavedGeneratorSettings));
+        window.sessionStorage.setItem('sf-generator-pending-draft-v1', JSON.stringify({ ...draft, goal, level, focus, equipment, days_count: days, duration }));
+      } catch { setGenerationError('Nie udało się tymczasowo zachować planu. Sprawdź ustawienia przeglądarki i spróbuj ponownie.'); return; }
+      setGenerationError('');
+      try { await onPurchase(); }
+      catch (error) { setGenerationError(error instanceof Error ? error.message : 'Wystąpił błąd płatności. Możesz ponowić próbę bez utraty konfiguracji.'); }
+      return;
+    }
+    const saved = await onSave(draft);
+    if (saved !== false) { try { window.sessionStorage.removeItem('sf-generator-pending-draft-v1'); window.sessionStorage.removeItem(SAVED_GENERATOR_SETTINGS_KEY); } catch { /* opcjonalny zapis */ } }
   };
 
   if (generating) return <section className="sf-view sf-plan-generator-view sf-gen-loading-view" role="status" aria-live="polite">
@@ -411,7 +454,7 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
       <div className="sf-gen-goal-grid">{GOALS.map(item => { const Icon = item.icon; return <button type="button" key={item.id} className={`sf-gen-choice-card ${goal === item.id ? 'is-selected' : ''}`} onClick={() => setGoal(item.id)}><span className="sf-gen-choice-icon"><Icon size={20}/></span><span className="sf-gen-radio-dot"/><b>{item.title}</b><small>{item.desc}</small></button>; })}</div>
       <div className="sf-gen-section-head sf-gen-section-head-small"><div><h2>Jak oceniasz swój poziom?</h2><p>Plan będzie miał odpowiednią objętość i stopień trudności.</p></div></div>
       <div className="sf-gen-level-grid">{LEVELS.map(item => <button type="button" key={item.id} className={`sf-gen-level-card ${level === item.id ? 'is-selected' : ''}`} onClick={() => setLevel(item.id)}><span className="sf-gen-radio-dot"/><b>{item.title}</b><small>{item.desc}</small></button>)}</div>
-      <div className="sf-gen-footer"><span>Możesz później zmienić ćwiczenia w edytorze.</span><button type="button" className="sf-button sf-button-lime" onClick={() => setStep(2)}>Dalej <ArrowRight size={16}/></button></div>
+      <div className="sf-gen-footer"><span>Możesz później zmienić ćwiczenia w edytorze.</span><button type="button" className="sf-button sf-button-lime" onClick={() => navigateStep(2)}>Dalej <ArrowRight size={16}/></button></div>
     </div>}
 
     {step === 2 && <div className="sf-gen-content">
@@ -420,7 +463,7 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
         <button type="button" className={`sf-gen-location-card ${location === 'home' ? 'is-selected' : ''}`} onClick={() => setLocation('home')}><span className="sf-gen-choice-icon"><Home size={22}/></span><span className="sf-gen-radio-dot"/><b>W domu</b><small>Ćwiczenia dopasowane do dostępnego sprzętu.</small></button>
         <button type="button" className={`sf-gen-location-card ${location === 'gym' ? 'is-selected' : ''}`} onClick={() => setLocation('gym')}><span className="sf-gen-choice-icon"><Dumbbell size={22}/></span><span className="sf-gen-radio-dot"/><b>Na siłowni</b><small>Wykorzystamy maszyny, hantle i wyciągi.</small></button>
       </div>
-      {location === 'home' && <div className="sf-gen-subsection"><div className="sf-gen-subsection-head"><h3>Jaki masz sprzęt?</h3><span>Możesz zmienić go później.</span></div><div className="sf-gen-equipment-grid">{EQUIPMENT_OPTIONS.map(item => <button type="button" key={item.id} className={`sf-gen-equipment-card ${equipment === item.id ? 'is-selected' : ''}`} onClick={() => setEquipment(item.id)}><span className="sf-gen-radio-dot"/><b>{item.title}</b><small>{item.desc}</small></button>)}</div></div>}
+      {location === 'home' && <div className="sf-gen-subsection"><div className="sf-gen-subsection-head"><h3>Jaki masz sprzęt?</h3><span>Możesz zaznaczyć kilka opcji.</span></div><button type="button" className={`sf-gen-equipment-card sf-gen-no-equipment ${equipment.length === 0 ? 'is-selected' : ''}`} onClick={() => setEquipment([])}><span className="sf-gen-radio-dot"/><b>Nie mam sprzętu</b><small>Plan oparty na masie własnego ciała.</small></button><div className="sf-gen-equipment-grid">{EQUIPMENT_OPTIONS.map(item => <button type="button" key={item.id} className={`sf-gen-equipment-card ${equipment.includes(item.id) ? 'is-selected' : ''}`} aria-pressed={equipment.includes(item.id)} onClick={() => setEquipment(old => old.includes(item.id) ? old.filter(value => value !== item.id) : [...old, item.id])}><span className="sf-gen-radio-dot"/><b>{item.title}</b><small>{item.desc}</small></button>)}</div></div>}
       <div className="sf-gen-setting-grid">
         <div className="sf-gen-setting-card"><div className="sf-gen-setting-icon"><CalendarDays size={19}/></div><div className="sf-gen-subsection-head"><h3>Ile dni w tygodniu?</h3><b>{days} {days === 1 ? 'dzień' : days < 5 ? 'dni' : 'dni'}</b></div><p>Wybierz od 1 do 7 jednostek treningowych.</p><div className="sf-gen-number-chips">{[1, 2, 3, 4, 5, 6, 7].map(value => <button type="button" key={value} className={days === value ? 'is-selected' : ''} onClick={() => setDays(value)}>{value}</button>)}</div>{days === 7 && <small className="sf-gen-inline-note">Siódmy dzień będzie lżejszy i nastawiony na mobilność oraz regenerację.</small>}</div>
         <div className="sf-gen-setting-card"><div className="sf-gen-setting-icon"><Clock3 size={19}/></div><div className="sf-gen-subsection-head"><h3>Ile masz czasu?</h3><b>{duration} min</b></div><p>Szacowany czas jednej jednostki treningowej.</p><div className="sf-gen-duration-options">{[{ v: 30, label: '30 min' }, { v: 45, label: '45 min' }, { v: 60, label: '60 min' }, { v: 75, label: '75 min' }].map(item => <button type="button" key={item.v} className={duration === item.v ? 'is-selected' : ''} onClick={() => setDuration(item.v)}>{item.label}</button>)}</div></div>
@@ -428,7 +471,7 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
       <div className="sf-gen-subsection sf-gen-focus-subsection"><div className="sf-gen-subsection-head"><h3>Na czym chcesz położyć większy nacisk?</h3><span>Opcjonalnie</span></div><div className="sf-gen-focus-options">{FOCUSES.map(item => <button type="button" key={item.id} className={focus === item.id ? 'is-selected' : ''} onClick={() => setFocus(item.id)}>{item.title}</button>)}</div></div>
       <div className="sf-gen-month-settings"><div className="sf-gen-month-settings-title"><div><p className="sf-eyebrow">PLAN MIESIĘCZNY</p><h3>Ustaw start i progresję</h3><p>Generator przygotuje tygodniowy schemat na 4 tygodnie (28 dni). Nie tworzymy 28 kopii tych samych treningów — w każdym tygodniu zmieniają się parametry zgodnie z wybraną zasadą.</p></div><span><CalendarDays size={20}/></span></div><div className="sf-month-program-fields"><label>Start programu<input type="date" required value={startDate} onChange={event => setStartDate(event.target.value)}/></label><label>Specyfika progresu<select value={progressionStrategy} onChange={event => setProgressionStrategy(event.target.value as ProgressionStrategy)}>{PROGRESSION_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label></div><div className="sf-month-progression-explainer"><b>{progressionOption(progressionStrategy).shortLabel}</b><span>{progressionOption(progressionStrategy).explanation}</span></div></div>
       {generationError && <div className="sf-gen-error" role="alert">{generationError}</div>}
-      <div className="sf-gen-footer"><button type="button" className="sf-button sf-button-outline" disabled={generating} onClick={() => setStep(1)}><ArrowLeft size={16}/> Wstecz</button><button type="button" className="sf-button sf-button-lime" disabled={generating || saving} onClick={() => void generate()}>{generating ? <><Sparkles size={16}/> Układam plan…</> : hasPaidAccess ? <><Sparkles size={16}/> Ułóż plan z katalogu <ArrowRight size={16}/></> : <>Zapłać 29,99 zł i ułóż plan <ArrowRight size={16}/></>}</button></div>
+      <div className="sf-gen-footer"><button type="button" className="sf-button sf-button-outline" disabled={generating} onClick={() => navigateStep(1)}><ArrowLeft size={16}/> Wstecz</button><button type="button" className="sf-button sf-button-lime" disabled={generating || saving} onClick={() => void generate()}>{generating ? <><Sparkles size={16}/> Układam podgląd…</> : <>Ułóż podgląd planu <ArrowRight size={16}/></>}</button></div>
     </div>}
 
     {step === 3 && <div className="sf-gen-content sf-gen-result-content">
@@ -442,18 +485,17 @@ export default function PlanGenerator({ defaultLocation, saving, hasPaidAccess, 
       <section className="sf-gen-month-summary"><div><h3>Plan na 4 tygodnie</h3><p>Program trwa od {formatProgramDate(startDate)} do {formatProgramDate(getProgramEndDate(startDate))}. Ten sam tygodniowy układ treningów powtarza się przez 4 tygodnie, a parametry są dostosowane do wybranej progresji.</p></div><div className="sf-gen-month-weeks">{[1,2,3,4].map(week => { const example = generatedDays.flatMap(day => day.exercises).find(ex => ex.name); const prescribed = example ? exerciseForProgramWeek(example, progressionStrategy, week) : null; const value = !prescribed ? '—' : progressionStrategy === 'weight' ? prescribed.weight_kg == null ? 'Mały krok ciężaru' : `${prescribed.weight_kg} kg` : `${prescribed.sets} ser. × ${prescribed.reps} powt.`; return <div key={week}><small>TYDZIEŃ {week}</small><b>{value}</b></div>; })}</div><p><b>{progressionOption(progressionStrategy).shortLabel}:</b> {progressionOption(progressionStrategy).explanation}</p></section>
       <label className="sf-gen-plan-name">Nazwa Twojego planu<input value={planName} onChange={event => setPlanName(event.target.value)} maxLength={120} minLength={2} required placeholder="np. Siła i forma — plan A"/></label>
       <section className="sf-builder-catalog-replace-toolbar sf-gen-preview-replace" aria-label="Wymiana ćwiczeń w podglądzie">
-        <div className="sf-builder-catalog-replace-copy"><b>Nie pasuje Ci jakieś ćwiczenie?</b><span>Zaznacz tylko te ćwiczenia, które chcesz wymienić. Opcjonalnie wpisz nazwę z katalogu ćwiczeń. Zamienniki dobieramy lokalnie, bez AI i bez tokenów.</span></div>
+        <div className="sf-builder-catalog-replace-copy"><b>Nie pasuje Ci jakieś ćwiczenie?</b><span>Zaznacz ćwiczenia do wymiany i wybierz zamiennik z listy podobnych ruchów. Lista dopasowuje kategorię i dostępny sprzęt.</span></div>
         <div className="sf-builder-catalog-replace-actions"><button type="button" className="sf-button sf-button-outline sf-button-sm" disabled={replacingExercises} onClick={toggleAllGeneratedExercises}>{generatedDays.length > 0 && generatedDays.flatMap(day => day.exercises.map((exercise, index) => generatedExerciseSelectionKey(day,index,exercise))).every(key => selectedForReplacement[key]) ? 'Odznacz cały plan' : 'Zaznacz cały plan'}</button><button type="button" className="sf-button sf-button-lime sf-button-sm" disabled={replacingExercises || selectedGeneratedCount === 0} onClick={() => void replaceSelectedGeneratedExercises()}>{replacingExercises ? <><span className="sf-catalog-mini-spinner"/> Dobieram zamienniki…</> : <><RotateCcw size={14}/> Wymień zaznaczone ({selectedGeneratedCount})</>}</button></div>
         {selectedGeneratedCount > 0 && <small className="sf-builder-catalog-selected-count">Zaznaczono {selectedGeneratedCount} ćwiczeń. Wszystkie pozostałe parametry treningu zostaną zachowane.</small>}
         {replacementError && <div className="sf-builder-catalog-feedback is-error" role="alert">{replacementError}</div>}
         {replacementNotice && <div className="sf-builder-catalog-feedback is-success" role="status">{replacementNotice}</div>}
       </section>
-      <div className="sf-gen-day-list">{generatedDays.map((day, index) => <article className="sf-gen-day-card" key={day.day_key}><header><span className="sf-gen-day-index">{String(index + 1).padStart(2, '0')}</span><div><p className="sf-eyebrow">{location === 'home' ? 'DOM' : 'SIŁOWNIA'} · {day.exercises.length} ĆWICZEŃ</p><h3>{day.title.replace(/^Dzień \d+ — /, '')}</h3></div><span className="sf-gen-day-chevron"><ArrowRight size={17}/></span></header><div className="sf-gen-exercise-list">{day.exercises.map((exercise, exerciseIndex) => { const selectionKey = generatedExerciseSelectionKey(day, exerciseIndex, exercise); const isSelected = Boolean(selectedForReplacement[selectionKey]); return <div className="sf-gen-exercise-wrap" key={`${day.day_key}-${exercise.name}-${exerciseIndex}`}><div className="sf-gen-exercise-row"><label className="sf-gen-exercise-select"><input type="checkbox" checked={isSelected} disabled={replacingExercises} onChange={event => { setSelectedForReplacement(old => ({ ...old, [selectionKey]: event.target.checked })); setReplacementError(''); setReplacementNotice(''); }}/><span>{String(exerciseIndex + 1).padStart(2, '0')}</span></label><b>{exercise.name}</b><small>{exercise.sets} × {exercise.reps}{exercise.notes?.toLowerCase().includes('minut') ? ' min' : exercise.notes?.toLowerCase().includes('sekund') ? ' s' : ''}</small></div>{isSelected && <label className="sf-builder-catalog-preference sf-gen-exercise-preference">Jakie ćwiczenie wolisz? <span>opcjonalnie</span><input maxLength={120} value={preferredReplacementNames[selectionKey] || ''} disabled={replacingExercises} onChange={event => setPreferredReplacementNames(old => ({ ...old, [selectionKey]: event.target.value }))} placeholder="np. Wyciskanie na maszynie"/></label>}</div>; })}</div><div className="sf-gen-day-foot"><span><Clock3 size={13}/> Przerwa: {day.exercises[0]?.rest_seconds ?? 90} s</span><span>{day.exercises.reduce((total, ex) => total + ex.sets, 0)} serii łącznie</span></div></article>)}</div>
+      <div className="sf-gen-day-list">{generatedDays.map((day, index) => <article className="sf-gen-day-card" key={day.day_key}><header><span className="sf-gen-day-index">{String(index + 1).padStart(2, '0')}</span><div><p className="sf-eyebrow">{location === 'home' ? 'DOM' : 'SIŁOWNIA'} · {day.exercises.length} ĆWICZEŃ</p><h3>{day.title.replace(/^Dzień \d+ — /, '')}</h3></div><span className="sf-gen-day-chevron"><ArrowRight size={17}/></span></header><div className="sf-gen-exercise-list">{day.exercises.map((exercise, exerciseIndex) => { const selectionKey = generatedExerciseSelectionKey(day, exerciseIndex, exercise); const isSelected = Boolean(selectedForReplacement[selectionKey]); return <div className="sf-gen-exercise-wrap" key={`${day.day_key}-${exercise.name}-${exerciseIndex}`}><div className="sf-gen-exercise-row"><label className="sf-gen-exercise-select"><input type="checkbox" checked={isSelected} disabled={replacingExercises} onChange={event => { setSelectedForReplacement(old => ({ ...old, [selectionKey]: event.target.checked })); setReplacementError(''); setReplacementNotice(''); }}/><span>{String(exerciseIndex + 1).padStart(2, '0')}</span></label><b>{exercise.name}</b><small>{exercise.sets} × {exercise.reps}{exercise.notes?.toLowerCase().includes('minut') ? ' min' : exercise.notes?.toLowerCase().includes('sekund') ? ' s' : ''}</small></div>{isSelected && (() => { const choices = exerciseCatalogReplacementOptions(exercise.name, location, location === 'gym' ? 'gym' : (equipment.length ? equipment : 'none')); const sameDayNames = day.exercises.filter((_, otherIndex) => otherIndex !== exerciseIndex).map(item => item.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()); const options = choices.exercises.filter(option => !sameDayNames.includes(option.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase())); return <label className="sf-builder-catalog-preference sf-gen-exercise-preference">Zamiennik{choices.category ? <span> · {choices.category}</span> : null}<select value={preferredReplacementNames[selectionKey] || ''} disabled={replacingExercises || options.length === 0} onChange={event => setPreferredReplacementNames(old => ({ ...old, [selectionKey]: event.target.value }))}><option value="">Dobierz automatycznie z tej kategorii</option>{options.map(option => <option value={option} key={option}>{option}</option>)}</select>{options.length === 0 && <small>Brak innego ćwiczenia tej kategorii z zaznaczonym sprzętem. Zmień sprzęt albo odznacz to ćwiczenie.</small>}</label>; })()}</div>; })}</div><div className="sf-gen-day-foot"><span><Clock3 size={13}/> Przerwa: {day.exercises[0]?.rest_seconds ?? 90} s</span><span>{day.exercises.reduce((total, ex) => total + ex.sets, 0)} serii łącznie</span></div></article>)}</div>
       {generationError && <div className="sf-gen-error" role="alert">{generationError}</div>}
       {generating && <div className="sf-gen-history-strip" role="status"><Sparkles size={16}/><span><b>Katalog przygotowuje nową wersję.</b> Poprzedni podgląd zostaje zachowany do czasu otrzymania nowego wyniku.</span></div>}
-      <div className="sf-gen-prototype-note"><Sparkles size={16}/><p><b>Plan z kontrolowanego katalogu ćwiczeń.</b> Nazwy pochodzą z zatwierdzonej biblioteki. Generator i wymiany działają bez zapytań do zewnętrznego modelu i bez zużycia tokenów. Sprawdź, czy ćwiczenia odpowiadają Twoim możliwościom.</p></div>
-      <div className="sf-gen-ai-meta"><div><small>Źródło ćwiczeń</small><b>Własny katalog</b></div><div><small>Wywołania AI</small><b>0</b></div><div><small>Zużycie tokenów</small><b>0 tokenów</b></div></div>
-      <div className="sf-gen-footer sf-gen-result-footer"><button type="button" className="sf-button sf-button-outline" disabled={generating} onClick={() => setStep(2)}><ArrowLeft size={16}/> Zmień ustawienia</button><button type="button" className="sf-button sf-button-outline" disabled={generating || saving} onClick={() => void regenerateLocal()}><Sparkles size={16}/> {generating ? 'Układam nową wersję…' : 'Ułóż inną wersję'}</button><button type="button" className="sf-button sf-button-lime" disabled={saving || generating || planName.trim().length < 2} onClick={() => void save()}>{saving ? 'Zapisuję plan…' : 'Zapisz i otwórz edytor'} <ArrowRight size={16}/></button></div>
+      {paymentBanner && <div className={paymentBanner.startsWith('Płatność nie została') ? 'sf-gen-error' : 'sf-info-note'} role={paymentBanner.startsWith('Płatność nie została') ? 'alert' : 'status'}>{paymentBanner}</div>}
+      <div className="sf-gen-footer sf-gen-result-footer"><button type="button" className="sf-button sf-button-outline" disabled={generating || saving} onClick={() => navigateStep(2)}><ArrowLeft size={16}/> Zmień ustawienia</button><button type="button" className="sf-button sf-button-outline" disabled={generating || saving} onClick={() => void regenerateLocal()}><Sparkles size={16}/> {generating ? 'Układam nową wersję…' : 'Ułóż inną wersję'}</button><button type="button" className="sf-button sf-button-lime" disabled={saving || generating || planName.trim().length < 2 || autoSavingAfterPayment.current} onClick={() => void save()}>{saving ? 'Zapisuję plan…' : hasPaidAccess ? 'Zapisz plan i otwórz edytor' : 'Skonfiguruj swój plan (29,99 zł)'} <ArrowRight size={16}/></button></div>
     </div>}
 
     <div className="sf-gen-bottom-hint"><span><CheckCircle2 size={15}/></span><p>Plan jest punktem wyjścia — dobieraj obciążenie do swoich możliwości i techniki. Jeśli ćwiczenie powoduje ból, przerwij je i wybierz bezpieczny wariant.</p></div>
