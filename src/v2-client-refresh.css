@@ -225,3 +225,90 @@
 .sf-payment-receipt-meta>span:not(.sf-status){font-size:12px;color:var(--muted)}
 .sf-payment-transaction-number{margin:9px 0 0;padding-top:9px;border-top:1px solid rgba(255,255,255,.12);font-size:12px;overflow-wrap:anywhere}
 @media(max-width:600px){.sf-individual-plan-client-banner{align-items:flex-start;flex-wrap:wrap}.sf-individual-plan-editor-footer{grid-template-columns:1fr}.sf-individual-plan-editor-footer p{grid-column:auto}.sf-payment-receipt{padding:22px 16px}}
+
+
+/* Mobile client panel finishing pass: dark green surfaces, readable library and safe progress layouts. */
+.sf-payment-receipt{
+  color:#f0f4e9!important;
+  border:1px solid rgba(198,243,106,.3)!important;
+  background:radial-gradient(ellipse at 50% 0%,rgba(198,243,106,.14),transparent 58%),linear-gradient(145deg,#1b2417,#131711 78%)!important;
+  box-shadow:0 22px 58px rgba(0,0,0,.22);
+}
+.sf-payment-receipt h2{color:#f2f5ed!important}
+.sf-payment-receipt>p:not(.sf-eyebrow){color:#b9c3ad!important;font-size:14px!important}
+.sf-payment-receipt-number{color:#d4f77f!important}
+.sf-payment-receipt-meta>span:not(.sf-status){color:#c0c9b7!important}
+.sf-payment-receipt .sf-payment-receipt-icon{background:rgba(198,243,106,.12)!important;color:#d4f77f!important;border:1px solid rgba(198,243,106,.2)}
+.sf-payment-receipt .sf-eyebrow{color:#c6f36a!important}
+
+.sf-individual-order-status{scroll-margin-top:18px;border-color:rgba(198,243,106,.22)!important;background:linear-gradient(145deg,rgba(31,42,25,.96),rgba(19,23,17,.98))!important}
+.sf-individual-order-status .sf-panel-heading h3{color:#f0f4e9}
+.sf-individual-order-status .sf-list-row{min-width:0;border-top:1px solid rgba(198,243,106,.12)}
+.sf-individual-order-status .sf-list-main{min-width:0}
+.sf-individual-order-status .sf-list-main b,.sf-individual-order-status .sf-list-main small{overflow-wrap:anywhere}
+
+.sf-library-view{min-width:0;max-width:100%;overflow-x:clip}
+.sf-library-view .sf-library-hero,
+.sf-library-view .sf-library-stats>div,
+.sf-library-view .sf-library-card,
+.sf-library-view .sf-library-empty{
+  color:#edf2e6!important;
+  border-color:rgba(198,243,106,.17)!important;
+  background:linear-gradient(145deg,#1b2117,#131611)!important;
+  box-shadow:0 12px 35px rgba(0,0,0,.12);
+}
+.sf-library-view .sf-library-hero-copy h2,
+.sf-library-view .sf-library-card-copy h3,
+.sf-library-view .sf-library-empty h2{color:#f1f5eb!important}
+.sf-library-view .sf-library-hero-copy>p:not(.sf-eyebrow),
+.sf-library-view .sf-library-card-copy>p:not(.sf-eyebrow),
+.sf-library-view .sf-library-empty>p:not(.sf-eyebrow){color:#b8c1ae!important}
+.sf-library-view .sf-library-card-copy .sf-eyebrow,
+.sf-library-view .sf-library-stats small{color:#aeb9a2!important}
+.sf-library-view .sf-library-stats b{color:#e8f2d7!important}
+.sf-library-view .sf-library-section-head>span{color:#d7e7bb!important;border:1px solid rgba(198,243,106,.18);background:rgba(198,243,106,.07)!important}
+.sf-library-view .sf-library-stat-icon{background:rgba(198,243,106,.1)!important;color:#d1f47c!important;border:1px solid rgba(198,243,106,.13)}
+.sf-library-view .sf-library-empty{background:linear-gradient(145deg,#1b2417,#131711)!important}
+.sf-library-view .sf-library-empty .sf-eyebrow{color:#c6f36a!important}
+.sf-library-view .sf-library-card-copy{min-width:0}
+.sf-library-view .sf-library-card-copy h3{overflow-wrap:anywhere}
+
+/* Avoid date / number inputs escaping the progress cards on iPhone-sized screens. */
+.sf-progress-dashboard,
+.sf-progress-dashboard .sf-progress-main-grid,
+.sf-progress-dashboard .sf-panel,
+.sf-progress-dashboard .sf-form-stack,
+.sf-progress-dashboard .sf-form-stack label,
+.sf-progress-dashboard .sf-form-grid,
+.sf-progress-dashboard .sf-form-grid>label{min-width:0;max-width:100%;box-sizing:border-box}
+.sf-progress-dashboard input,
+.sf-progress-dashboard select,
+.sf-progress-dashboard textarea,
+.sf-progress-dashboard input[type="date"],
+.sf-progress-dashboard input[type="number"]{box-sizing:border-box;width:100%;min-width:0;max-width:100%}
+.sf-progress-dashboard .sf-progress-hero-stats>div,
+.sf-progress-dashboard .sf-goal-details>div{min-width:0;overflow-wrap:anywhere}
+.sf-progress-dashboard .sf-progress-record{min-width:0;grid-template-columns:36px minmax(0,1fr) auto}
+.sf-progress-dashboard .sf-progress-record>span:nth-child(2){min-width:0}
+.sf-progress-dashboard .sf-progress-record b{overflow-wrap:anywhere}
+.sf-progress-dashboard .sf-progress-change{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.sf-progress-dashboard .sf-progress-change span{min-width:0;overflow-wrap:anywhere}
+.sf-progress-dashboard .sf-progress-change span:last-child{grid-column:1/-1}
+@media(max-width:640px){
+  .sf-progress-dashboard .sf-progress-hero-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .sf-progress-dashboard .sf-progress-hero-stats>div{padding:11px;min-width:0}
+  .sf-progress-dashboard .sf-progress-hero-stats>div:last-child:nth-child(odd){grid-column:1/-1}
+  .sf-progress-dashboard .sf-goal-details{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .sf-progress-dashboard .sf-goal-details>div{padding:10px}
+  .sf-progress-dashboard .sf-progress-add-measure{width:100%;min-width:0;overflow:hidden}
+  .sf-progress-dashboard .sf-progress-add-measure .sf-form-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .sf-progress-dashboard .sf-progress-add-measure input[type="date"]{font-size:14px;padding-inline:10px}
+  .sf-progress-dashboard .sf-progress-record{grid-template-columns:32px minmax(0,1fr) auto;gap:8px}
+  .sf-progress-dashboard .sf-progress-record strong{font-size:12px;white-space:nowrap}
+  .sf-progress-dashboard .sf-progress-weight-bars>div{min-width:0}
+}
+@media(max-width:380px){
+  .sf-progress-dashboard .sf-progress-hero-stats{grid-template-columns:1fr 1fr}
+  .sf-progress-dashboard .sf-progress-add-measure .sf-form-grid{grid-template-columns:1fr 1fr}
+  .sf-progress-dashboard .sf-progress-add-measure input[type="date"]{font-size:12px;padding-inline:7px}
+}
