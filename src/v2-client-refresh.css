@@ -200,3 +200,28 @@
 .sf-plan-delete-button:hover{border-color:#ff7f7f;background:rgba(255,127,127,.12)}
 .sf-plan-delete-button:disabled{opacity:.45;cursor:wait}
 @media(max-width:600px){.sf-equipment-grid,.sf-max-grid,.sf-individual-answer-grid{grid-template-columns:minmax(0,1fr)}.sf-form-section{padding:13px}.sf-equipment-option{min-height:40px}}
+
+/* Pola wyboru sprzętu w ankiecie planu indywidualnego: ciemne, czytelne i bez białych kafli. */
+.sf-individual-plan-form .sf-equipment-picker{border-color:rgba(198,243,106,.2);background:rgba(255,255,255,.018)}
+.sf-individual-plan-form .sf-equipment-option{background:rgba(255,255,255,.025)!important;border-color:rgba(255,255,255,.14)!important;color:var(--white)!important}
+.sf-individual-plan-form .sf-equipment-option>span{background:transparent!important;color:inherit!important;border-color:rgba(255,255,255,.14)!important}
+.sf-individual-plan-form .sf-equipment-option:has(input:checked),.sf-individual-plan-form .sf-equipment-option:has(input:checked)>span{background:rgba(198,243,106,.1)!important;border-color:rgba(198,243,106,.6)!important;color:#f5f8ee!important}
+
+/* Oddzielny ekran kreatora planu indywidualnego w ACP. */
+.sf-individual-plan-editor-view>.sf-page-title{margin-bottom:22px}
+.sf-individual-plan-client-banner{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.sf-individual-plan-client-banner>div{display:flex;flex:1;flex-direction:column;gap:4px;min-width:0}
+.sf-individual-plan-client-banner>div small{color:var(--muted);overflow-wrap:anywhere}
+.sf-individual-plan-metadata{margin-bottom:18px}
+.sf-individual-plan-editor-footer{display:grid;grid-template-columns:auto auto;align-items:center;gap:12px;margin-top:20px}
+.sf-individual-plan-editor-footer p{grid-column:1/-1;margin:0;color:var(--muted);font-size:12px;line-height:1.6}
+.sf-payment-receipt{max-width:700px;margin:0 auto 24px;padding:clamp(22px,4vw,36px);text-align:center;background:radial-gradient(ellipse at 50% 0%,rgba(198,243,106,.13),transparent 55%),var(--surface,#fff)}
+.sf-payment-receipt-icon{display:grid;place-items:center;width:54px;height:54px;margin:0 auto 16px;border-radius:17px;background:rgba(198,243,106,.16);color:var(--accent-strong,#42631c)}
+.sf-payment-receipt>.sf-eyebrow{color:var(--accent-strong,#42631c);margin:0 0 7px}
+.sf-payment-receipt h2{margin:0 0 18px;font-size:clamp(24px,3vw,32px);letter-spacing:-.04em}
+.sf-payment-receipt>p:not(.sf-eyebrow){margin:0 0 6px;color:var(--muted);font-size:12px}
+.sf-payment-receipt-number{display:block;margin:0 auto 18px;font-size:clamp(22px,4vw,30px);letter-spacing:.02em;overflow-wrap:anywhere}
+.sf-payment-receipt-meta{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:10px;margin:0 auto 22px}
+.sf-payment-receipt-meta>span:not(.sf-status){font-size:12px;color:var(--muted)}
+.sf-payment-transaction-number{margin:9px 0 0;padding-top:9px;border-top:1px solid rgba(255,255,255,.12);font-size:12px;overflow-wrap:anywhere}
+@media(max-width:600px){.sf-individual-plan-client-banner{align-items:flex-start;flex-wrap:wrap}.sf-individual-plan-editor-footer{grid-template-columns:1fr}.sf-individual-plan-editor-footer p{grid-column:auto}.sf-payment-receipt{padding:22px 16px}}
