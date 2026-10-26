@@ -10,7 +10,7 @@ import {
   ChevronDown, CircleHelp, ClipboardList, Clock3, Crown, Dumbbell, FileText, Gauge, Goal,
   Home, KeyRound, LayoutDashboard, Layers, LifeBuoy, List, LockKeyhole, LogOut, Mail, Menu,
   Minus, Plus, Search, Settings, ShieldCheck, ShoppingBag, SlidersHorizontal, Sparkles,
-  Timer, TrendingUp, Trash2, UserRound, Users, WalletCards, X,
+  Timer, TrendingUp, Trophy, Trash2, UserRound, Users, WalletCards, X,
 } from 'lucide-react';
 
 type User = { id: string; email: string };
