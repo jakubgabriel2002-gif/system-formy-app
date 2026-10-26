@@ -736,7 +736,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const dayId = crypto.randomUUID(); statements.push(env.DB.prepare('INSERT INTO training_plan_days_v2(id,plan_id,day_key,title,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').bind(dayId, plan.id, day.day_key, day.title, di, now, now));
         day.exercises.forEach((ex, ei) => statements.push(env.DB.prepare('INSERT INTO training_plan_exercises_v2(id,day_id,name,sort_order,target_sets,target_reps,target_weight_kg,notes,rest_seconds,transition_rest_seconds,alternatives_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), dayId, ex.name, ei, ex.sets, ex.reps, ex.weight_kg, ex.notes, ex.rest_seconds, ex.transition_rest_seconds, JSON.stringify(ex.alternatives))));
       });
-      if (consumeGeneratorCredit && generatorCredit) statements.push(env.DB.prepare("UPDATE user_entitlements SET access_status='used' WHERE id=? AND access_status='active'").bind(generatorCredit.id));
+      if (consumeGeneratorCredit && generatorCredit) statements.push(env.DB.prepare("UPDATE user_entitlements SET access_status='revoked' WHERE id=? AND access_status='active'").bind(generatorCredit.id));
       if (statements.length) await env.DB.batch(statements);
       return v2Reply({ ok: true, duration_weeks: durationWeeks, start_date: startDate, progression_strategy: progressionStrategy, updated_at: now });
     }
