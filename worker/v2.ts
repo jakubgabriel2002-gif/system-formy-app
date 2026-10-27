@@ -380,6 +380,59 @@ async function ensureSystemTrainingProducts(env: V2Env): Promise<void> {
   }
 }
 
+
+const V2_HOME_EBOOK_KEY = 'zbuduj-sylwetke-w-domu';
+const V2_GYM_EBOOK_KEY = 'zbuduj-sylwetke-na-silowni';
+const V2_FREE_EBOOK_KEY = 'zacznij-trenowac';
+const V2_EBOOK_GENERATOR_CREDIT_KEYS = new Set([V2_HOME_EBOOK_KEY, V2_GYM_EBOOK_KEY]);
+const V2_OFFICIAL_EBOOK_KEYS = new Set([V2_HOME_EBOOK_KEY, V2_GYM_EBOOK_KEY, V2_FREE_EBOOK_KEY]);
+
+/**
+ * Seed official ebook entries as unpublished drafts. Prices for the two paid ebooks
+ * intentionally remain unset (0) until the owner chooses them in ACP. Publishing
+ * is deliberately disabled until the real PDF is uploaded to private R2 storage.
+ */
+async function ensureOfficialEbookProducts(env: V2Env): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB.prepare(`INSERT OR IGNORE INTO product_categories(slug,title,description,sort_order,is_active,created_at)
+    VALUES('ebooki','E-booki','Cyfrowe poradniki i materiały Systemu Formy.',10,1,?)`).bind(now).run();
+  const ebooks = [
+    {
+      key: V2_HOME_EBOOK_KEY,
+      title: 'Zbuduj sylwetkę w domu',
+      description: 'Praktyczny e-book dla osób, które chcą rozwijać sylwetkę, trenując w domu. Po zakupie otrzymujesz plik PDF oraz jedno bezpłatne użycie konfiguratora Systemu Formy do przygotowania własnego planu treningowego po wypełnieniu ankiety.',
+      price: 0, free: false,
+      audience: 'Dla osób ćwiczących w domu — zarówno początkujących, jak i wracających do regularnych treningów.',
+      contents: ['E-book w formacie PDF do pobrania po zakupie.', 'Wskazówki dotyczące regularnego treningu w domu.', 'Jedno bezpłatne wygenerowanie własnego planu treningowego w konfiguratorze Systemu Formy.', 'Plan jest przygotowywany po wypełnieniu ankiety i wykorzystuje dostępne opcje konfiguratora.'],
+    },
+    {
+      key: V2_GYM_EBOOK_KEY,
+      title: 'Zbuduj sylwetkę na siłowni',
+      description: 'E-book dla osób trenujących na siłowni. Po zakupie otrzymujesz plik PDF oraz jedno bezpłatne użycie konfiguratora Systemu Formy do przygotowania własnego planu treningowego po wypełnieniu ankiety.',
+      price: 0, free: false,
+      audience: 'Dla osób ćwiczących na siłowni, które chcą ułożyć trening pod swój cel, poziom i tygodniowy harmonogram.',
+      contents: ['E-book w formacie PDF do pobrania po zakupie.', 'Wskazówki dotyczące organizacji treningu na siłowni.', 'Jedno bezpłatne wygenerowanie własnego planu treningowego w konfiguratorze Systemu Formy.', 'Plan jest przygotowywany po wypełnieniu ankiety i wykorzystuje dostępne opcje konfiguratora.'],
+    },
+    {
+      key: V2_FREE_EBOOK_KEY,
+      title: 'Zacznij trenować',
+      description: 'Bezpłatny e-book Systemu Formy, który pomaga wykonać pierwszy krok i rozpocząć regularne treningi. Dodaj go bezpłatnie do swojej biblioteki i pobierz plik PDF.',
+      price: 0, free: true,
+      audience: 'Dla osób początkujących i wszystkich, którzy chcą wrócić do aktywności bez przytłaczania się planem na start.',
+      contents: ['Bezpłatny e-book PDF.', 'Podstawowe wskazówki na start.', 'Proste kroki pomagające zbudować regularność.', 'Materiał dostępny po bezpłatnym dodaniu do biblioteki.'],
+    },
+  ];
+  for (const ebook of ebooks) {
+    await env.DB.prepare(`INSERT OR IGNORE INTO products
+      (id,product_key,title,description,product_type,price_amount,currency,is_free,is_published,checkout_url,file_key,original_filename,file_content_type,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,'PLN',?,0,NULL,'','','application/pdf',?,?)`)
+      .bind(crypto.randomUUID(), ebook.key, ebook.title, ebook.description, 'ebook', ebook.price, ebook.free ? 1 : 0, now, now).run();
+    await env.DB.prepare(`INSERT OR IGNORE INTO product_metadata(product_key,category_slug,target_audience,contents_json,updated_at)
+      VALUES(?,?,?,?,?)`)
+      .bind(ebook.key, 'ebooki', ebook.audience, JSON.stringify(ebook.contents), now).run();
+  }
+}
+
 function v2Reply(body: unknown, status = 200, headers?: HeadersInit): Response {
   const h = new Headers(headers);
   h.set('Content-Type', 'application/json; charset=utf-8'); h.set('Cache-Control', 'no-store'); h.set('X-Content-Type-Options', 'nosniff');
@@ -557,7 +610,7 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
   const expectedAmount = Number(checkout.metadata?.unit_amount_cents);
   const currency = typeof checkout.currency === 'string' ? checkout.currency.toUpperCase() : 'PLN';
   if (!userId || !productKey || !sessionId || !Number.isInteger(amount) || amount < 0 || !Number.isInteger(expectedAmount) || expectedAmount < 0) return reject('Brak prawidłowych danych zamówienia w sesji Stripe.', sessionId);
-  if (productKey === V2_GENERATOR_PRODUCT_KEY || productKey === V2_INDIVIDUAL_PLAN_PRODUCT_KEY) await ensureSystemTrainingProducts(env);
+  if (productKey === V2_GENERATOR_PRODUCT_KEY || productKey === V2_INDIVIDUAL_PLAN_PRODUCT_KEY || V2_EBOOK_GENERATOR_CREDIT_KEYS.has(productKey)) await ensureSystemTrainingProducts(env);
   const prior = await env.DB.prepare('SELECT event_id FROM stripe_webhook_events WHERE event_id=? LIMIT 1').bind(eventId).first<{ event_id: string }>();
   if (prior) {
     await diagnose('duplicate', 'Zdarzenie Stripe zostało już przetworzone.', sessionId);
@@ -623,6 +676,14 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
     notificationInsert(env, userId, 'Zakup potwierdzony', `Płatność za „${item.title}” została potwierdzona. Produkt jest przypisany do Twojego konta.`, now),
     env.DB.prepare("UPDATE stripe_webhook_diagnostics SET status='processed',error_message='',checkout_session_id=?,order_id=?,processed_at=? WHERE event_id=?").bind(sessionId, orderId, now, eventId),
   ];
+  if (V2_EBOOK_GENERATOR_CREDIT_KEYS.has(productKey)) {
+    // Give exactly one new active generator credit per successful paid ebook order.
+    // The Stripe Checkout session is deduplicated above before this code is reached.
+    statements.push(env.DB.prepare(`INSERT INTO user_entitlements(id,user_id,order_id,product_key,product_title,product_type,access_status,created_at)
+      VALUES(?,?,?,?,'Generator planu treningowego — 1 użycie','training_plan','active',?)`)
+      .bind(crypto.randomUUID(), userId, orderId, V2_GENERATOR_PRODUCT_KEY, now));
+    statements.push(notificationInsert(env, userId, 'Bezpłatne generowanie planu odblokowane', 'Zakup e-booka obejmuje jedno bezpłatne użycie konfiguratora planu treningowego. Otwórz Plan → Konfigurator i wypełnij ankietę, aby przygotować swój plan.', now));
+  }
   if (linkedChallengeId) {
     const existingParticipant = await env.DB.prepare('SELECT id,status FROM sf_challenge_participants WHERE challenge_id=? AND user_id=? LIMIT 1').bind(linkedChallengeId, userId).first<{id:string;status:string}>();
     if (!existingParticipant || existingParticipant.status === 'paused_premium') {
@@ -665,6 +726,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const session = await v2Session(request, env); if (!session) return v2Reply({ error: 'Zaloguj się, aby odebrać materiał.' }, 401);
       const item = await v2Product(env, legacyClaimMatch[1]);
       if (!item || !item.is_published) return v2Reply({ error: 'Nie znaleziono produktu.' }, 404);
+      if (V2_OFFICIAL_EBOOK_KEYS.has(item.product_key) && !String(item.file_key || '').trim()) return v2Reply({ error: 'Ten e-book nie jest jeszcze gotowy do odbioru. Spróbuj ponownie później.' }, 409);
       if (!item.is_free) return v2Reply({ error: 'Ten produkt nie jest dostępny do bezpłatnego odbioru.' }, 403);
       const old = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(session.id, item.product_key).first<{id:string}>();
       const now = new Date().toISOString(), statements: D1PreparedStatement[] = [];
@@ -747,6 +809,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     // Publiczny katalog, kategorie i szczegóły produktu.
     if (path === '/api/v2/products' && method === 'GET') {
       await ensureChallengeTables(env);
+      await ensureOfficialEbookProducts(env);
       const [rows, cats] = await Promise.all([
         env.DB.prepare("SELECT p.id,p.product_key,p.title,p.description,p.product_type,p.price_amount,p.currency,p.is_free,p.is_published,p.checkout_url,p.created_at,COALESCE(m.category_slug,'inne') AS category_slug,COALESCE(m.target_audience,'') AS target_audience,COALESCE(m.contents_json,'[]') AS contents_json,m.cover_key,d.discount_percent AS discount_percent,d.starts_at AS discount_starts_at,d.ends_at AS discount_ends_at,d.is_active AS discount_is_active,EXISTS(SELECT 1 FROM sf_challenges c WHERE c.product_key=p.product_key) AS is_challenge_product FROM products p LEFT JOIN product_metadata m ON m.product_key=p.product_key LEFT JOIN product_discounts d ON d.product_key=p.product_key WHERE p.is_published=1 ORDER BY p.created_at DESC").all(),
         env.DB.prepare('SELECT slug,title,description FROM product_categories WHERE is_active=1 ORDER BY sort_order,title').all(),
@@ -817,9 +880,11 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (!env.STRIPE_SECRET_KEY || !env.STRIPE_WEBHOOK_SECRET) return v2Reply({ error: 'Płatności Stripe nie są w pełni skonfigurowane.' }, 503);
       const body = await v2Body(request), key = v2Field(body, 'product_key', 100).toLowerCase(), code = v2Field(body, 'promotion_code', 80).toUpperCase(), analyticsSession = v2Field(body, 'analytics_session_key', 100);
       await ensureSystemTrainingProducts(env);
+      await ensureOfficialEbookProducts(env);
       const generatorCreditProduct = key === V2_GENERATOR_PRODUCT_KEY;
       if (key === V2_INDIVIDUAL_PLAN_PRODUCT_KEY) return v2Reply({ error: 'Plan indywidualny należy zamówić przez formularz, który zapisze odpowiedzi i przekieruje do płatności.' }, 400);
       const item = await v2Product(env, key); if (!item || (!item.is_published && !generatorCreditProduct)) return v2Reply({ error: 'Produkt nie jest dostępny.' }, 404);
+      if (V2_OFFICIAL_EBOOK_KEYS.has(item.product_key) && !String(item.file_key || '').trim()) return v2Reply({ error: 'Ten e-book nie jest jeszcze gotowy do sprzedaży. Administrator musi najpierw wgrać PDF.' }, 409);
       if (item.is_free) return v2Reply({ error: 'Ten produkt jest bezpłatny — użyj opcji odbioru.' }, 400);
       if (!generatorCreditProduct && (!Number.isFinite(item.price_amount) || item.price_amount <= 0)) return v2Reply({ error: 'Produkt nie ma prawidłowej ceny.' }, 400);
       if (generatorCreditProduct && code) return v2Reply({ error: 'Zakup generatora za 29,99 zł nie obsługuje kodów rabatowych.' }, 400);
@@ -1555,6 +1620,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       }
       if (path === '/api/v2/admin/products' && method === 'GET') {
         await ensureSystemTrainingProducts(env);
+        await ensureOfficialEbookProducts(env);
         const rows = await env.DB.prepare("SELECT p.id,p.product_key,p.title,p.description,p.product_type,p.price_amount,p.currency,p.is_free,p.is_published,p.checkout_url,p.original_filename,p.file_key,COALESCE(m.category_slug,'inne') AS category_slug,COALESCE(m.target_audience,'') AS target_audience,COALESCE(m.contents_json,'[]') AS contents_json FROM products p LEFT JOIN product_metadata m ON m.product_key=p.product_key ORDER BY p.created_at DESC").all();
         const components = await env.DB.prepare('SELECT bundle_key,component_product_key,quantity,sort_order FROM bundle_items ORDER BY bundle_key,sort_order').all();
         let categories = await env.DB.prepare('SELECT slug,title,description,is_active,sort_order FROM product_categories ORDER BY sort_order,title').all();
@@ -1564,7 +1630,8 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (adminProductMatch && ['PATCH', 'PUT'].includes(method)) {
         const key = adminProductMatch[1], item = await v2Product(env, key); if (!item) return v2Reply({ error: 'Nie znaleziono produktu.' }, 404);
         const b = await v2Body(request), existingMeta = await env.DB.prepare('SELECT category_slug,target_audience,contents_json FROM product_metadata WHERE product_key=?').bind(key).first<{ category_slug: string; target_audience: string; contents_json: string }>(), title = b.title === undefined ? item.title : v2Field(b, 'title', 140), description = b.description === undefined ? item.description : v2Field(b, 'description', 4000), type = b.product_type === undefined ? item.product_type : v2Field(b, 'product_type', 40), price = b.price_amount === undefined ? item.price_amount : Number(b.price_amount), free = b.is_free === undefined ? Boolean(item.is_free) : b.is_free === true, published = b.is_published === undefined ? Boolean(item.is_published) : b.is_published === true, category = b.category_slug === undefined ? (existingMeta?.category_slug || 'inne') : v2Field(b, 'category_slug', 60), audience = b.target_audience === undefined ? (existingMeta?.target_audience || '') : v2Field(b, 'target_audience', 500), contents = Array.isArray(b.contents) ? b.contents.filter((x) => typeof x === 'string').slice(0, 50) : undefined;
-        if (title.length < 2 || description.length > 4000 || !['ebook', 'training_plan', 'guide', 'bundle', 'other'].includes(type) || !Number.isFinite(price) || price < 0 || price > 100000 || (published && !free && price <= 0)) return v2Reply({ error: 'Sprawdź nazwę, opis, typ, cenę i status publikacji.' }, 400);
+        if (V2_OFFICIAL_EBOOK_KEYS.has(key) && published && !String(item.file_key || '').trim()) return v2Reply({ error: 'Najpierw wgraj właściwy PDF do pola „Zastąp plik do pobrania”, a dopiero potem opublikuj e-book.' }, 400);
+        if (title.length < 2 || description.length > 4000 || !['ebook', 'training_plan', 'guide', 'bundle', 'other'].includes(type) || !Number.isFinite(price) || price < 0 || price > 100000 || (published && !free && price <= 0)) return v2Reply({ error: 'Sprawdź nazwę, opis, typ, cenę i status publikacji. Płatny produkt musi mieć cenę większą od 0 zł.' }, 400);
         if (category && !(await env.DB.prepare('SELECT slug FROM product_categories WHERE slug=? AND is_active=1').bind(category).first())) return v2Reply({ error: 'Wybierz istniejącą kategorię.' }, 400);
         await env.DB.prepare('UPDATE products SET title=?,description=?,product_type=?,price_amount=?,is_free=?,is_published=?,updated_at=? WHERE product_key=?').bind(title, description, type, free ? 0 : price, free ? 1 : 0, published ? 1 : 0, new Date().toISOString(), key).run();
         const now = new Date().toISOString(); await env.DB.prepare('INSERT INTO product_metadata(product_key,category_slug,target_audience,contents_json,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(product_key) DO UPDATE SET category_slug=excluded.category_slug,target_audience=excluded.target_audience,contents_json=COALESCE(?,product_metadata.contents_json),updated_at=excluded.updated_at').bind(key, category || 'inne', audience, JSON.stringify(contents || []), now, contents === undefined ? null : JSON.stringify(contents)).run();
