@@ -5,6 +5,7 @@ type Props = {
   name: string;
   email: string;
   saving: boolean;
+  isPremium: boolean;
   onCancel: () => void;
   onSubmit: (values: Record<string, string>) => Promise<boolean>;
 };
@@ -59,7 +60,7 @@ const initialAnswers: Record<string, string> = {
   progression: 'double', conditioning_rating: '5', strength_rating: '5', unable_exercises: 'Nie', equipment_other: '',
 };
 
-export default function IndividualPlanRequest({ name, email, saving, onCancel, onSubmit }: Props) {
+export default function IndividualPlanRequest({ name, email, saving, isPremium, onCancel, onSubmit }: Props) {
   const [sent, setSent] = useState(false);
   const [error, setError] = useState('');
   const [goal, setGoal] = useState('muscle');
@@ -164,7 +165,7 @@ export default function IndividualPlanRequest({ name, email, saving, onCancel, o
 
   return <section className="sf-view sf-individual-plan-view">
     <button type="button" className="sf-back-link" onClick={onCancel}><ArrowLeft size={16}/> Wróć do planów</button>
-    <header className="sf-gen-hero"><div className="sf-gen-hero-mark"><ClipboardList size={24}/></div><p className="sf-eyebrow">PLAN PRZYGOTOWANY PRZEZ TRENERA</p><h1>Zamów plan <span>indywidualny.</span></h1><p>Odpowiedz na pytania, żebym mógł przygotować plan dopasowany do Twoich możliwości, sprzętu i celu. Każde zamówienie jest opracowywane ręcznie po potwierdzeniu płatności.</p><p className="sf-individual-plan-price">149,99 zł <small>jednorazowo</small></p><div className="sf-individual-delivery-note"><ShieldCheck size={18}/><span><b>Realizacja w ciągu 24–48 godzin</b><small>Po płatności zamówienie trafia do panelu trenera. Status realizacji zobaczysz na swoim koncie, a gotowy plan zostanie przypisany do Twojego profilu.</small></span></div></header>
+    <header className="sf-gen-hero"><div className="sf-gen-hero-mark"><ClipboardList size={24}/></div><p className="sf-eyebrow">PLAN PRZYGOTOWANY PRZEZ TRENERA</p><h1>Zamów plan <span>indywidualny.</span></h1><p>Odpowiedz na pytania, żebym mógł przygotować plan dopasowany do Twoich możliwości, sprzętu i celu. Każde zamówienie jest opracowywane ręcznie po potwierdzeniu płatności.</p><p className="sf-individual-plan-price">{isPremium ? '49,99 zł' : '59,99 zł'} <small>jednorazowo{isPremium ? ' · cena Premium' : ' · 49,99 zł z Premium'}</small></p><div className="sf-individual-delivery-note"><ShieldCheck size={18}/><span><b>Realizacja w ciągu 24–48 godzin</b><small>Po płatności zamówienie trafia do panelu trenera. Status realizacji zobaczysz na swoim koncie, a gotowy plan zostanie przypisany do Twojego profilu.</small></span></div></header>
     <form className="sf-panel sf-form-stack sf-individual-plan-form" onSubmit={submit}>
       <div className="sf-individual-contact"><b>{name || 'Użytkownik'}</b><span>{email}</span><small>Dane kontaktowe pobrane z konta.</small></div>
       <div className="sf-form-section"><p className="sf-eyebrow">01 / TWOJE DANE</p><h3>Podstawowe informacje</h3><div className="sf-form-grid"><label>Wiek<input type="number" min="13" max="100" required value={answers.age} onChange={e=>setAnswer('age',e.target.value)} placeholder="np. 28"/></label><label>Płeć<select required value={answers.sex} onChange={e=>setAnswer('sex',e.target.value)}><option value="">Wybierz…</option><option value="female">Kobieta</option><option value="male">Mężczyzna</option><option value="other">Inna / wolę opisać w uwagach</option><option value="prefer_not_to_say">Nie chcę podawać</option></select></label><label>Waga (kg)<input type="number" min="25" max="400" step="0.1" required value={answers.weight_kg} onChange={e=>setAnswer('weight_kg',e.target.value)} placeholder="np. 78"/></label><label>Wzrost (cm)<input type="number" min="100" max="250" required value={answers.height_cm} onChange={e=>setAnswer('height_cm',e.target.value)} placeholder="np. 178"/></label></div></div>
@@ -178,7 +179,7 @@ export default function IndividualPlanRequest({ name, email, saving, onCancel, o
       <label className="sf-check sf-individual-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/><span>Wyrażam zgodę na zapisanie odpowiedzi, w tym informacji o zdrowiu i ograniczeniach, oraz wykorzystanie ich przez System Formy do przygotowania i realizacji zamówionego planu i kontaktu w tej sprawie. Wiem, że mogę skontaktować się z administratorem w sprawie moich danych.</span></label>
       {paymentNotice && <div className="sf-info-note" role="status">{paymentNotice}</div>}
       {error && <div className="sf-gen-error" role="alert">{error}</div>}
-      <button type="submit" className="sf-button sf-button-lime sf-button-full" disabled={saving}>{saving ? 'Przygotowuję bezpieczną płatność…' : 'Przejdź do płatności · 149,99 zł'} <Send size={16}/></button>
+      <button type="submit" className="sf-button sf-button-lime sf-button-full" disabled={saving}>{saving ? 'Przygotowuję bezpieczną płatność…' : isPremium ? 'Przejdź do płatności · 49,99 zł' : 'Przejdź do płatności · 59,99 zł'} <Send size={16}/></button>
       <small className="sf-muted">Po opłaceniu zamówienie trafia do trenera. Plan przygotowujemy ręcznie w ciągu 24–48 godzin. Możesz śledzić status na swoim koncie; gotowy plan będzie przypisany do tego konta.</small>
     </form>
   </section>;
