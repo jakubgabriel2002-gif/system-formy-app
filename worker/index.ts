@@ -302,7 +302,19 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       if (!validStrongPassword(password)) throw new HttpError(400, 'Hasło musi mieć od 8 do 128 znaków i zawierać wielką oraz małą literę, cyfrę i znak specjalny.');
       if (await db.prepare('SELECT id FROM users WHERE email = ? LIMIT 1').bind(email).first()) throw new HttpError(409, 'Konto z tym adresem e-mail już istnieje.');
       const { salt, hash } = await makePasswordHash(password, requirePasswordPepper(env)), user = { id: crypto.randomUUID(), email }, now = new Date().toISOString();
-      await db.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(user.id, email, hash, salt, now, now).run();
+      // Przygotuj tabelę przed insertem konta, aby nie zostawić użytkownika bez sesji, gdyby DDL zawiodło.
+      await db.prepare(`CREATE TABLE IF NOT EXISTS premium_trials (
+        user_id TEXT PRIMARY KEY NOT NULL,
+        started_at TEXT NOT NULL,
+        ends_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )`).run();
+      // Jednorazowe trzydniowe Premium wyłącznie dla nowego konta. Nie uruchamiamy płatności ani automatycznego odnowienia.
+      const trialEndsAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+      await db.batch([
+        db.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(user.id, email, hash, salt, now, now),
+        db.prepare('INSERT OR IGNORE INTO premium_trials(user_id,started_at,ends_at,created_at) VALUES(?,?,?,?)').bind(user.id, now, trialEndsAt, now),
+      ]);
       return createSession(request, env, user, false);
     }
     if (path === '/api/auth/login' && method === 'POST') {

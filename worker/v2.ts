@@ -21,8 +21,8 @@ const V2_INDIVIDUAL_PLAN_PRODUCT_KEY = 'plan-indywidualny';
 const V2_GENERATOR_PRICE_CENTS = 2999;
 const V2_INDIVIDUAL_PLAN_PRICE_CENTS = 5999;
 const V2_INDIVIDUAL_PLAN_PREMIUM_PRICE_CENTS = 4999;
-const V2_PREMIUM_MONTHLY_PRICE_CENTS = 1999;
-const V2_PREMIUM_YEARLY_PRICE_CENTS = 17999;
+const V2_PREMIUM_MONTHLY_PRICE_CENTS = 5000;
+const V2_PREMIUM_YEARLY_PRICE_CENTS = 25000;
 const V2_PREMIUM_PRODUCT_DISCOUNT_PERCENT = 20;
 const V2_PREMIUM_INCLUDED_CHALLENGE_PRICE_CENTS = 1999;
 const V2_PREMIUM_CHALLENGE_PRICE_CENTS = 500;
@@ -67,7 +67,20 @@ function ensurePremiumSubscriptionTable(env: V2Env): Promise<void> {
     )`).run();
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_premium_subscriptions_user_status ON premium_subscriptions(user_id,status,current_period_end)').run();
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_premium_subscriptions_customer ON premium_subscriptions(stripe_customer_id)').run();
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS premium_trials (
+      user_id TEXT PRIMARY KEY NOT NULL,
+      started_at TEXT NOT NULL,
+      ends_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`).run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_premium_trials_ends_at ON premium_trials(ends_at)').run();
   });
+}
+
+async function v2PremiumTrial(env: V2Env, userId: string): Promise<{ user_id: string; started_at: string; ends_at: string; created_at: string } | null> {
+  await ensurePremiumSubscriptionTable(env);
+  return env.DB.prepare('SELECT user_id,started_at,ends_at,created_at FROM premium_trials WHERE user_id=? LIMIT 1')
+    .bind(userId).first<{ user_id: string; started_at: string; ends_at: string; created_at: string }>();
 }
 
 async function v2PremiumSubscription(env: V2Env, userId: string): Promise<{ id:string; user_id:string; stripe_subscription_id:string; stripe_customer_id:string|null; plan_key:string; status:string; current_period_end:string|null; cancel_at_period_end:number; created_at:string; updated_at:string } | null> {
@@ -81,28 +94,38 @@ async function v2IsPremium(env: V2Env, userId: string): Promise<boolean> {
   if (subscription) {
     const activeStatus = subscription.status === 'active' || subscription.status === 'trialing';
     const periodValid = !subscription.current_period_end || Date.parse(subscription.current_period_end) > Date.now();
-    const isPremium = activeStatus && periodValid;
-    if (!isPremium) {
-      const now = new Date().toISOString();
-      // Wyzwania otrzymane wyłącznie jako korzyść abonamentowa przestają być aktywne po końcu dostępu.
-      await env.DB.prepare(`UPDATE user_entitlements SET access_status='revoked'
-        WHERE user_id=? AND access_status='active' AND order_id IN
-        (SELECT id FROM orders WHERE user_id=? AND order_number LIKE 'PREMIUM-CHALLENGE-%')`)
-        .bind(userId,userId).run().catch(() => {});
-      try {
-        await env.DB.prepare(`UPDATE sf_challenge_participants SET status='paused_premium',updated_at=?
-          WHERE user_id=? AND status='active' AND challenge_id IN (
-            SELECT c.id FROM sf_challenges c JOIN order_items i ON i.product_key=c.product_key
-            JOIN orders o ON o.id=i.order_id WHERE o.user_id=? AND o.order_number LIKE 'PREMIUM-CHALLENGE-%')`)
-          .bind(now,userId,userId).run();
-      } catch { /* tabele wyzwań są tworzone leniwie; pozostałe korzyści działają niezależnie */ }
-    }
-    return isPremium;
+    if (activeStatus && periodValid) return true;
   }
-  // Zachowujemy możliwość ręcznego przyznania dostępu z ACP dla kont bez rekordu subskrypcji.
-  const legacy = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1")
-    .bind(userId).first<{ id:string }>();
-  return Boolean(legacy);
+
+  // Okres próbny jest jednorazowy i nadawany wyłącznie podczas rejestracji nowego konta.
+  const trial = await v2PremiumTrial(env, userId);
+  const trialActive = Boolean(trial && Number.isFinite(Date.parse(trial.ends_at)) && Date.parse(trial.ends_at) > Date.now());
+  if (trialActive) return true;
+
+  // Ręczny dostęp z ACP nadal działa dla kont, które nie mają rekordu subskrypcji.
+  if (!subscription) {
+    const legacy = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1")
+      .bind(userId).first<{ id:string }>();
+    if (legacy) return true;
+  }
+
+  // Po wygaśnięciu subskrypcji albo trzydniowego triala odbierz tylko te korzyści,
+  // które były przyznane wyłącznie jako abonamentowe wyzwania. Zakupione materiały nie są usuwane.
+  if (subscription || trial) {
+    const now = new Date().toISOString();
+    await env.DB.prepare(`UPDATE user_entitlements SET access_status='revoked'
+      WHERE user_id=? AND access_status='active' AND order_id IN
+      (SELECT id FROM orders WHERE user_id=? AND order_number LIKE 'PREMIUM-CHALLENGE-%')`)
+      .bind(userId,userId).run().catch(() => {});
+    try {
+      await env.DB.prepare(`UPDATE sf_challenge_participants SET status='paused_premium',updated_at=?
+        WHERE user_id=? AND status='active' AND challenge_id IN (
+          SELECT c.id FROM sf_challenges c JOIN order_items i ON i.product_key=c.product_key
+          JOIN orders o ON o.id=i.order_id WHERE o.user_id=? AND o.order_number LIKE 'PREMIUM-CHALLENGE-%')`)
+        .bind(now,userId,userId).run();
+    } catch { /* tabele wyzwań są tworzone leniwie; pozostałe korzyści działają niezależnie */ }
+  }
+  return false;
 }
 
 async function v2UpsertPremiumSubscription(env: V2Env, sub: Record<string, any>, fallback?: { user_id?: string; plan_key?: string; stripe_customer_id?: string | null }): Promise<boolean> {
@@ -681,8 +704,12 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     if (path === '/api/v2/premium/status' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       const subscription = await v2PremiumSubscription(env, gate.session!.id);
+      const trial = await v2PremiumTrial(env, gate.session!.id);
+      const subscriptionActive = Boolean(subscription && ['active','trialing'].includes(subscription.status) && (!subscription.current_period_end || Date.parse(subscription.current_period_end) > Date.now()));
+      const isTrial = !subscriptionActive && Boolean(trial && Number.isFinite(Date.parse(trial.ends_at)) && Date.parse(trial.ends_at) > Date.now());
       const isPremium = await v2IsPremium(env, gate.session!.id);
-      return v2Reply({ is_premium:isPremium, subscription:subscription ? { plan_key:subscription.plan_key,status:subscription.status,current_period_end:subscription.current_period_end,cancel_at_period_end:Boolean(subscription.cancel_at_period_end) } : null,
+      return v2Reply({ is_premium:isPremium, is_trial:isTrial, trial:trial ? {started_at:trial.started_at,ends_at:trial.ends_at} : null,
+        subscription:subscription ? { plan_key:subscription.plan_key,status:subscription.status,current_period_end:subscription.current_period_end,cancel_at_period_end:Boolean(subscription.cancel_at_period_end) } : null,
         plans:{ monthly:{price_cents:V2_PREMIUM_MONTHLY_PRICE_CENTS,interval:'month'},yearly:{price_cents:V2_PREMIUM_YEARLY_PRICE_CENTS,interval:'year'} }, benefits:{product_discount_percent:V2_PREMIUM_PRODUCT_DISCOUNT_PERCENT,included_challenge_price_cents:V2_PREMIUM_INCLUDED_CHALLENGE_PRICE_CENTS,paid_challenge_price_cents:V2_PREMIUM_CHALLENGE_PRICE_CENTS,individual_plan_regular_cents:V2_INDIVIDUAL_PLAN_PRICE_CENTS,individual_plan_premium_cents:V2_INDIVIDUAL_PLAN_PREMIUM_PRICE_CENTS} });
     }
     if (path === '/api/v2/premium/checkout' && method === 'POST') {
