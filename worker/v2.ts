@@ -61,6 +61,16 @@ async function ensureIndividualPlanRequestTable(env: V2Env): Promise<void> {
   }
 }
 
+
+async function ensureNotificationTables(env: V2Env): Promise<void> {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS app_notifications (
+    id TEXT PRIMARY KEY, title TEXT NOT NULL, message TEXT NOT NULL, target_user_id TEXT, created_by TEXT, created_at TEXT NOT NULL
+  )`).run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS app_notification_reads (
+    notification_id TEXT NOT NULL, user_id TEXT NOT NULL, read_at TEXT NOT NULL, PRIMARY KEY(notification_id,user_id)
+  )`).run();
+}
+
 async function ensureSystemTrainingProducts(env: V2Env): Promise<void> {
   const now = new Date().toISOString();
   const products = [
@@ -736,7 +746,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const dayId = crypto.randomUUID(); statements.push(env.DB.prepare('INSERT INTO training_plan_days_v2(id,plan_id,day_key,title,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').bind(dayId, plan.id, day.day_key, day.title, di, now, now));
         day.exercises.forEach((ex, ei) => statements.push(env.DB.prepare('INSERT INTO training_plan_exercises_v2(id,day_id,name,sort_order,target_sets,target_reps,target_weight_kg,notes,rest_seconds,transition_rest_seconds,alternatives_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), dayId, ex.name, ei, ex.sets, ex.reps, ex.weight_kg, ex.notes, ex.rest_seconds, ex.transition_rest_seconds, JSON.stringify(ex.alternatives))));
       });
-      if (consumeGeneratorCredit && generatorCredit) statements.push(env.DB.prepare("UPDATE user_entitlements SET access_status='revoked' WHERE id=? AND access_status='active'").bind(generatorCredit.id));
+      if (consumeGeneratorCredit && generatorCredit) statements.push(env.DB.prepare("UPDATE user_entitlements SET access_status='used' WHERE id=? AND access_status='active'").bind(generatorCredit.id));
       if (statements.length) await env.DB.batch(statements);
       return v2Reply({ ok: true, duration_weeks: durationWeeks, start_date: startDate, progression_strategy: progressionStrategy, updated_at: now });
     }
@@ -837,9 +847,41 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       return v2Reply({ ok: true, id, status: 'open' }, 201);
     }
 
+    if (path === '/api/v2/notifications' && method === 'GET') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      await ensureNotificationTables(env);
+      const rows = await env.DB.prepare(`SELECT n.id,n.title,n.message,n.created_at FROM app_notifications n LEFT JOIN app_notification_reads r ON r.notification_id=n.id AND r.user_id=? WHERE r.notification_id IS NULL AND (n.target_user_id IS NULL OR n.target_user_id=?) ORDER BY n.created_at DESC LIMIT 50`).bind(gate.session!.id, gate.session!.id).all();
+      return v2Reply({ notifications: rows.results || [] });
+    }
+    const notificationReadMatch = path.match(/^\/api\/v2\/notifications\/([a-f0-9-]+)\/read$/i);
+    if (notificationReadMatch && method === 'POST') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      await ensureNotificationTables(env);
+      const exists = await env.DB.prepare('SELECT id FROM app_notifications WHERE id=? AND (target_user_id IS NULL OR target_user_id=?) LIMIT 1').bind(notificationReadMatch[1], gate.session!.id).first<{id:string}>();
+      if (!exists) return v2Reply({error:'Nie znaleziono powiadomienia.'},404);
+      await env.DB.prepare('INSERT INTO app_notification_reads(notification_id,user_id,read_at) VALUES(?,?,?) ON CONFLICT(notification_id,user_id) DO NOTHING').bind(notificationReadMatch[1], gate.session!.id, new Date().toISOString()).run();
+      return v2Reply({ok:true});
+    }
+
     // Każda ścieżka ACP jest weryfikowana po stronie Workera.
     if (path.startsWith('/api/v2/admin/')) {
       const gate = await v2Gate(request, env, true); if (gate.response) return gate.response;
+      if (path === '/api/v2/admin/notifications' && method === 'GET') {
+        await ensureNotificationTables(env);
+        const rows = await env.DB.prepare(`SELECT n.id,n.title,n.message,n.target_user_id,n.created_at,u.email AS target_email FROM app_notifications n LEFT JOIN users u ON u.id=n.target_user_id ORDER BY n.created_at DESC LIMIT 100`).all();
+        return v2Reply({notifications: rows.results || []});
+      }
+      if (path === '/api/v2/admin/notifications' && method === 'POST') {
+        await ensureNotificationTables(env);
+        const b = await v2Body(request), title = v2Field(b,'title',100), message = v2Field(b,'message',1200), targetEmail = v2Field(b,'target_email',254).toLowerCase();
+        if (title.length < 2 || message.length < 3) return v2Reply({error:'Podaj tytuł i treść powiadomienia.'},400);
+        let targetUserId: string | null = null;
+        if (targetEmail) { const target = await env.DB.prepare('SELECT id FROM users WHERE lower(email)=? LIMIT 1').bind(targetEmail).first<{id:string}>(); if (!target) return v2Reply({error:'Nie znaleziono użytkownika o podanym e-mailu.'},404); targetUserId = target.id; }
+        const id=crypto.randomUUID(), now=new Date().toISOString();
+        await env.DB.prepare('INSERT INTO app_notifications(id,title,message,target_user_id,created_by,created_at) VALUES(?,?,?,?,?,?)').bind(id,title,message,targetUserId,gate.session!.id,now).run();
+        await env.DB.prepare('INSERT INTO admin_audit_log(id,actor_user_id,actor_email,action,entity_type,entity_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),gate.session!.id,gate.session!.email,'create_notification','notification',id,JSON.stringify({title,target_email:targetEmail||null}),now).run().catch(()=>{});
+        return v2Reply({ok:true,id},201);
+      }
       if (path === '/api/v2/admin/individual-plan-requests' && method === 'GET') {
         await ensureIndividualPlanRequestTable(env);
         const rows = await env.DB.prepare("SELECT r.*,COALESCE(d.display_number,o.order_number) AS display_order_number FROM individual_plan_requests r LEFT JOIN orders o ON o.id=r.order_id AND o.user_id=r.user_id LEFT JOIN order_display_numbers d ON d.order_id=o.id WHERE COALESCE(r.payment_status,'legacy') IN ('paid','legacy') ORDER BY CASE WHEN r.payment_status='paid' AND r.status='awaiting_questionnaire' THEN 0 WHEN r.status='in_preparation' THEN 1 WHEN r.status='ready' THEN 2 ELSE 3 END, r.created_at DESC LIMIT 300").all();
