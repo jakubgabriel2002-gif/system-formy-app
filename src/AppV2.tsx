@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import TrainingRoute from './components/training/TrainingRoute';
 import PlanBuilder from './components/PlanBuilder';
 import PlanGenerator, { type GeneratedPlanDraft } from './components/PlanGenerator';
@@ -15,6 +15,10 @@ import {
 
 type User = { id: string; email: string };
 type AppNotification = { id: string; title: string; message: string; created_at: string; target_user_id?: string | null; target_email?: string | null };
+type ChallengeDay = { day: number; title: string; kind: 'workout' | 'recovery' | 'review'; details: string[] };
+type Challenge = { id: string; challenge_key: string; title: string; description: string; price_amount: number; currency: string; is_free: number; product_key: string | null; duration_days: number; training_plan_json: string; progress_guide_json: string; is_published: number; user_status: string; joined_at: string | null; participants_count: number; completed_days: number; completed_day_numbers: string };
+function parseChallengeDays(raw: string): ChallengeDay[] { try { const value: unknown = JSON.parse(raw || '[]'); return Array.isArray(value) ? value.filter((day): day is ChallengeDay => Boolean(day && typeof day === 'object' && typeof (day as ChallengeDay).day === 'number' && typeof (day as ChallengeDay).title === 'string' && Array.isArray((day as ChallengeDay).details))) : []; } catch { return []; } }
+function parseChallengeGuide(raw: string): string[] { try { const value: unknown = JSON.parse(raw || '[]'); return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; } catch { return []; } }
 type Product = {
   id: string; product_key: string; title: string; description: string; product_type: string;
   price_amount: number; currency: string; is_free: number; is_published?: number;
@@ -185,7 +189,11 @@ export default function AppV2() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationQueue, setNotificationQueue] = useState<AppNotification[]>([]);
   const [activeNotification, setActiveNotification] = useState<AppNotification | null>(null);
+  const activeNotificationRef = useRef<AppNotification | null>(null);
+  const seenNotificationIds = useRef<Set<string>>(new Set());
   const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
+  const [challenges, setChallenges] = useState<Challenge[]>([]);
+  const [challengeAction, setChallengeAction] = useState<string | null>(null);
   const [adminNotifications, setAdminNotifications] = useState<AppNotification[]>([]);
   const [notificationDraft, setNotificationDraft] = useState({ title: '', message: '', target_email: '' });
   const [individualPlanPaymentConfirmed, setIndividualPlanPaymentConfirmed] = useState(false);
@@ -275,19 +283,53 @@ export default function AppV2() {
 
   const notify = useCallback((text: string, type: Notice['type'] = 'info') => { setNotice({ text, type }); window.setTimeout(() => setNotice((old) => old?.text === text ? null : old), 6000); }, []);
   const markNotificationRead = useCallback(async (id: string) => {
-    try { await api(`/api/v2/notifications/${encodeURIComponent(id)}/read`, { method: 'POST', body: '{}' });
-      setNotifications(old => old.filter(item => item.id !== id)); setNotificationQueue(old => old.filter(item => item.id !== id));
-      setActiveNotification(old => old?.id === id ? null : old);
+    try {
+      await api(`/api/v2/notifications/${encodeURIComponent(id)}/read`, { method: 'POST', body: '{}' });
+      setNotifications(old => old.filter(item => item.id !== id));
+      const nextQueue = notificationQueue.filter(item => item.id !== id);
+      setNotificationQueue(nextQueue);
+      if (activeNotificationRef.current?.id === id) {
+        const next = nextQueue[0] || null;
+        setNotificationQueue(nextQueue.slice(next ? 1 : 0));
+        setActiveNotification(next);
+      }
     } catch (error) { notify(error instanceof Error ? error.message : 'Nie udało się odczytać powiadomienia.', 'error'); }
-  }, [notify]);
+  }, [notify, notificationQueue]);
+  useEffect(() => { activeNotificationRef.current = activeNotification; }, [activeNotification]);
   useEffect(() => {
-    if (!user) { setNotifications([]); setNotificationQueue([]); setActiveNotification(null); return; }
+    if (!user) { setNotifications([]); setNotificationQueue([]); setActiveNotification(null); seenNotificationIds.current.clear(); return; }
     let cancelled = false;
     api<{notifications: AppNotification[]}>('/api/v2/notifications').then(result => {
-      if (cancelled) return; const items = result.notifications || []; setNotifications(items);
-      setActiveNotification(items[0] || null); setNotificationQueue(items.slice(1));
+      if (cancelled) return;
+      const items = result.notifications || [];
+      seenNotificationIds.current = new Set(items.map(item => item.id));
+      setNotifications(items); setActiveNotification(items[0] || null); setNotificationQueue(items.slice(1));
     }).catch(() => {});
     return () => { cancelled = true; };
+  }, [user?.id]);
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const result = await api<{notifications: AppNotification[]}>('/api/v2/notifications');
+        if (cancelled) return;
+        const items = result.notifications || [];
+        const fresh = items.filter(item => !seenNotificationIds.current.has(item.id));
+        fresh.forEach(item => seenNotificationIds.current.add(item.id));
+        setNotifications(items);
+        if (fresh.length) {
+          if (activeNotificationRef.current) {
+            setNotificationQueue(old => { const ids = new Set(old.map(item => item.id)); return [...old, ...fresh.filter(item => !ids.has(item.id))]; });
+          } else {
+            setActiveNotification(fresh[0]);
+            setNotificationQueue(old => { const ids = new Set(old.map(item => item.id)); return [...old, ...fresh.slice(1).filter(item => !ids.has(item.id))]; });
+          }
+        }
+      } catch { /* Polling powiadomień nie może blokować korzystania z aplikacji. */ }
+    };
+    const timer = window.setInterval(() => { void poll(); }, 12000);
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, [user?.id]);
   useEffect(() => {
     if (!activeNotification) return;
@@ -315,11 +357,11 @@ export default function AppV2() {
     if (!user) return;
     setAdminReady(false);
     setLoading(true);
-    const [p, o, m, w, pl, pr, t] = await Promise.allSettled([
+    const [p, o, m, w, pl, pr, t, ch] = await Promise.allSettled([
       api<{ profile: typeof profile }>('/api/account/profile'), api<{ orders: Order[]; items?: OrderItem[]; individual_plans?: IndividualPlanUserOrder[] }>('/api/v2/account/orders'),
       api<{ materials: Material[] }>('/api/v2/account/materials'), api<{ sessions: Workout[] }>('/api/v2/training/sessions'),
       api<{ plans: Plan[]; legacy: typeof legacyPlans; plan_limit?: number; is_premium?: boolean; plans_used?: number }>('/api/v2/training/plans'), api<typeof progress>('/api/v2/progress'),
-      api<{ tickets: Ticket[] }>('/api/v2/help/tickets'),
+      api<{ tickets: Ticket[] }>('/api/v2/help/tickets'), api<{ challenges: Challenge[] }>('/api/v2/challenges'),
     ]);
     if (p.status === 'fulfilled') setProfile({ first_name: p.value.profile?.first_name || '', primary_goal: p.value.profile?.primary_goal || '', training_location: p.value.profile?.training_location || '', weight_kg: p.value.profile?.weight_kg ?? null, height_cm: p.value.profile?.height_cm ?? null, training_days_per_week: p.value.profile?.training_days_per_week ?? null });
     if (o.status === 'fulfilled') { setOrders(o.value.orders || []); setOrderItems(o.value.items || []); setIndividualPlanUserOrders(o.value.individual_plans || []); }
@@ -328,6 +370,7 @@ export default function AppV2() {
     if (pl.status === 'fulfilled') { const nextPlans = pl.value.plans || []; setPlans(nextPlans); setLegacyPlans(pl.value.legacy || []); setTrainingIsPremium(Boolean(pl.value.is_premium)); setTrainingPlanLimit(Number(pl.value.plan_limit) || (pl.value.is_premium ? 3 : 1)); setWorkoutPlanChoice(old => nextPlans.some(plan => plan.id === old) ? old : nextPlans[0]?.id || ''); setWorkoutDayChoice(old => { const candidate = nextPlans.find(plan => plan.id === workoutPlanChoice) || nextPlans[0]; return candidate?.days.some(day => day.day_key === old) ? old : candidate?.days[0]?.day_key || ''; }); }
     if (pr.status === 'fulfilled') { setProgress(pr.value); setGoalTitle(pr.value.goal?.goal_title || ''); setGoalTargetDate(pr.value.goal?.target_date || ''); setGoalTargetValue(pr.value.goal?.target_value == null ? '' : String(pr.value.goal.target_value)); setGoalCurrentValue(pr.value.goal?.current_value == null ? '' : String(pr.value.goal.current_value)); setGoalUnit(pr.value.goal?.unit || ''); setGoalEditing(!pr.value.goal); }
     if (t.status === 'fulfilled') setTickets(t.value.tickets || []);
+    if (ch.status === 'fulfilled') setChallenges(ch.value.challenges || []);
     const me = await api<{ isAdmin: boolean }>('/api/admin/me').catch(() => ({ isAdmin: false })); setAdmin(Boolean(me.isAdmin)); setAdminReady(true); setLoading(false);
   }, [user, workoutPlanChoice]);
 
@@ -347,7 +390,7 @@ export default function AppV2() {
     return () => window.removeEventListener('popstate', onPop);
   }, [loadCatalog, notify]);
 
-  useEffect(() => { setIndividualPlanUserOrders([]); if (user) void refreshUserData(); else { setAdmin(false); setAdminReady(true); setOrders([]); setOrderItems([]); setMaterials([]); setSessions([]); setPlans([]); setTrainingPlanLimit(1); setTrainingIsPremium(false); setTickets([]); } }, [user?.id]);
+  useEffect(() => { setIndividualPlanUserOrders([]); if (user) void refreshUserData(); else { setAdmin(false); setAdminReady(true); setOrders([]); setOrderItems([]); setMaterials([]); setSessions([]); setPlans([]); setTrainingPlanLimit(1); setTrainingIsPremium(false); setTickets([]); setChallenges([]); } }, [user?.id]);
   useEffect(() => { if (paymentReceiptPath && path !== paymentReceiptPath) { setRecentlyPaidOrder(null); setPaymentReceiptPath(null); } }, [path, paymentReceiptPath]);
   useEffect(() => {
     if (!user) return;
@@ -355,6 +398,9 @@ export default function AppV2() {
       void api<{ orders: Order[]; items?: OrderItem[]; individual_plans?: IndividualPlanUserOrder[] }>('/api/v2/account/orders').then(result => {
         setOrders(result.orders || []); setOrderItems(result.items || []); setIndividualPlanUserOrders(result.individual_plans || []);
       }).catch(() => {});
+    }
+    if (path === '/app/wyzwania') {
+      void api<{ challenges: Challenge[] }>('/api/v2/challenges').then(result => setChallenges(result.challenges || [])).catch(() => {});
     }
     if (path === '/app/plan' || path.startsWith('/app/plan/')) {
       void api<{ plans: Plan[]; legacy: typeof legacyPlans; plan_limit?: number; is_premium?: boolean }>('/api/v2/training/plans').then(result => {
@@ -979,6 +1025,27 @@ export default function AppV2() {
   const sideNav = [
     { href: '/app', label: 'Start', icon: LayoutDashboard }, { href: '/app/trening', label: 'Trening', icon: Dumbbell }, { href: '/app/plan', label: 'Plany treningowe', icon: ClipboardList }, { href: '/app/postepy', label: 'Postępy', icon: TrendingUp }, { href: '/app/materialy', label: 'Materiały', icon: BookOpen }, { href: '/app/wyzwania', label: 'Wyzwania', icon: Trophy }, { href: '/app/zamowienia', label: 'Zamówienia', icon: ShoppingBag }, { href: '/app/profil', label: 'Profil i bezpieczeństwo', icon: UserRound }, { href: '/app/pomoc', label: 'Pomoc', icon: LifeBuoy },
   ];
+  async function joinChallenge(challenge: Challenge) {
+    if (challenge.is_free !== 1 && challenge.product_key) { go('/produkty/' + encodeURIComponent(challenge.product_key)); return; }
+    setChallengeAction(challenge.id);
+    try {
+      await api(`/api/v2/challenges/${encodeURIComponent(challenge.id)}/join`, { method: 'POST', body: '{}' });
+      const refreshed = await api<{ challenges: Challenge[] }>('/api/v2/challenges'); setChallenges(refreshed.challenges || []);
+      notify(`Dołączono do wyzwania „${challenge.title}”.`, 'success');
+    } catch (error) { notify(error instanceof Error ? error.message : 'Nie udało się dołączyć do wyzwania.', 'error'); }
+    finally { setChallengeAction(null); }
+  }
+  async function markChallengeDay(challenge: Challenge, dayNumber: number) {
+    const actionKey = `${challenge.id}:${dayNumber}`;
+    setChallengeAction(actionKey);
+    try {
+      await api(`/api/v2/challenges/${encodeURIComponent(challenge.id)}/progress`, { method: 'POST', body: JSON.stringify({ day_number: dayNumber }) });
+      const refreshed = await api<{ challenges: Challenge[] }>('/api/v2/challenges'); setChallenges(refreshed.challenges || []);
+      notify(`Zapisano postęp: ${challenge.title}, dzień ${dayNumber}.`, 'success');
+    } catch (error) { notify(error instanceof Error ? error.message : 'Nie udało się zapisać postępu wyzwania.', 'error'); }
+    finally { setChallengeAction(null); }
+  }
+
   function AppLayout() {
     const section = path === '/app' || path === '/app/' ? `Cześć${profile.first_name ? `, ${profile.first_name}` : ''}` : (sideNav.find(n => n.href === path)?.label || 'Twoja aplikacja');
     const weekStart = new Date(monday() + 'T12:00:00');
@@ -991,7 +1058,6 @@ export default function AppV2() {
     });
     const weekCount = sessions.filter(session => session.performed_on >= weekDays[0].key && session.performed_on <= weekDays[6].key).length;
     const recent = sessions.slice(0, 4);
-    const challengeProducts = products.filter(product => /wyzwa|challenge/i.test([product.title, product.product_type, product.category_slug || '', categories.find(category => category.slug === product.category_slug)?.title || ''].join(' ')));
     const publishedProducts = products.filter(product => product.is_published !== 0);
     const featuredProducts = publishedProducts.slice(0, 3);
     const featuredProductsTitle = 'Polecane materiały';
@@ -1015,7 +1081,7 @@ export default function AppV2() {
     <div className="sf-week-days">{weekDays.map(day => <div key={day.key} className={"sf-week-day " + (day.isToday ? "is-today " : "") + (day.completed ? "is-complete" : "")}><span className="sf-week-day-label">{day.weekday}</span><span className="sf-week-day-circle">{day.completed ? <Check size={15}/> : day.day}</span></div>)}</div>
   </div>
   <div className="sf-dashboard-week-count"><span className="sf-welcome-ring"><span><b>{weekCount}</b><small>{weekCount === 1 ? 'TRENING' : weekCount >= 2 && weekCount <= 4 ? 'TRENINGI' : 'TRENINGÓW'}<br/>W TYM TYG.</small></span></span><div className="sf-week-count-caption">Zapisane w tym tygodniu</div></div>
-  <div className="sf-welcome-actions sf-welcome-actions-full"><button className="sf-button sf-button-lime" onClick={() => window.location.assign('/app/trening')}>Rozpocznij trening <Dumbbell size={17}/></button><button className="sf-button sf-button-outline sf-challenge-cta" onClick={() => go(challengeProducts[0] ? '/produkty/' + challengeProducts[0].product_key : '/produkty')}>Podejmij wyzwanie <Sparkles size={16}/></button></div>
+  <div className="sf-welcome-actions sf-welcome-actions-full"><button className="sf-button sf-button-lime" onClick={() => window.location.assign('/app/trening')}>Rozpocznij trening <Dumbbell size={17}/></button><button className="sf-button sf-button-outline sf-challenge-cta" onClick={() => go('/app/wyzwania')}>Podejmij wyzwanie <Sparkles size={16}/></button></div>
   <div className="sf-next-workout"><div className="sf-next-workout-heading"><span className="sf-stat-icon"><ClipboardList size={18}/></span><div><p className="sf-eyebrow">NAJBLIŻSZY TRENING</p><h3>{plans[0]?.days[0]?.title || legacyPlans[0]?.title || (plans[0]?.name ? plans[0].name : 'Twój kolejny trening')}</h3></div></div>
     {plans[0]?.days[0] ? <><p className="sf-next-workout-plan">Plan: {plans[0].name} · {plans[0].days[0].exercises.length} ćwiczeń</p><div className="sf-next-workout-exercises">{plans[0].days[0].exercises.slice(0, 4).map((exercise, index) => <span key={index}>{exercise.name}</span>)}</div><button className="sf-text-button" onClick={() => { setActivePlanId(plans[0].id); go('/app/plan'); }}>Zobacz plan <ArrowRight size={15}/></button></> : legacyPlans[0] ? <><p className="sf-next-workout-plan">Dotychczasowy plan treningowy</p><div className="sf-next-workout-exercises">{decodeExercises(legacyPlans[0].exercises_json).slice(0,4).map((exercise,index)=><span key={index}>{exercise.name}</span>)}</div><button className="sf-text-button" onClick={() => void startLegacyWorkout(legacyPlans[0])}>Rozpocznij ten trening <ArrowRight size={15}/></button></> : <div className="sf-empty-inline"><p>Nie masz jeszcze zapisanego planu. Utwórz lub wybierz plan, a pokażemy tutaj skrót najbliższej sesji.</p><button className="sf-button sf-button-outline" onClick={() => go('/app/plan')}>Wybierz plan <ArrowRight size={15}/></button></div>}
   </div>
@@ -1023,7 +1089,8 @@ export default function AppV2() {
 
 <div className="sf-dashboard-feature-grid"><section className="sf-panel sf-dashboard-activity"><div className="sf-panel-heading"><div><p className="sf-eyebrow">OSTATNIA AKTYWNOŚĆ</p><h3>Ostatni trening</h3></div><button className="sf-icon-button" title="Zobacz historię" aria-label="Zobacz historię" onClick={() => go('/app/postepy')}><ArrowRight size={17}/></button></div>{recent.length ? <><div className="sf-last-workout-summary"><span className="sf-list-icon"><Dumbbell size={18}/></span><div><b>{recent[0].title}</b><small>{dateLabel(recent[0].performed_on)} · {decodeExercises(recent[0].exercises_json).length} ćwiczeń</small></div></div><div className="sf-last-workout-exercises">{decodeExercises(recent[0].exercises_json).slice(0,4).map((exercise,index)=><span key={index}>{exercise.name}</span>)}</div></> : <div className="sf-empty-inline"><p>Po zapisaniu pierwszego treningu pojawi się tutaj jego skrót.</p><button className="sf-button sf-button-outline" onClick={() => window.location.assign('/app/trening')}>Rozpocznij trening <ArrowRight size={15}/></button></div>}</section>
 <section className="sf-panel sf-dashboard-measurements"><div className="sf-panel-heading"><div><p className="sf-eyebrow">TWOJE DANE</p><h3>Ostatnie pomiary</h3></div><button className="sf-icon-button" title="Zobacz postępy" aria-label="Zobacz postępy" onClick={() => go('/app/postepy')}><ArrowRight size={17}/></button></div>{latestMeasurement ? <p className="sf-measurement-date">Ostatni zapis: {dateLabel(String(latestMeasurement.measured_on || ''))}</p> : <p className="sf-measurement-date">Dane z ostatniego zapisu lub profilu</p>}<div className="sf-measurement-grid"><div><span>Waga</span><b>{latestMeasurement?.weight_kg != null ? String(latestMeasurement.weight_kg) + ' kg' : profile.weight_kg != null ? String(profile.weight_kg) + ' kg' : '—'}</b></div><div><span>Talia</span><b>{latestMeasurement?.waist_cm != null ? String(latestMeasurement.waist_cm) + ' cm' : '—'}</b></div><div><span>Tłuszcz</span><b>{latestMeasurement?.bodyfat_percent != null ? String(latestMeasurement.bodyfat_percent) + '%' : '—'}</b></div><div><span>Wzrost</span><b>{profile.height_cm != null ? String(profile.height_cm) + ' cm' : '—'}</b></div></div><button className="sf-button sf-button-outline sf-button-full" onClick={() => go('/app/postepy')}>Dodaj lub sprawdź pomiary <ArrowRight size={15}/></button></section></div>
-<section className="sf-dashboard-training"><div className="sf-panel-heading sf-section-heading"><div><p className="sf-eyebrow">ZACZNIJ DZISIAJ</p><h3>Wybierz swój trening</h3></div><button className="sf-text-button" onClick={() => go('/app/plan')}>Moje plany <ArrowRight size={15}/></button></div><div className="sf-training-promo-grid"><article className="sf-training-promo sf-training-promo-home"><span className="sf-training-promo-icon"><Home size={20}/></span><div><p className="sf-eyebrow">BEZ SPRZĘTU</p><h4>Trening w domu</h4><p>Wróć do zapisanych planów albo dodaj prosty plan domowy.</p></div><button className="sf-button sf-button-outline" onClick={() => window.location.assign('/app/trening')}>Wybierz trening <ArrowRight size={15}/></button></article><article className="sf-training-promo sf-training-promo-gym"><span className="sf-training-promo-icon"><Dumbbell size={20}/></span><div><p className="sf-eyebrow">SIŁOWNIA</p><h4>Trening z obciążeniem</h4><p>Kontynuuj swój plan i zapisuj serie, powtórzenia oraz ciężary.</p></div><button className="sf-button sf-button-outline" onClick={() => go('/app/plan')}>Otwórz plany <ArrowRight size={15}/></button></article></div></section>
+{plans.length === 0 && legacyPlans.length === 0 && <section className="sf-dashboard-training"><div className="sf-panel-heading sf-section-heading"><div><p className="sf-eyebrow">ZACZNIJ DZISIAJ</p><h3>Wybierz swój trening</h3></div><button className="sf-text-button" onClick={() => go('/app/plan')}>Moje plany <ArrowRight size={15}/></button></div><div className="sf-training-promo-grid"><article className="sf-training-promo sf-training-promo-home"><span className="sf-training-promo-icon"><Home size={20}/></span><div><p className="sf-eyebrow">BEZ SPRZĘTU</p><h4>Trening w domu</h4><p>Wybierz miejsce i ułóż plan dopasowany do swoich możliwości.</p></div><button className="sf-button sf-button-outline" onClick={() => go('/app/plan')}>Wybierz trening <ArrowRight size={15}/></button></article><article className="sf-training-promo sf-training-promo-gym"><span className="sf-training-promo-icon"><Dumbbell size={20}/></span><div><p className="sf-eyebrow">SIŁOWNIA</p><h4>Trening z obciążeniem</h4><p>Ułóż plan i zapisuj serie, powtórzenia oraz ciężary.</p></div><button className="sf-button sf-button-outline" onClick={() => go('/app/plan')}>Otwórz plany <ArrowRight size={15}/></button></article></div></section>}
+<section className="sf-dashboard-challenges"><div className="sf-panel-heading sf-section-heading"><div><p className="sf-eyebrow">WYZWANIA SYSTEMU FORMY</p><h3>Mały cel. Konkretny plan.</h3><p className="sf-muted">Podejmij wyzwanie, realizuj kolejne dni i zapisuj postęp.</p></div><button className="sf-text-button" onClick={() => go('/app/wyzwania')}>Wszystkie wyzwania <ArrowRight size={15}/></button></div><div className="sf-challenge-grid sf-dashboard-challenge-grid">{challenges.slice(0,2).map(challenge => { const joined = challenge.user_status === 'active' || challenge.user_status === 'completed'; return <article className="sf-panel sf-challenge-card" key={challenge.id}><span className="sf-icon-tile">{challenge.is_free === 1 ? <Trophy size={22}/> : <Sparkles size={22}/>}</span><p className="sf-eyebrow">{challenge.is_free === 1 ? 'BEZPŁATNE WYZWANIE' : 'EDYCJA TESTOWA · PŁATNE'}</p><h2>{challenge.title}</h2><p>{challenge.description}</p>{joined && <span className="sf-status">{challenge.user_status === 'completed' ? 'UKOŃCZONE' : `W TRAKCIE · ${challenge.completed_days}/${challenge.duration_days} DNI`}</span>}<button className="sf-button sf-button-lime sf-button-full" onClick={() => joined ? go('/app/wyzwania') : challenge.is_free === 1 ? void joinChallenge(challenge) : challenge.product_key ? go('/produkty/' + encodeURIComponent(challenge.product_key)) : go('/app/wyzwania')}>{joined ? 'Kontynuuj wyzwanie' : challenge.is_free === 1 ? 'Dołącz bezpłatnie' : `Kup wyzwanie · ${money(challenge.price_amount, challenge.currency)}`} <ArrowRight size={15}/></button></article>; })}</div></section>
 <section className="sf-dashboard-library"><div className="sf-panel-heading sf-section-heading"><div><p className="sf-eyebrow">TWOJA BIBLIOTEKA</p><h3>Odblokowane materiały</h3><p className="sf-muted">Dostępne są pozycje przypisane do Twojego konta.</p></div><button className="sf-text-button" onClick={() => go('/app/materialy')}>Wszystkie materiały <ArrowRight size={15}/></button></div>{materials.filter(material => material.product_key !== 'generator-planu-treningowego').slice(0, 3).length ? <div className="sf-dashboard-library-list">{materials.filter(material => material.product_key !== 'generator-planu-treningowego').slice(0, 3).map(material => <div className="sf-list-row" key={material.id}><span className="sf-list-icon"><BookOpen size={17}/></span><span className="sf-list-main"><b>{material.product_title}</b><small>{productTypeLabel(material.product_type)}</small></span><button className="sf-icon-button" title="Pobierz materiał" aria-label={'Pobierz ' + material.product_title} onClick={() => window.location.assign('/api/products/' + encodeURIComponent(material.product_key) + '/download')}><ArrowDownToLine size={17}/></button></div>)}</div> : <div className="sf-empty-inline"><p>Twoja biblioteka jest jeszcze pusta. Odbierz bezpłatny materiał lub kup pozycję w katalogu.</p><button className="sf-button sf-button-outline" onClick={() => go('/produkty')}>Otwórz sklep <ArrowRight size={15}/></button></div>}</section>
 <section className="sf-dashboard-products"><div className="sf-panel-heading sf-section-heading"><div><p className="sf-eyebrow">DOSTĘPNE W KATALOGU</p><h3>{featuredProductsTitle}</h3><p className="sf-muted">Wybierz program lub materiał dostępny w katalogu Systemu Formy.</p></div><button className="sf-text-button" onClick={() => go('/produkty')}>Cały katalog <ArrowRight size={15}/></button></div>{featuredProducts.length ? <div className="sf-dashboard-product-grid">{featuredProducts.map(product => <div key={product.product_key} className="sf-dashboard-product-item">{ProductCard({ product })}</div>)}</div> : <div className="sf-empty-inline"><p>W katalogu nie ma jeszcze opublikowanych produktów. Gdy dodasz je w ACP, pojawią się tutaj.</p><button className="sf-button sf-button-outline" onClick={() => go('/produkty')}>Otwórz katalog <ArrowRight size={15}/></button></div>}</section>
 </div>
@@ -1063,7 +1130,7 @@ export default function AppV2() {
           {plans.length > 1 && <div className="sf-panel sf-plan-editor-picker"><label>Edytowany plan<select value={activePlanId} onChange={e => { const p = plans.find(item => item.id === e.target.value); if (!p) return; setActivePlanId(p.id); setPlanName(p.name); setPlanStartDate(p.start_date || p.created_at?.slice(0, 10) || today()); setPlanProgression(p.progression_strategy || 'reps'); const match = p.description.match(/^\[\[SF_LOCATION:(home|gym)\]\]\n?/); setNewPlanLocation(match?.[1] === 'home' || (!match && /dom|home/i.test(p.name)) ? 'home' : 'gym'); setPlanDescription(p.description.replace(/^\[\[SF_LOCATION:(home|gym)\]\]\n?/, '')); setPlanDays(p.days.length ? p.days : [{day_key:'A',title:'Dzień 1',exercises:[]}]); }}>{plans.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label></div>}
           {activePlanId ? <div className="sf-panel sf-plan-editor-panel"><div className="sf-panel-heading sf-plan-editor-heading"><div><p className="sf-eyebrow">KREATOR KROK PO KROKU</p><h3>Edytor planu</h3><p>Zmiany zapiszesz przyciskiem na dole.</p></div><button type="button" className="sf-text-button sf-danger-text" disabled={loading} onClick={() => void deleteTrainingPlan(activePlanId)}><Trash2 size={15}/> {loading ? 'Usuwam…' : 'Usuń plan'}</button></div><form className="sf-form-stack sf-plan-edit-form" onSubmit={savePlan}><div className="sf-plan-meta-fields"><label>Nazwa planu<input value={planName} onChange={e => { setPlanName(e.target.value); setPlans(old => old.map(p => p.id === activePlanId ? {...p,name:e.target.value} : p)); }} required minLength={2} maxLength={120}/></label><label>Opis planu <span className="sf-optional-label">opcjonalnie</span><textarea value={planDescription} onChange={e => setPlanDescription(e.target.value.replace(/^\[\[SF_LOCATION:(home|gym)\]\]\n?/, ''))} maxLength={1000} rows={2}/></label></div><div className="sf-plan-location-summary"><span>{newPlanLocation === 'home' ? <Home size={17}/> : <Dumbbell size={17}/>}</span><div><b>Plan przygotowany: {newPlanLocation === 'home' ? 'do treningu w domu' : 'na siłownię'}</b><small>Jeśli chcesz zmienić miejsce, wróć do ustawień planu lub wybierz właściwą opcję przed zapisem.</small></div><button type="button" className="sf-button sf-button-outline sf-button-sm" onClick={() => setNewPlanLocation(old => old === 'home' ? 'gym' : 'home')}>Zmień</button></div><PlanBuilder key={activePlanId} days={planDays} setDays={setPlanDays} location={newPlanLocation} loading={loading} progressionStrategy={planProgression} setProgressionStrategy={setPlanProgression} startDate={planStartDate} setStartDate={setPlanStartDate}/><div className="sf-builder-save-bar"><div><CheckCircle2 size={18}/><span><b>Gotowe do zapisania?</b><small>Sprawdzę kompletność ćwiczeń i parametrów przed zapisem.</small></span></div><button type="submit" className="sf-button sf-button-lime" disabled={loading}>{loading ? 'Zapisuję…' : 'Zapisz plan i wszystkie dni'} <Check size={16}/></button></div></form></div> : <div className="sf-panel sf-plan-editor-empty"><h3>Nie wybrano planu</h3><p>Wróć do biblioteki i utwórz nowy plan albo wybierz zapisany plan.</p><button type="button" className="sf-button sf-button-lime" onClick={() => go('/app/plan/kreator')}>Utwórz nowy plan</button></div>}
         </section>)
- : path === '/app/wyzwania' ? <section className="sf-view sf-challenges-view">{PageTitle({ eyebrow: 'WYZWANIA SYSTEMU FORMY', title: 'Podejmij wyzwanie.', subtitle: 'W tym miejscu znajdziesz bezpłatne i płatne wyzwania. Przygotowujemy pierwsze edycje.' })}<div className="sf-challenge-grid"><article className="sf-panel sf-challenge-card"><span className="sf-icon-tile"><Trophy size={23}/></span><p className="sf-eyebrow">BEZPŁATNE</p><h2>Wyzwania otwarte</h2><p>Regularność, proste cele i wspólna motywacja. Bez dodatkowej opłaty.</p><span className="sf-status">WKRÓTCE</span></article><article className="sf-panel sf-challenge-card"><span className="sf-icon-tile"><Sparkles size={23}/></span><p className="sf-eyebrow">PROGRAMY PREMIUM</p><h2>Wyzwania płatne</h2><p>Ustrukturyzowane programy z planem, zadaniami i śledzeniem postępów.</p><span className="sf-status">WKRÓTCE</span></article></div></section>: path === '/app/postepy' ? <section className="sf-view sf-progress-dashboard">
+ : path === '/app/wyzwania' ? <section className="sf-view sf-challenges-view">{PageTitle({ eyebrow: 'WYZWANIA SYSTEMU FORMY', title: 'Podejmij wyzwanie.', subtitle: 'Wybierz program, realizuj zaplanowane dni i zapisuj wykonanie. Wyzwania testowe pomogą nam sprawdzić działanie przed premierą.' })}{challenges.length ? <div className="sf-challenge-grid">{challenges.map(challenge => { const days = parseChallengeDays(challenge.training_plan_json); const guide = parseChallengeGuide(challenge.progress_guide_json); const completed = new Set((challenge.completed_day_numbers || '').split(',').filter(Boolean).map(Number)); const joined = challenge.user_status === 'active' || challenge.user_status === 'completed'; return <article className="sf-panel sf-challenge-card sf-challenge-full-card" key={challenge.id}><div className="sf-challenge-card-top"><span className="sf-icon-tile">{challenge.is_free === 1 ? <Trophy size={23}/> : <Sparkles size={23}/>}</span><span className="sf-challenge-pill">{challenge.is_free === 1 ? 'BEZPŁATNE' : `TEST · ${money(challenge.price_amount, challenge.currency)}`}</span></div><h2>{challenge.title}</h2><p>{challenge.description}</p><div className="sf-challenge-meta"><span>{challenge.duration_days} dni</span><span>{challenge.participants_count} uczestników</span></div>{joined && <div className="sf-challenge-progress"><div><span>Twój postęp</span><b>{challenge.completed_days}/{challenge.duration_days} dni</b></div><div className="sf-challenge-progress-track"><i style={{width:`${Math.min(100, challenge.completed_days / Math.max(1, challenge.duration_days) * 100)}%`}}/></div>{challenge.user_status === 'completed' && <p className="sf-challenge-complete-note"><CheckCircle2 size={15}/> Wyzwanie ukończone. Gratulacje!</p>}</div>}{!joined && <button className="sf-button sf-button-lime sf-button-full" disabled={challengeAction === challenge.id} onClick={() => void joinChallenge(challenge)}>{challengeAction === challenge.id ? 'Dołączam…' : challenge.is_free === 1 ? 'Dołącz bezpłatnie' : `Kup i rozpocznij · ${money(challenge.price_amount, challenge.currency)}`} <ArrowRight size={15}/></button>}<details className="sf-challenge-details" open={joined}><summary>Plan działania · {days.length} dni</summary><div className="sf-challenge-day-list">{days.map(day => <article className={"sf-challenge-day " + (completed.has(day.day) ? 'is-completed' : '')} key={day.day}><div className="sf-challenge-day-heading"><span>{String(day.day).padStart(2,'0')}</span><div><b>{day.title}</b><small>{day.kind === 'workout' ? 'TRENING' : day.kind === 'recovery' ? 'REGENERACJA' : 'NAWYK / PODSUMOWANIE'}</small></div>{completed.has(day.day) && <CheckCircle2 size={17}/>}</div><ul>{day.details.map((detail,index) => <li key={index}>{detail}</li>)}</ul>{joined && <button className={"sf-button sf-button-sm " + (completed.has(day.day) ? 'sf-button-outline' : 'sf-button-lime')} disabled={completed.has(day.day) || challengeAction === `${challenge.id}:${day.day}` || challenge.user_status === 'completed'} onClick={() => void markChallengeDay(challenge, day.day)}>{completed.has(day.day) ? 'Dzień wykonany' : challengeAction === `${challenge.id}:${day.day}` ? 'Zapisuję…' : 'Oznacz dzień jako wykonany'} {!completed.has(day.day) && <Check size={14}/>}</button>}</article>)}</div></details><details className="sf-challenge-details"><summary>Jak mierzyć progres?</summary><ul className="sf-challenge-guide">{guide.map((item,index) => <li key={index}>{item}</li>)}</ul></details></article>; })}</div> : <div className="sf-panel sf-challenge-empty"><Trophy size={24}/><h3>Ładuję wyzwania…</h3><p>Jeśli ta sekcja pozostanie pusta, odśwież widok po zalogowaniu.</p></div>}</section>: path === '/app/postepy' ? <section className="sf-view sf-progress-dashboard">
       {PageTitle({ eyebrow: 'DANE, NIE DOMYSŁY', title: 'Postępy i wyniki.', subtitle: 'Śledź regularność, pomiary i wyniki ćwiczeń na podstawie danych zapisanych w aplikacji.' })}
       <div className="sf-progress-hero">
         <div className="sf-progress-hero-copy">

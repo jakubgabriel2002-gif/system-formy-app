@@ -344,3 +344,42 @@
  .sf-mobile-nav button{min-width:0;padding-inline:2px}
  .sf-mobile-nav button span{font-size:10px;white-space:nowrap}
 }
+
+
+/* Wyzwania: testowa wersja oparta o trwałe rekordy D1. */
+.sf-dashboard-challenges{min-width:0;padding-top:4px;border-top:1px solid #292e24}
+.sf-dashboard-challenge-grid{align-items:stretch}
+.sf-dashboard-challenge-grid .sf-challenge-card{height:100%;padding:17px}
+.sf-dashboard-challenge-grid .sf-challenge-card h2{font-size:clamp(17px,1.8vw,22px);line-height:1.25;overflow-wrap:anywhere}
+.sf-challenge-card-top{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%}
+.sf-challenge-pill{display:inline-flex;align-items:center;border:1px solid rgba(198,243,106,.32);border-radius:999px;padding:6px 9px;color:#d3f68f;background:rgba(198,243,106,.07);font-size:10px;letter-spacing:.06em;font-weight:800}
+.sf-challenge-meta{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 8px;color:#aeb5a5;font-size:12px}
+.sf-challenge-meta span{border:1px solid #30372a;background:#11140f;border-radius:999px;padding:6px 9px}
+.sf-challenge-progress{width:100%;padding:12px;border:1px solid #323a2a;border-radius:14px;background:rgba(198,243,106,.045)}
+.sf-challenge-progress>div:first-child{display:flex;justify-content:space-between;gap:10px;color:#c5ccb8;font-size:12px;margin-bottom:8px}
+.sf-challenge-progress b{color:#d3f68f;font-variant-numeric:tabular-nums}
+.sf-challenge-progress-track{width:100%;height:7px;border-radius:99px;background:#2b3027;overflow:hidden}
+.sf-challenge-progress-track i{display:block;height:100%;border-radius:99px;background:#c6f36a;transition:width .2s ease}
+.sf-challenge-complete-note{display:flex;align-items:center;gap:6px;margin:9px 0 0!important;color:#d3f68f!important;font-size:12px!important}
+.sf-challenge-details{width:100%;min-width:0;margin-top:5px;border:1px solid #30372a;border-radius:15px;background:#12150f;overflow:hidden}
+.sf-challenge-details summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px;color:#f3f5ee;font-weight:750}
+.sf-challenge-details summary::-webkit-details-marker{display:none}
+.sf-challenge-details summary:after{content:'+';color:#c6f36a;font-size:20px;line-height:1}
+.sf-challenge-details[open] summary:after{content:'−'}
+.sf-challenge-day-list{padding:0 10px 10px;display:grid;gap:9px}
+.sf-challenge-day{min-width:0;border:1px solid #2d3427;border-radius:12px;padding:12px;background:#171b14}
+.sf-challenge-day.is-completed{border-color:rgba(198,243,106,.36);background:rgba(198,243,106,.045)}
+.sf-challenge-day-heading{display:flex;align-items:center;gap:10px;min-width:0}
+.sf-challenge-day-heading>span{flex:0 0 36px;width:36px;height:36px;display:grid;place-items:center;border-radius:10px;background:#242d1d;color:#d1f68d;font-weight:850;font-variant-numeric:tabular-nums}
+.sf-challenge-day-heading>div{min-width:0;flex:1}
+.sf-challenge-day-heading b{display:block;overflow-wrap:anywhere;color:#f4f6f0;font-size:13px;line-height:1.4}
+.sf-challenge-day-heading small{display:block;margin-top:3px;color:#b0bb9b;font-size:9px;letter-spacing:.09em;font-weight:850}
+.sf-challenge-day-heading>svg{color:#c6f36a;flex:0 0 auto}
+.sf-challenge-day ul,.sf-challenge-guide{padding-left:20px;margin:10px 0;color:#c1c8b7;font-size:12px;line-height:1.65}
+.sf-challenge-day li+li,.sf-challenge-guide li+li{margin-top:4px}
+.sf-challenge-day>.sf-button{max-width:100%;margin-top:5px;white-space:normal;text-align:left}
+.sf-challenge-guide{padding:0 18px 8px 34px}
+.sf-challenge-empty{display:grid;justify-items:start;gap:8px}
+.sf-challenge-empty>svg{color:#c6f36a}
+.sf-challenge-empty h3,.sf-challenge-empty p{margin:0}
+@media(max-width:760px){.sf-dashboard-challenge-grid{grid-template-columns:minmax(0,1fr)}.sf-dashboard-challenge-grid .sf-challenge-card{padding:15px}.sf-challenge-day{padding:10px}.sf-challenge-details summary{padding:12px;font-size:13px}}
