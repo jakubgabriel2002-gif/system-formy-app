@@ -19,7 +19,13 @@ const V2_MAX_FILE = 25 * 1024 * 1024;
 const V2_GENERATOR_PRODUCT_KEY = 'generator-planu-treningowego';
 const V2_INDIVIDUAL_PLAN_PRODUCT_KEY = 'plan-indywidualny';
 const V2_GENERATOR_PRICE_CENTS = 2999;
-const V2_INDIVIDUAL_PLAN_PRICE_CENTS = 14999;
+const V2_INDIVIDUAL_PLAN_PRICE_CENTS = 5999;
+const V2_INDIVIDUAL_PLAN_PREMIUM_PRICE_CENTS = 4999;
+const V2_PREMIUM_MONTHLY_PRICE_CENTS = 1999;
+const V2_PREMIUM_YEARLY_PRICE_CENTS = 17999;
+const V2_PREMIUM_PRODUCT_DISCOUNT_PERCENT = 20;
+const V2_PREMIUM_INCLUDED_CHALLENGE_PRICE_CENTS = 1999;
+const V2_PREMIUM_CHALLENGE_PRICE_CENTS = 500;
 
 // Schema setup is idempotent and only needs to run once per D1 binding per Worker isolate.
 // Failed setup promises are evicted so the next request can retry instead of caching a failure.
@@ -43,6 +49,148 @@ function ensureSchemaOnce(env: V2Env, key: string, setup: () => Promise<void>): 
 
 function ensureIndividualPlanRequestTable(env: V2Env): Promise<void> {
   return ensureSchemaOnce(env, 'individual-plan-requests', () => createIndividualPlanRequestTable(env));
+}
+
+function ensurePremiumSubscriptionTable(env: V2Env): Promise<void> {
+  return ensureSchemaOnce(env, 'premium-subscriptions', async () => {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS premium_subscriptions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      stripe_subscription_id TEXT NOT NULL UNIQUE,
+      stripe_customer_id TEXT,
+      plan_key TEXT NOT NULL CHECK(plan_key IN ('monthly','yearly')),
+      status TEXT NOT NULL,
+      current_period_end TEXT,
+      cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`).run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_premium_subscriptions_user_status ON premium_subscriptions(user_id,status,current_period_end)').run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_premium_subscriptions_customer ON premium_subscriptions(stripe_customer_id)').run();
+  });
+}
+
+async function v2PremiumSubscription(env: V2Env, userId: string): Promise<{ id:string; user_id:string; stripe_subscription_id:string; stripe_customer_id:string|null; plan_key:string; status:string; current_period_end:string|null; cancel_at_period_end:number; created_at:string; updated_at:string } | null> {
+  await ensurePremiumSubscriptionTable(env);
+  return env.DB.prepare('SELECT * FROM premium_subscriptions WHERE user_id=? ORDER BY created_at DESC,updated_at DESC LIMIT 1')
+    .bind(userId).first<{ id:string; user_id:string; stripe_subscription_id:string; stripe_customer_id:string|null; plan_key:string; status:string; current_period_end:string|null; cancel_at_period_end:number; created_at:string; updated_at:string }>();
+}
+
+async function v2IsPremium(env: V2Env, userId: string): Promise<boolean> {
+  const subscription = await v2PremiumSubscription(env, userId);
+  if (subscription) {
+    const activeStatus = subscription.status === 'active' || subscription.status === 'trialing';
+    const periodValid = !subscription.current_period_end || Date.parse(subscription.current_period_end) > Date.now();
+    const isPremium = activeStatus && periodValid;
+    if (!isPremium) {
+      const now = new Date().toISOString();
+      // Wyzwania otrzymane wyłącznie jako korzyść abonamentowa przestają być aktywne po końcu dostępu.
+      await env.DB.prepare(`UPDATE user_entitlements SET access_status='revoked'
+        WHERE user_id=? AND access_status='active' AND order_id IN
+        (SELECT id FROM orders WHERE user_id=? AND order_number LIKE 'PREMIUM-CHALLENGE-%')`)
+        .bind(userId,userId).run().catch(() => {});
+      try {
+        await env.DB.prepare(`UPDATE sf_challenge_participants SET status='paused_premium',updated_at=?
+          WHERE user_id=? AND status='active' AND challenge_id IN (
+            SELECT c.id FROM sf_challenges c JOIN order_items i ON i.product_key=c.product_key
+            JOIN orders o ON o.id=i.order_id WHERE o.user_id=? AND o.order_number LIKE 'PREMIUM-CHALLENGE-%')`)
+          .bind(now,userId,userId).run();
+      } catch { /* tabele wyzwań są tworzone leniwie; pozostałe korzyści działają niezależnie */ }
+    }
+    return isPremium;
+  }
+  // Zachowujemy możliwość ręcznego przyznania dostępu z ACP dla kont bez rekordu subskrypcji.
+  const legacy = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1")
+    .bind(userId).first<{ id:string }>();
+  return Boolean(legacy);
+}
+
+async function v2UpsertPremiumSubscription(env: V2Env, sub: Record<string, any>, fallback?: { user_id?: string; plan_key?: string; stripe_customer_id?: string | null }): Promise<boolean> {
+  await ensurePremiumSubscriptionTable(env);
+  const stripeId = typeof sub.id === 'string' ? sub.id : '';
+  if (!stripeId) return false;
+  const existing = await env.DB.prepare('SELECT user_id,plan_key,stripe_customer_id,created_at FROM premium_subscriptions WHERE stripe_subscription_id=? LIMIT 1')
+    .bind(stripeId).first<{ user_id:string; plan_key:string; stripe_customer_id:string|null; created_at:string }>();
+  const meta = sub.metadata && typeof sub.metadata === 'object' ? sub.metadata as Record<string, unknown> : {};
+  const userId = typeof meta.user_id === 'string' && meta.user_id ? meta.user_id : fallback?.user_id || existing?.user_id || '';
+  const rawPlan = typeof meta.plan_key === 'string' ? meta.plan_key : fallback?.plan_key || existing?.plan_key || 'monthly';
+  const planKey = rawPlan === 'yearly' ? 'yearly' : rawPlan === 'monthly' ? 'monthly' : existing?.plan_key || fallback?.plan_key || 'monthly';
+  if (!userId || !['monthly','yearly'].includes(planKey)) return false;
+  const status = typeof sub.status === 'string' ? sub.status : 'incomplete';
+  const periodRaw = Number(sub.current_period_end);
+  const periodEnd = Number.isFinite(periodRaw) && periodRaw > 0 ? new Date(periodRaw * 1000).toISOString() : null;
+  const customer = typeof sub.customer === 'string' ? sub.customer : fallback?.stripe_customer_id || existing?.stripe_customer_id || null;
+  const now = new Date().toISOString();
+  await env.DB.prepare(`INSERT INTO premium_subscriptions(id,user_id,stripe_subscription_id,stripe_customer_id,plan_key,status,current_period_end,cancel_at_period_end,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(stripe_subscription_id) DO UPDATE SET
+    user_id=excluded.user_id,stripe_customer_id=COALESCE(excluded.stripe_customer_id,premium_subscriptions.stripe_customer_id),
+    plan_key=excluded.plan_key,status=excluded.status,current_period_end=COALESCE(excluded.current_period_end,premium_subscriptions.current_period_end),
+    cancel_at_period_end=excluded.cancel_at_period_end,updated_at=excluded.updated_at`)
+    .bind(existing ? crypto.randomUUID() : crypto.randomUUID(), userId, stripeId, customer, planKey, status, periodEnd,
+      sub.cancel_at_period_end === true ? 1 : 0, existing?.created_at || now, now).run();
+  return true;
+}
+
+function v2StripePeriodIso(seconds: unknown): string | null {
+  const value = Number(seconds);
+  return Number.isFinite(value) && value > 0 ? new Date(value * 1000).toISOString() : null;
+}
+
+async function v2PremiumStripeEvents(event: Record<string, any>, env: V2Env): Promise<Response | null> {
+  const eventId = typeof event.id === 'string' ? event.id : '';
+  const eventType = typeof event.type === 'string' ? event.type : '';
+  const object = event.data?.object as Record<string, any> | undefined;
+  if (!eventId || !object) return null;
+  const subscriptionEvent = ['customer.subscription.created','customer.subscription.updated','customer.subscription.deleted'].includes(eventType);
+  const invoiceEvent = eventType === 'invoice.paid' || eventType === 'invoice.payment_failed';
+  if (!subscriptionEvent && !invoiceEvent) return null;
+  await ensurePremiumSubscriptionTable(env);
+  const prior = await env.DB.prepare('SELECT event_id FROM stripe_webhook_events WHERE event_id=? LIMIT 1').bind(eventId).first<{event_id:string}>();
+  if (prior) return v2Reply({ received:true, duplicate:true });
+  if (subscriptionEvent && object.object === 'subscription') {
+    const metadata = object.metadata && typeof object.metadata === 'object' ? object.metadata as Record<string, unknown> : {};
+    const existing = await env.DB.prepare('SELECT user_id,plan_key,stripe_customer_id FROM premium_subscriptions WHERE stripe_subscription_id=? LIMIT 1')
+      .bind(String(object.id || '')).first<{user_id:string;plan_key:string;stripe_customer_id:string|null}>();
+    const isPremiumSub = metadata.system_formy_premium === '1' || Boolean(existing);
+    if (!isPremiumSub) return null;
+    let status: Record<string, any> = eventType === 'customer.subscription.deleted' ? { ...object, status:'canceled' } : object;
+    // Zdarzenia Stripe nie zawsze przychodzą w kolejności; dla utworzonych i zmienionych subskrypcji pobierz aktualny stan zamiast nadpisywać nowsze dane starym webhookiem.
+    if (eventType !== 'customer.subscription.deleted' && env.STRIPE_SECRET_KEY && typeof object.id === 'string') {
+      const latestResponse = await fetch(`https://api.stripe.com/v1/subscriptions/${encodeURIComponent(object.id)}`, { headers:{ Authorization:`Bearer ${env.STRIPE_SECRET_KEY}` } });
+      if (!latestResponse.ok) return v2Reply({ error:'Nie udało się odświeżyć statusu subskrypcji ze Stripe. Zdarzenie może zostać ponowione.' },502);
+      status = await latestResponse.json() as Record<string, any>;
+      status.metadata = { ...(status.metadata || {}), system_formy_premium:'1', user_id:existing?.user_id || metadata.user_id, plan_key:existing?.plan_key || metadata.plan_key };
+    }
+    const saved = await v2UpsertPremiumSubscription(env, status, existing || undefined);
+    if (!saved) return v2Reply({ received:true, ignored:true });
+    await env.DB.prepare('INSERT OR IGNORE INTO stripe_webhook_events(event_id,event_type,received_at) VALUES(?,?,?)').bind(eventId,eventType,new Date().toISOString()).run();
+    return v2Reply({ received:true, subscription_updated:true });
+  }
+  const subscriptionIdRaw = typeof object.subscription === 'string' ? object.subscription :
+    typeof object.parent?.subscription_details?.subscription === 'string' ? object.parent.subscription_details.subscription : '';
+  if (!subscriptionIdRaw) return null;
+  const existing = await env.DB.prepare('SELECT user_id,plan_key,stripe_customer_id FROM premium_subscriptions WHERE stripe_subscription_id=? LIMIT 1')
+    .bind(subscriptionIdRaw).first<{user_id:string;plan_key:string;stripe_customer_id:string|null}>();
+  if (!existing) return null;
+  if (eventType === 'invoice.payment_failed') {
+    await env.DB.prepare("UPDATE premium_subscriptions SET status='past_due',updated_at=? WHERE stripe_subscription_id=?")
+      .bind(new Date().toISOString(),subscriptionIdRaw).run();
+  } else {
+    // Odnowienie po opłaconej fakturze: pobierz aktualny okres i stan bezpośrednio ze Stripe.
+    let synced = false;
+    if (env.STRIPE_SECRET_KEY) {
+      const response = await fetch(`https://api.stripe.com/v1/subscriptions/${encodeURIComponent(subscriptionIdRaw)}`, { headers:{ Authorization:`Bearer ${env.STRIPE_SECRET_KEY}` } });
+      if (response.ok) {
+        const sub = await response.json() as Record<string, any>;
+        synced = await v2UpsertPremiumSubscription(env, sub, existing);
+      } else {
+        return v2Reply({ error:'Nie udało się odświeżyć stanu subskrypcji po płatności. Zdarzenie może zostać ponowione.' },502);
+      }
+    }
+    if (!synced) return v2Reply({ error:'Nie udało się zsynchronizować subskrypcji po płatności. Zdarzenie może zostać ponowione.' },502);
+  }
+  await env.DB.prepare('INSERT OR IGNORE INTO stripe_webhook_events(event_id,event_type,received_at) VALUES(?,?,?)').bind(eventId,eventType,new Date().toISOString()).run();
+  return v2Reply({ received:true, subscription_updated:true });
 }
 
 async function createIndividualPlanRequestTable(env: V2Env): Promise<void> {
@@ -308,6 +456,8 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
   if (!(await v2VerifyStripe(raw, request.headers.get('Stripe-Signature'), env.STRIPE_WEBHOOK_SECRET))) return null;
   let event: Record<string, any>;
   try { event = JSON.parse(raw) as Record<string, any>; } catch { return null; }
+  const premiumEventResponse = await v2PremiumStripeEvents(event, env);
+  if (premiumEventResponse) return premiumEventResponse;
   const checkout = event.data?.object as Record<string, any> | undefined;
   if (!checkout || checkout.object !== 'checkout.session' || checkout.metadata?.v2_checkout !== '1') return null;
   const eventId = typeof event.id === 'string' ? event.id : '';
@@ -336,6 +486,43 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
   if (!['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(eventType)) {
     await diagnose('ignored', 'Zdarzenie nie wymaga nadania dostępu.', sessionId);
     return v2Reply({ received: true, ignored: true });
+  }
+  if (checkout.mode === 'subscription' && checkout.metadata?.checkout_kind === 'premium_subscription') {
+    const userId = typeof checkout.metadata?.user_id === 'string' ? checkout.metadata.user_id : '';
+    const planKey = checkout.metadata?.plan_key === 'yearly' ? 'yearly' : checkout.metadata?.plan_key === 'monthly' ? 'monthly' : '';
+    const subscriptionId = typeof checkout.subscription === 'string' ? checkout.subscription : '';
+    if (!userId || !planKey || !subscriptionId || String(checkout.client_reference_id || '') !== userId) return reject('Brak prawidłowych danych subskrypcji Premium.', sessionId);
+    const prior = await env.DB.prepare('SELECT event_id FROM stripe_webhook_events WHERE event_id=? LIMIT 1').bind(eventId).first<{event_id:string}>();
+    if (prior) { await diagnose('duplicate','Zdarzenie subskrypcji zostało już obsłużone.',sessionId); return v2Reply({received:true,duplicate:true}); }
+    if (checkout.payment_status !== 'paid' && checkout.payment_status !== 'no_payment_required') {
+      await diagnose('pending','Stripe nie potwierdził jeszcze pierwszej płatności Premium.',sessionId);
+      return v2Reply({received:true,pending:true});
+    }
+    const user = await env.DB.prepare('SELECT id FROM users WHERE id=? LIMIT 1').bind(userId).first<{id:string}>();
+    if (!user) return reject('Nie znaleziono konta dla subskrypcji Premium.',sessionId);
+    await ensurePremiumSubscriptionTable(env);
+    if (!env.STRIPE_SECRET_KEY) return v2Reply({ error:'Brak klucza Stripe do potwierdzenia subskrypcji.' }, 503);
+    const subscriptionResponse = await fetch(`https://api.stripe.com/v1/subscriptions/${encodeURIComponent(subscriptionId)}`, { headers:{Authorization:`Bearer ${env.STRIPE_SECRET_KEY}`} });
+    if (!subscriptionResponse.ok) {
+      // Zwróć błąd serwera, aby Stripe ponowił webhook; nie przyznawaj Premium na podstawie niezweryfikowanego fallbacku.
+      return v2Reply({ error:'Nie udało się pobrać stanu subskrypcji ze Stripe. Zdarzenie może zostać ponowione.' }, 502);
+    }
+    let stripeSub = await subscriptionResponse.json() as Record<string, any>;
+    stripeSub.metadata = { ...(stripeSub.metadata || {}), user_id:userId, plan_key:planKey, system_formy_premium:'1' };
+    if (!stripeSub.status || stripeSub.status === 'incomplete') {
+      await diagnose('pending','Stripe nie potwierdził jeszcze aktywnego statusu subskrypcji.',sessionId);
+      return v2Reply({ received:true,pending:true });
+    }
+    const saved = await v2UpsertPremiumSubscription(env, stripeSub, {user_id:userId,plan_key:planKey,stripe_customer_id:typeof checkout.customer==='string'?checkout.customer:null});
+    if (!saved) return reject('Nie udało się zapisać subskrypcji Premium.',sessionId);
+    const now = new Date().toISOString();
+    await ensureNotificationTables(env);
+    await env.DB.batch([
+      env.DB.prepare('INSERT OR IGNORE INTO stripe_webhook_events(event_id,event_type,received_at) VALUES(?,?,?)').bind(eventId,eventType,now),
+      notificationInsert(env,userId,'System Formy Premium aktywne','Twoja subskrypcja Premium została potwierdzona. Zniżki i funkcje Premium są dostępne na Twoim koncie.',now),
+    ]);
+    await diagnose('processed','Subskrypcja Premium została zsynchronizowana.',sessionId,'');
+    return v2Reply({received:true,premium:true,plan_key:planKey});
   }
   if (checkout.mode !== 'payment' || checkout.payment_status !== 'paid') {
     await diagnose('pending', 'Stripe nie potwierdził jeszcze opłacenia sesji.', sessionId);
@@ -366,7 +553,9 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
   if (amount === 0 && checkout.metadata?.zero_total !== '1') return reject('Nieprawidłowa kwota zamówienia.', sessionId);
 
   if (checkout.metadata?.checkout_kind === 'individual_plan') {
-    if (productKey !== V2_INDIVIDUAL_PLAN_PRODUCT_KEY || amount !== V2_INDIVIDUAL_PLAN_PRICE_CENTS || expectedAmount !== V2_INDIVIDUAL_PLAN_PRICE_CENTS || currency !== 'PLN') {
+    const premiumPrice = checkout.metadata?.premium_price === '1';
+    const allowedAmount = premiumPrice ? V2_INDIVIDUAL_PLAN_PREMIUM_PRICE_CENTS : V2_INDIVIDUAL_PLAN_PRICE_CENTS;
+    if (productKey !== V2_INDIVIDUAL_PLAN_PRODUCT_KEY || amount !== allowedAmount || expectedAmount !== allowedAmount || currency !== 'PLN') {
       return reject('Kwota lub produkt planu indywidualnego nie zgadzają się z oczekiwanym zamówieniem.', sessionId);
     }
     await ensureIndividualPlanRequestTable(env);
@@ -397,8 +586,11 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
   const analyticsSession = typeof checkout.metadata?.analytics_session_key === 'string' ? checkout.metadata.analytics_session_key.slice(0, 100) : '';
   const display = await v2DisplayNumber(env, now);
   await ensureNotificationTables(env);
-  const isPaidChallenge = productKey === SF_CHALLENGE_PAID_PRODUCT_KEY;
-  if (isPaidChallenge) await ensureChallengeTables(env);
+  let linkedChallengeId: string | null = null;
+  try {
+    const linkedChallenge = await env.DB.prepare('SELECT id FROM sf_challenges WHERE product_key=? AND is_published=1 LIMIT 1').bind(productKey).first<{id:string}>();
+    linkedChallengeId = linkedChallenge?.id || null;
+  } catch { /* zakup niebędący wyzwaniem nie wymaga tabel wyzwań */ }
   const statements: D1PreparedStatement[] = [
     env.DB.prepare('INSERT INTO stripe_webhook_events(event_id,event_type,received_at) VALUES(?,?,?)').bind(eventId, eventType, now),
     env.DB.prepare("INSERT INTO orders(id,user_id,order_number,status,total_amount,currency,created_at,updated_at) VALUES(?,?,?,'paid',?,?,?,?)").bind(orderId, userId, `STRIPE-${sessionId}`, amount / 100, currency, now, now),
@@ -408,11 +600,11 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
     notificationInsert(env, userId, 'Zakup potwierdzony', `Płatność za „${item.title}” została potwierdzona. Produkt jest przypisany do Twojego konta.`, now),
     env.DB.prepare("UPDATE stripe_webhook_diagnostics SET status='processed',error_message='',checkout_session_id=?,order_id=?,processed_at=? WHERE event_id=?").bind(sessionId, orderId, now, eventId),
   ];
-  if (isPaidChallenge) {
-    const existingParticipant = await env.DB.prepare('SELECT id FROM sf_challenge_participants WHERE challenge_id=? AND user_id=? LIMIT 1').bind(SF_CHALLENGE_PAID_ID, userId).first<{id:string}>();
-    if (!existingParticipant) {
-      statements.push(env.DB.prepare("INSERT OR IGNORE INTO sf_challenge_participants(id,challenge_id,user_id,status,joined_at,updated_at) VALUES(?,?,?,'active',?,?)").bind(crypto.randomUUID(), SF_CHALLENGE_PAID_ID, userId, now, now));
-      statements.push(notificationInsert(env, userId, 'Wyzwanie rozpoczęte', 'Dołączyłeś do wyzwania „' + item.title + '”. Otwórz zakładkę Wyzwania, aby zobaczyć plan i zaznaczać wykonane dni.', now));
+  if (linkedChallengeId) {
+    const existingParticipant = await env.DB.prepare('SELECT id,status FROM sf_challenge_participants WHERE challenge_id=? AND user_id=? LIMIT 1').bind(linkedChallengeId, userId).first<{id:string;status:string}>();
+    if (!existingParticipant || existingParticipant.status === 'paused_premium') {
+      statements.push(env.DB.prepare("INSERT INTO sf_challenge_participants(id,challenge_id,user_id,status,joined_at,updated_at) VALUES(?,?,?,'active',?,?) ON CONFLICT(challenge_id,user_id) DO UPDATE SET status='active',updated_at=excluded.updated_at").bind(crypto.randomUUID(), linkedChallengeId, userId, now, now));
+      statements.push(notificationInsert(env, userId, 'Wyzwanie rozpoczęte', `Dołączyłeś do wyzwania „${item.title}”. Otwórz zakładkę Wyzwania, aby zobaczyć plan i zaznaczać wykonane dni.`, now));
     }
   }
   if (item.product_type === 'bundle') {
@@ -486,11 +678,50 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     if (origin && origin !== url.origin) return v2Reply({ error: 'Żądanie pochodzi z nieprawidłowej strony.' }, 403);
   }
   try {
+    if (path === '/api/v2/premium/status' && method === 'GET') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      const subscription = await v2PremiumSubscription(env, gate.session!.id);
+      const isPremium = await v2IsPremium(env, gate.session!.id);
+      return v2Reply({ is_premium:isPremium, subscription:subscription ? { plan_key:subscription.plan_key,status:subscription.status,current_period_end:subscription.current_period_end,cancel_at_period_end:Boolean(subscription.cancel_at_period_end) } : null,
+        plans:{ monthly:{price_cents:V2_PREMIUM_MONTHLY_PRICE_CENTS,interval:'month'},yearly:{price_cents:V2_PREMIUM_YEARLY_PRICE_CENTS,interval:'year'} }, benefits:{product_discount_percent:V2_PREMIUM_PRODUCT_DISCOUNT_PERCENT,included_challenge_price_cents:V2_PREMIUM_INCLUDED_CHALLENGE_PRICE_CENTS,paid_challenge_price_cents:V2_PREMIUM_CHALLENGE_PRICE_CENTS,individual_plan_regular_cents:V2_INDIVIDUAL_PLAN_PRICE_CENTS,individual_plan_premium_cents:V2_INDIVIDUAL_PLAN_PREMIUM_PRICE_CENTS} });
+    }
+    if (path === '/api/v2/premium/checkout' && method === 'POST') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      if (!env.STRIPE_SECRET_KEY || !env.STRIPE_WEBHOOK_SECRET) return v2Reply({error:'Płatności subskrypcyjne nie są w pełni skonfigurowane w Stripe.'},503);
+      const body = await v2Body(request), planKey = body.plan_key === 'yearly' ? 'yearly' : body.plan_key === 'monthly' ? 'monthly' : '';
+      if (!planKey) return v2Reply({error:'Wybierz plan miesięczny albo roczny.'},400);
+      const current = await v2PremiumSubscription(env,gate.session!.id);
+      if (current && ['active','trialing','past_due'].includes(current.status) && (!current.current_period_end || Date.parse(current.current_period_end)>Date.now())) return v2Reply({error:'Masz już subskrypcję Premium. Możesz nią zarządzać w ustawieniach Premium.'},409);
+      const priceCents = planKey === 'yearly' ? V2_PREMIUM_YEARLY_PRICE_CENTS : V2_PREMIUM_MONTHLY_PRICE_CENTS;
+      const origin = url.origin, form = new URLSearchParams();
+      form.set('mode','subscription'); form.set('success_url',`${origin}/app/premium?premium=success&session_id={CHECKOUT_SESSION_ID}`); form.set('cancel_url',`${origin}/app/premium?premium=cancelled`);
+      form.set('client_reference_id',gate.session!.id); form.set('customer_email',gate.session!.email);
+      form.set('line_items[0][price_data][currency]','pln'); form.set('line_items[0][price_data][unit_amount]',String(priceCents)); form.set('line_items[0][price_data][recurring][interval]',planKey==='yearly'?'year':'month');
+      form.set('line_items[0][price_data][product_data][name]',planKey==='yearly'?'System Formy Premium — plan roczny':'System Formy Premium — plan miesięczny');
+      form.set('line_items[0][price_data][product_data][description]','Premium: brak reklam, rabaty na produkty i dodatkowe funkcje aplikacji.'); form.set('line_items[0][quantity]','1');
+      form.set('metadata[v2_checkout]','1'); form.set('metadata[checkout_kind]','premium_subscription'); form.set('metadata[user_id]',gate.session!.id); form.set('metadata[plan_key]',planKey);
+      form.set('subscription_data[metadata][system_formy_premium]','1'); form.set('subscription_data[metadata][user_id]',gate.session!.id); form.set('subscription_data[metadata][plan_key]',planKey);
+      const response = await fetch('https://api.stripe.com/v1/checkout/sessions',{method:'POST',headers:{Authorization:`Bearer ${env.STRIPE_SECRET_KEY}`,'Content-Type':'application/x-www-form-urlencoded'},body:form.toString()});
+      const payload = await response.json() as Record<string,any>;
+      if (!response.ok || typeof payload.url !== 'string') return v2Reply({error:typeof payload.error?.message==='string'?`Stripe: ${payload.error.message}`:'Nie udało się otworzyć płatności Premium.'},502);
+      return v2Reply({url:payload.url,session_id:payload.id});
+    }
+    if (path === '/api/v2/premium/portal' && method === 'POST') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      if (!env.STRIPE_SECRET_KEY) return v2Reply({error:'Portal płatności Stripe nie jest skonfigurowany.'},503);
+      const subscription = await v2PremiumSubscription(env,gate.session!.id);
+      if (!subscription?.stripe_customer_id) return v2Reply({error:'Nie znaleziono profilu płatniczego Stripe. Skontaktuj się z obsługą.'},404);
+      const form = new URLSearchParams(); form.set('customer',subscription.stripe_customer_id); form.set('return_url',`${url.origin}/app/premium`);
+      const response = await fetch('https://api.stripe.com/v1/billing_portal/sessions',{method:'POST',headers:{Authorization:`Bearer ${env.STRIPE_SECRET_KEY}`,'Content-Type':'application/x-www-form-urlencoded'},body:form.toString()});
+      const payload = await response.json() as Record<string,any>;
+      if (!response.ok || typeof payload.url !== 'string') return v2Reply({error:typeof payload.error?.message==='string'?`Stripe: ${payload.error.message}`:'Nie udało się otworzyć zarządzania subskrypcją.'},502);
+      return v2Reply({url:payload.url});
+    }
     // Publiczny katalog, kategorie i szczegóły produktu.
     if (path === '/api/v2/products' && method === 'GET') {
       await ensureChallengeTables(env);
       const [rows, cats] = await Promise.all([
-        env.DB.prepare("SELECT p.id,p.product_key,p.title,p.description,p.product_type,p.price_amount,p.currency,p.is_free,p.is_published,p.checkout_url,p.created_at,COALESCE(m.category_slug,'inne') AS category_slug,COALESCE(m.target_audience,'') AS target_audience,COALESCE(m.contents_json,'[]') AS contents_json,m.cover_key,d.discount_percent AS discount_percent,d.starts_at AS discount_starts_at,d.ends_at AS discount_ends_at,d.is_active AS discount_is_active FROM products p LEFT JOIN product_metadata m ON m.product_key=p.product_key LEFT JOIN product_discounts d ON d.product_key=p.product_key WHERE p.is_published=1 ORDER BY p.created_at DESC").all(),
+        env.DB.prepare("SELECT p.id,p.product_key,p.title,p.description,p.product_type,p.price_amount,p.currency,p.is_free,p.is_published,p.checkout_url,p.created_at,COALESCE(m.category_slug,'inne') AS category_slug,COALESCE(m.target_audience,'') AS target_audience,COALESCE(m.contents_json,'[]') AS contents_json,m.cover_key,d.discount_percent AS discount_percent,d.starts_at AS discount_starts_at,d.ends_at AS discount_ends_at,d.is_active AS discount_is_active,EXISTS(SELECT 1 FROM sf_challenges c WHERE c.product_key=p.product_key) AS is_challenge_product FROM products p LEFT JOIN product_metadata m ON m.product_key=p.product_key LEFT JOIN product_discounts d ON d.product_key=p.product_key WHERE p.is_published=1 ORDER BY p.created_at DESC").all(),
         env.DB.prepare('SELECT slug,title,description FROM product_categories WHERE is_active=1 ORDER BY sort_order,title').all(),
       ]);
       return v2Reply({ products: rows.results, categories: cats.results });
@@ -506,7 +737,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     }
     const publicDetail = path.match(/^\/api\/v2\/products\/([a-z0-9-]+)$/);
     if (publicDetail && method === 'GET') {
-      const item = await env.DB.prepare("SELECT p.id,p.product_key,p.title,p.description,p.product_type,p.price_amount,p.currency,p.is_free,p.is_published,p.checkout_url,p.created_at,COALESCE(m.category_slug,'inne') AS category_slug,COALESCE(m.target_audience,'') AS target_audience,COALESCE(m.contents_json,'[]') AS contents_json,m.cover_key,d.discount_percent AS discount_percent,d.starts_at AS discount_starts_at,d.ends_at AS discount_ends_at,d.is_active AS discount_is_active FROM products p LEFT JOIN product_metadata m ON m.product_key=p.product_key LEFT JOIN product_discounts d ON d.product_key=p.product_key WHERE p.product_key=? AND p.is_published=1 LIMIT 1").bind(publicDetail[1]).first<Record<string, unknown>>();
+      const item = await env.DB.prepare("SELECT p.id,p.product_key,p.title,p.description,p.product_type,p.price_amount,p.currency,p.is_free,p.is_published,p.checkout_url,p.created_at,COALESCE(m.category_slug,'inne') AS category_slug,COALESCE(m.target_audience,'') AS target_audience,COALESCE(m.contents_json,'[]') AS contents_json,m.cover_key,d.discount_percent AS discount_percent,d.starts_at AS discount_starts_at,d.ends_at AS discount_ends_at,d.is_active AS discount_is_active,EXISTS(SELECT 1 FROM sf_challenges c WHERE c.product_key=p.product_key) AS is_challenge_product FROM products p LEFT JOIN product_metadata m ON m.product_key=p.product_key LEFT JOIN product_discounts d ON d.product_key=p.product_key WHERE p.product_key=? AND p.is_published=1 LIMIT 1").bind(publicDetail[1]).first<Record<string, unknown>>();
       if (!item) return v2Reply({ error: 'Nie znaleziono produktu.' }, 404);
       const components = await env.DB.prepare('SELECT p.product_key,p.title,p.description,p.product_type FROM bundle_items b JOIN products p ON p.product_key=b.component_product_key WHERE b.bundle_key=? AND p.is_published=1 ORDER BY b.sort_order,p.title').bind(publicDetail[1]).all();
       let contents: unknown[] = []; try { const v = JSON.parse(String(item.contents_json || '[]')); if (Array.isArray(v)) contents = v; } catch { contents = []; }
@@ -567,15 +798,38 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (generatorCreditProduct && code) return v2Reply({ error: 'Zakup generatora za 29,99 zł nie obsługuje kodów rabatowych.' }, 400);
       const entitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(gate.session!.id, key).first<{ id: string }>();
       if (entitlement) return v2Reply({ error: 'Masz już dostęp do tego materiału.' }, 409);
-      let totalCents = generatorCreditProduct ? V2_GENERATOR_PRICE_CENTS : Math.round(item.price_amount * 100), discountCents = 0, promo: V2PromoCandidate | null = null;
+      let totalCents = generatorCreditProduct ? V2_GENERATOR_PRICE_CENTS : Math.round(item.price_amount * 100), discountCents = 0, promo: V2PromoCandidate | null = null, includedChallengeByPremium = false;
+      const isPremium = await v2IsPremium(env, gate.session!.id);
+      let linkedChallengeId: string | null = null;
+      let isChallengeProduct = /challenge|wyzwanie/i.test(`${key} ${item.product_type || ''}`);
+      try {
+        await ensureChallengeTables(env);
+        const linkedChallenge = await env.DB.prepare('SELECT id FROM sf_challenges WHERE product_key=? AND is_published=1 LIMIT 1').bind(key).first<{id:string}>();
+        linkedChallengeId = linkedChallenge?.id || null;
+        isChallengeProduct = isChallengeProduct || Boolean(linkedChallengeId);
+      } catch { /* produkty niepowiązane z wyzwaniami nadal mogą być kupowane */ }
       // Rabat bezpośredni produktu: daty i procent sprawdzane po stronie serwera.
       const directDiscount = generatorCreditProduct ? null : await env.DB.prepare('SELECT discount_percent,starts_at,ends_at,is_active FROM product_discounts WHERE product_key=? LIMIT 1').bind(key).first<{discount_percent:number;starts_at:string|null;ends_at:string|null;is_active:number}>().catch(()=>null);
       const discountNow = Date.now();
       if (directDiscount?.is_active && (!directDiscount.starts_at || Date.parse(directDiscount.starts_at) <= discountNow) && (!directDiscount.ends_at || Date.parse(directDiscount.ends_at) >= discountNow)) {
-        discountCents = Math.min(totalCents, Math.round(totalCents * Math.max(1, Math.min(99, Number(directDiscount.discount_percent))) / 100));
-        totalCents -= discountCents;
+        const directCents = Math.min(totalCents, Math.round(totalCents * Math.max(1, Math.min(99, Number(directDiscount.discount_percent))) / 100));
+        discountCents += directCents; totalCents -= directCents;
       }
-      if (code && !generatorCreditProduct) {
+      // Premium: powiązane wyzwania do 19,99 zł są w abonamencie; droższe mają cenę członkowską 5 zł. Pozostałe materiały mają 20% rabatu.
+      if (isPremium && !generatorCreditProduct && key !== V2_INDIVIDUAL_PLAN_PRODUCT_KEY && totalCents > 0) {
+        if (Boolean(linkedChallengeId) && isChallengeProduct) {
+          if (Math.round(Number(item.price_amount) * 100) <= V2_PREMIUM_INCLUDED_CHALLENGE_PRICE_CENTS) {
+            includedChallengeByPremium = true; discountCents += totalCents; totalCents = 0;
+          } else {
+            const memberChallengePrice = Math.min(totalCents, V2_PREMIUM_CHALLENGE_PRICE_CENTS);
+            discountCents += totalCents - memberChallengePrice; totalCents = memberChallengePrice;
+          }
+        } else {
+          const premiumDiscount = Math.min(totalCents, Math.round(totalCents * V2_PREMIUM_PRODUCT_DISCOUNT_PERCENT / 100));
+          discountCents += premiumDiscount; totalCents -= premiumDiscount;
+        }
+      }
+      if (code && !generatorCreditProduct && totalCents > 0) {
         promo = await env.DB.prepare('SELECT id,code,discount_type,discount_value,max_uses,used_count,product_key FROM promotion_codes WHERE code=? COLLATE NOCASE AND is_active=1 LIMIT 1').bind(code).first<V2PromoCandidate>();
         if (!promo) return v2Reply({ error: 'Kod rabatowy jest nieprawidłowy lub nieaktywny.' }, 400);
         const dates = await env.DB.prepare('SELECT starts_at,ends_at FROM promotion_codes WHERE id=?').bind(promo.id).first<{ starts_at: string | null; ends_at: string | null }>();
@@ -590,7 +844,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (totalCents === 0) {
         await ensureNotificationTables(env);
         await ensureChallengeTables(env);
-        const now = new Date().toISOString(), orderId = crypto.randomUUID(), number = `PROMO-${crypto.randomUUID().slice(0, 12).toUpperCase()}`;
+        const now = new Date().toISOString(), orderId = crypto.randomUUID(), number = `${includedChallengeByPremium ? 'PREMIUM-CHALLENGE' : 'PROMO'}-${crypto.randomUUID().slice(0, 12).toUpperCase()}`;
         // Numery SF są osobne od numerów technicznych używanych przez Stripe i zachowują istniejące zamówienia.
         const display = await v2DisplayNumber(env, now);
         const statements: D1PreparedStatement[] = [
@@ -600,9 +854,9 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
           env.DB.prepare("INSERT INTO user_entitlements(id,user_id,order_id,product_key,product_title,product_type,access_status,created_at) SELECT ?,?,?,?,?,?,'active',? WHERE NOT EXISTS (SELECT 1 FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active')").bind(crypto.randomUUID(), gate.session!.id, orderId, key, item.title, item.product_type, now, gate.session!.id, key),
           notificationInsert(env, gate.session!.id, 'Produkt odblokowany', `Produkt „${item.title}” został odblokowany na Twoim koncie.`, now),
         ];
-        if (key === SF_CHALLENGE_PAID_PRODUCT_KEY) {
-          statements.push(env.DB.prepare("INSERT OR IGNORE INTO sf_challenge_participants(id,challenge_id,user_id,status,joined_at,updated_at) VALUES(?,?,?,'active',?,?)").bind(crypto.randomUUID(), SF_CHALLENGE_PAID_ID, gate.session!.id, now, now));
-          statements.push(notificationInsert(env, gate.session!.id, 'Wyzwanie rozpoczęte', 'Dołączyłeś do wyzwania „' + item.title + '”. Plan i postęp znajdziesz w zakładce Wyzwania.', now));
+        if (linkedChallengeId) {
+          statements.push(env.DB.prepare("INSERT INTO sf_challenge_participants(id,challenge_id,user_id,status,joined_at,updated_at) VALUES(?,?,?,'active',?,?) ON CONFLICT(challenge_id,user_id) DO UPDATE SET status=CASE WHEN sf_challenge_participants.status='paused_premium' THEN 'active' ELSE sf_challenge_participants.status END,updated_at=excluded.updated_at").bind(crypto.randomUUID(), linkedChallengeId, gate.session!.id, now, now));
+          statements.push(notificationInsert(env, gate.session!.id, 'Wyzwanie odblokowane', `Dostęp do wyzwania „${item.title}” został przyznany. Plan i postęp znajdziesz w zakładce Wyzwania.`, now));
         }
         if (item.product_type === 'bundle') {
           const components = await env.DB.prepare('SELECT p.product_key,p.title,p.product_type FROM bundle_items b JOIN products p ON p.product_key=b.component_product_key WHERE b.bundle_key=? AND p.is_published=1 ORDER BY b.sort_order,b.component_product_key').bind(key).all<{ product_key: string; title: string; product_type: string }>();
@@ -653,6 +907,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     }
     if (path === '/api/v2/account/materials' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      await v2IsPremium(env, gate.session!.id);
       const rows = await env.DB.prepare("SELECT e.id,e.product_key,e.product_title,e.product_type,e.access_status,e.created_at,p.description,p.is_published FROM user_entitlements e LEFT JOIN products p ON p.product_key=e.product_key WHERE e.user_id=? AND e.access_status='active' AND e.product_key!=? ORDER BY e.created_at DESC").bind(gate.session!.id, SF_CHALLENGE_PAID_PRODUCT_KEY).all();
       return v2Reply({ materials: rows.results });
     }
@@ -737,6 +992,8 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       }
       const item = await v2Product(env, V2_INDIVIDUAL_PLAN_PRODUCT_KEY);
       if (!item) return v2Reply({ error: 'Nie udało się przygotować produktu planu indywidualnego. Spróbuj ponownie.' }, 500);
+      const premiumPlanPrice = await v2IsPremium(env, gate.session!.id);
+      const individualPlanPriceCents = premiumPlanPrice ? V2_INDIVIDUAL_PLAN_PREMIUM_PRICE_CENTS : V2_INDIVIDUAL_PLAN_PRICE_CENTS;
       const origin = url.origin, form = new URLSearchParams();
       form.set('mode', 'payment');
       form.set('success_url', `${origin}/app/zamowienia?payment=success&session_id={CHECKOUT_SESSION_ID}&kind=individual_plan`);
@@ -744,7 +1001,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       form.set('client_reference_id', gate.session!.id);
       form.set('customer_email', gate.session!.email);
       form.set('line_items[0][price_data][currency]', 'pln');
-      form.set('line_items[0][price_data][unit_amount]', String(V2_INDIVIDUAL_PLAN_PRICE_CENTS));
+      form.set('line_items[0][price_data][unit_amount]', String(individualPlanPriceCents));
       form.set('line_items[0][price_data][product_data][name]', 'Indywidualny plan treningowy');
       form.set('line_items[0][price_data][product_data][description]', 'Indywidualny plan przygotowany na podstawie Twoich odpowiedzi w ankiecie.');
       form.set('line_items[0][quantity]', '1');
@@ -753,7 +1010,8 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       form.set('metadata[user_id]', gate.session!.id);
       form.set('metadata[product_key]', V2_INDIVIDUAL_PLAN_PRODUCT_KEY);
       form.set('metadata[product_id]', item.id);
-      form.set('metadata[unit_amount_cents]', String(V2_INDIVIDUAL_PLAN_PRICE_CENTS));
+      form.set('metadata[unit_amount_cents]', String(individualPlanPriceCents));
+      form.set('metadata[premium_price]', premiumPlanPrice ? '1' : '0');
       form.set('metadata[individual_plan_request_id]', requestId);
       form.set('payment_intent_data[metadata][user_id]', gate.session!.id);
       form.set('payment_intent_data[metadata][product_key]', V2_INDIVIDUAL_PLAN_PRODUCT_KEY);
@@ -762,12 +1020,12 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const payload = await stripeResponse.json() as Record<string, any>;
       if (!stripeResponse.ok || typeof payload.url !== 'string' || typeof payload.id !== 'string') return v2Reply({ error: typeof payload.error?.message === 'string' ? `Stripe: ${payload.error.message}` : 'Nie udało się otworzyć płatności za plan indywidualny.' }, 502);
       await env.DB.prepare("UPDATE individual_plan_requests SET checkout_session_id=?,updated_at=? WHERE id=? AND user_id=? AND payment_status='pending'").bind(payload.id, new Date().toISOString(), requestId, gate.session!.id).run();
-      return v2Reply({ ok: true, url: payload.url, session_id: payload.id, request_id: requestId, amount_cents: V2_INDIVIDUAL_PLAN_PRICE_CENTS });
+      return v2Reply({ ok: true, url: payload.url, session_id: payload.id, request_id: requestId, amount_cents: individualPlanPriceCents, is_premium_price: premiumPlanPrice });
     }
 
     // Stary endpoint nie pozwala już ominąć płatności bezpośrednim POST-em.
     if (path === '/api/v2/training/individual-plan-requests' && method === 'POST') {
-      return v2Reply({ error: 'Zamówienie planu indywidualnego wymaga opłacenia 149,99 zł. Użyj przycisku w formularzu, który przekieruje Cię do płatności.' }, 402);
+      return v2Reply({ error: 'Zamówienie planu indywidualnego wymaga opłacenia ceny widocznej w formularzu. Użyj przycisku w formularzu, który przekieruje Cię do płatności.' }, 402);
     }
 
     // Generator treningów AI: zachowany stary endpoint historyczny, ale nowy kreator nie wywołuje modelu.
@@ -775,8 +1033,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     if (path === '/api/v2/training/plans' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       await ensureIndividualPlanRequestTable(env);
-      const premiumEntitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1").bind(gate.session!.id).first<{ id: string }>();
-      const isPremium = Boolean(premiumEntitlement), planLimit = isPremium ? 3 : 1;
+      const isPremium = await v2IsPremium(env, gate.session!.id), planLimit = isPremium ? 3 : 1;
       const plans = await env.DB.prepare("SELECT p.id,p.name,p.description,p.duration_weeks,p.start_date,p.progression_strategy,p.created_at,p.updated_at,EXISTS (SELECT 1 FROM individual_plan_requests ir WHERE ir.training_plan_id=p.id AND ir.user_id=p.user_id) AS is_individual_plan FROM training_plans_v2 p WHERE p.user_id=? AND NOT EXISTS (SELECT 1 FROM individual_plan_requests r WHERE r.training_plan_id=p.id AND r.user_id=p.user_id AND r.status!='ready') ORDER BY p.updated_at DESC").bind(gate.session!.id).all<{ id: string; name: string; description: string; duration_weeks: number; start_date: string | null; progression_strategy: string; created_at: string; updated_at: string; is_individual_plan: number }>();
       const customPlanCountRow = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 p WHERE p.user_id=? AND p.name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia') AND NOT EXISTS (SELECT 1 FROM individual_plan_requests r WHERE r.training_plan_id=p.id AND r.user_id=p.user_id)").bind(gate.session!.id).first<{ count: number }>();
       const customPlansUsed = Number(customPlanCountRow?.count || 0);
@@ -823,8 +1080,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
           return v2Reply({ error: 'Przed utworzeniem własnego planu uzupełnij profil: imię, główny cel, miejsce treningu i liczbę treningów w tygodniu.' }, 403);
         }
       }
-      const premiumEntitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1").bind(gate.session!.id).first<{ id: string }>();
-      const isPremium = Boolean(premiumEntitlement), planLimit = isPremium ? 3 : 1;
+      const isPremium = await v2IsPremium(env, gate.session!.id), planLimit = isPremium ? 3 : 1;
       const planCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 p WHERE p.user_id=? AND p.name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia') AND NOT EXISTS (SELECT 1 FROM individual_plan_requests r WHERE r.training_plan_id=p.id AND r.user_id=p.user_id)").bind(gate.session!.id).first<{ count: number }>();
       const plansUsed = Number(planCount?.count || 0);
       if (!isSamplePlan && plansUsed >= planLimit) {
@@ -874,8 +1130,8 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const wasSample = sampleNames.includes(plan.name), willBeSample = sampleNames.includes(name);
       if (!wasSample && willBeSample) return v2Reply({ error: 'Ta nazwa jest zarezerwowana dla planu przykładowego. Wybierz inną nazwę.' }, 400);
       if (wasSample && !willBeSample) {
-        const premiumEntitlement = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND access_status='active' AND (lower(COALESCE(product_key,'')) LIKE '%premium%' OR lower(COALESCE(product_title,'')) LIKE '%premium%') LIMIT 1").bind(gate.session!.id).first<{ id: string }>();
-        const planLimit = premiumEntitlement ? 3 : 1;
+        const isPremium = await v2IsPremium(env, gate.session!.id);
+        const planLimit = isPremium ? 3 : 1;
         const currentCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM training_plans_v2 p WHERE p.user_id=? AND p.name NOT IN ('Plan przykładowy — dom bez sprzętu','Plan przykładowy — siłownia') AND NOT EXISTS (SELECT 1 FROM individual_plan_requests r WHERE r.training_plan_id=p.id AND r.user_id=p.user_id)").bind(gate.session!.id).first<{ count: number }>();
         if (Number(currentCount?.count || 0) >= planLimit) return v2Reply({ error: 'Nie możesz zmienić przykładowego planu w kolejny własny plan, ponieważ limit zapisanych planów został wykorzystany.' }, 409);
       }
@@ -1005,6 +1261,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
 
     if (path === '/api/v2/challenges' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      await v2IsPremium(env, gate.session!.id);
       await ensureChallengeTables(env);
       const rows = await env.DB.prepare(`SELECT c.*,COALESCE(p.status,'') AS user_status,p.joined_at,
         (SELECT COUNT(*) FROM sf_challenge_participants cp WHERE cp.challenge_id=c.id AND cp.status IN ('active','completed')) AS participants_count,
@@ -1021,6 +1278,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const challengeId = challengeActionMatch[1], action = challengeActionMatch[2].toLowerCase();
       const challenge = await env.DB.prepare('SELECT id,title,is_free,product_key,duration_days FROM sf_challenges WHERE id=? AND is_published=1 LIMIT 1').bind(challengeId).first<{id:string;title:string;is_free:number;product_key:string|null;duration_days:number}>();
       if (!challenge) return v2Reply({error:'Nie znaleziono aktywnego wyzwania.'},404);
+      await v2IsPremium(env, gate.session!.id);
       const now = new Date().toISOString();
       if (action === 'join') {
         if (!challenge.is_free && challenge.product_key) {
@@ -1034,6 +1292,10 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
           notificationInsert(env, gate.session!.id, 'Wyzwanie rozpoczęte', `Rozpocząłeś wyzwanie „${challenge.title}”. Plan i wykonane dni znajdziesz w zakładce Wyzwania.`, now),
         ]);
         return v2Reply({ok:true,status:'active'},201);
+      }
+      if (!challenge.is_free && challenge.product_key) {
+        const access = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(gate.session!.id, challenge.product_key).first<{id:string}>();
+        if (!access) return v2Reply({error:'Dostęp do tego płatnego wyzwania nie jest aktywny. Sprawdź zakup w sklepie.'},402);
       }
       const body = await v2Body(request), dayNumber = Number(body.day_number);
       if (!Number.isInteger(dayNumber) || dayNumber < 1 || dayNumber > challenge.duration_days) return v2Reply({error:'Wskaż prawidłowy dzień wyzwania.'},400);
