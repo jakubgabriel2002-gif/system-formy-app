@@ -1,5 +1,5 @@
-import { Check, CheckCircle2, ChevronRight, Dumbbell, Timer, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, Check, CheckCircle2, ChevronRight, Dumbbell, Sparkles, Timer, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { WorkoutExercise } from "./workoutTypes";
 
 type Props = {
@@ -12,6 +12,9 @@ type Props = {
   onNotesChange: (notes: string) => void;
   onFinish: () => void;
   onCancel: () => void;
+  isPremium?: boolean;
+  promoSessionId?: string;
+  onPromoNavigate?: (destination: 'store' | 'premium') => Promise<boolean | void> | boolean | void;
 };
 
 function clampNumber(value: number, min: number, max: number) {
@@ -24,12 +27,16 @@ function clock(seconds: number) {
 
 type HistorySet = { exerciseName: string; exerciseIndex: number; setIndex: number; reps: number; weight_kg: number | null };
 
-export default function WorkoutSession({ title, elapsedLabel = "00:00", exercises, notes, saving = false, onExercisesChange, onNotesChange, onFinish, onCancel }: Props) {
+export default function WorkoutSession({ title, elapsedLabel = "00:00", exercises, notes, saving = false, onExercisesChange, onNotesChange, onFinish, onCancel, isPremium = false, promoSessionId = title, onPromoNavigate }: Props) {
   const [activeExercise, setActiveExercise] = useState(() => Math.max(0, exercises.findIndex((exercise) => exercise.sets_detail.some((set) => !set.completed))));
   const [restEnd, setRestEnd] = useState<number | null>(null);
   const [restSeconds, setRestSeconds] = useState(0);
   const [pendingNextExercise, setPendingNextExercise] = useState<number | null>(null);
   const [restLabel, setRestLabel] = useState("Przerwa między seriami");
+  const [restPromoOpen, setRestPromoOpen] = useState(false);
+  const [restPromoOpenedAt, setRestPromoOpenedAt] = useState<number | null>(null);
+  const restPromoShown = useRef(false);
+  useEffect(() => { try { restPromoShown.current = localStorage.getItem(`sf-workout-promo-shown:${promoSessionId}`) === '1'; } catch { restPromoShown.current = false; } }, [promoSessionId]);
   const current = exercises[activeExercise];
   const allSets = useMemo(() => exercises.reduce((sum, exercise) => sum + exercise.sets_detail.length, 0), [exercises]);
   const doneSets = useMemo(() => exercises.reduce((sum, exercise) => sum + exercise.sets_detail.filter((set) => set.completed).length, 0), [exercises]);
@@ -42,6 +49,7 @@ export default function WorkoutSession({ title, elapsedLabel = "00:00", exercise
   })).filter((set) => set.completed).map(({ completed: _completed, ...set }) => set)).reverse(), [exercises]);
 
   useEffect(() => {
+    if (restPromoOpen) return; // Licznik przerwy jest zatrzymany, gdy wyświetla się własna oferta.
     if (restEnd === null) { setRestSeconds(0); return; }
     const update = () => {
       const left = Math.max(0, Math.ceil((restEnd - Date.now()) / 1000));
@@ -55,7 +63,32 @@ export default function WorkoutSession({ title, elapsedLabel = "00:00", exercise
     update();
     const timer = window.setInterval(update, 250);
     return () => window.clearInterval(timer);
-  }, [restEnd, pendingNextExercise]);
+  }, [restEnd, pendingNextExercise, restPromoOpen]);
+
+  useEffect(() => {
+    if (isPremium || restEnd === null || doneSets < 2 || restPromoShown.current) return;
+    restPromoShown.current = true;
+    try { localStorage.setItem(`sf-workout-promo-shown:${promoSessionId}`, '1'); } catch { /* one-session limit remains in memory */ }
+    setRestPromoOpenedAt(Date.now());
+    setRestPromoOpen(true);
+  }, [isPremium, restEnd, doneSets]);
+
+  function closeRestPromo() {
+    if (restPromoOpenedAt !== null) {
+      const pausedFor = Math.max(0, Date.now() - restPromoOpenedAt);
+      setRestEnd(previous => previous === null ? null : previous + pausedFor);
+    }
+    setRestPromoOpenedAt(null);
+    setRestPromoOpen(false);
+  }
+
+  function navigateFromRestPromo(destination: 'store' | 'premium') {
+    if (onPromoNavigate) {
+      void Promise.resolve(onPromoNavigate(destination)).then(result => { if (result === false) closeRestPromo(); });
+      return;
+    }
+    closeRestPromo();
+  }
 
   if (!current) return <section className="sf-workout-mode"><div className="sf-wm-empty"><h2>Brak ćwiczeń w tej sesji</h2><p>Wróć do planu i dodaj co najmniej jedno ćwiczenie.</p><button className="sf-wm-button sf-wm-button-secondary" onClick={onCancel}>Wróć</button></div></section>;
 
@@ -162,6 +195,7 @@ export default function WorkoutSession({ title, elapsedLabel = "00:00", exercise
           <div className="sf-wm-finish-row"><span>Postęp: <strong>{progress}%</strong></span><button className="sf-wm-button sf-wm-button-primary" disabled={saving || !exercises.some((exercise) => exercise.name.trim())} onClick={onFinish}>{saving ? "Zapisywanie…" : "Zakończ i zapisz trening"} <Check size={16}/></button></div>
         </div>
       </div>
+      {restPromoOpen && !isPremium && <div className="sf-workout-promo-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) closeRestPromo(); }}><section className="sf-workout-promo" role="dialog" aria-modal="true" aria-labelledby="sf-workout-promo-title"><button type="button" className="sf-workout-promo-close" aria-label="Zamknij ofertę" onClick={closeRestPromo}><X size={18}/></button><span className="sf-workout-promo-icon"><Sparkles size={23}/></span><p className="sf-wm-label">SYSTEM FORMY · OFERTA</p><h2 id="sf-workout-promo-title">Wykorzystaj pełne możliwości aplikacji</h2><p>Premium daje dostęp bez reklam, zniżki na materiały i dodatkowe możliwości planowania treningów. Przerwa treningowa została wstrzymana — możesz spokojnie wrócić do serii.</p><div className="sf-workout-promo-actions"><button type="button" onClick={() => navigateFromRestPromo('premium')}>Poznaj Premium <ArrowRight size={16}/></button><button type="button" className="is-secondary" onClick={() => navigateFromRestPromo('store')}>Zobacz produkty <ArrowRight size={16}/></button><button type="button" className="is-dismiss" onClick={closeRestPromo}>Wróć do treningu</button></div></section></div>}
     </section>
   );
 }

@@ -144,3 +144,16 @@
 .sf-wm-progression-note{display:flex;align-items:flex-start;gap:8px;margin:0 0 14px;padding:10px 11px;border:1px solid #414b31;border-radius:10px;background:#171c13;color:#bfd3a4}
 .sf-wm-progression-note>span{display:grid;place-items:center;flex:0 0 auto;margin-top:1px;color:#c6f36a}
 .sf-wm-progression-note p{margin:0;color:#c2cdb5;font-size:10px;line-height:1.55}
+
+/* Własna oferta pokazywana tylko raz podczas przerwy w treningu. Licznik przerwy zatrzymuje się pod modalem. */
+.sf-workout-promo-backdrop{position:fixed;inset:0;z-index:10100;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(3,5,3,.82);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.sf-workout-promo{position:relative;width:min(100%,430px);max-height:min(88dvh,720px);overflow:auto;padding:30px 24px 22px;border:1px solid rgba(198,243,106,.35);border-radius:24px;background:radial-gradient(ellipse at 50% 0,rgba(198,243,106,.13),transparent 48%),linear-gradient(150deg,#1d2318,#11140f 72%);box-shadow:0 28px 90px rgba(0,0,0,.55);text-align:center;color:#f5f7ee}
+.sf-workout-promo-close{position:absolute;top:12px;right:12px;display:grid;place-items:center;width:36px;height:36px;border:1px solid rgba(255,255,255,.13);border-radius:50%;background:rgba(255,255,255,.04);color:inherit;cursor:pointer}
+.sf-workout-promo-icon{display:grid;place-items:center;width:56px;height:56px;margin:0 auto 16px;border:1px solid rgba(198,243,106,.4);border-radius:18px;background:rgba(198,243,106,.1);color:#c6f36a}
+.sf-workout-promo h2{margin:0 auto 12px;max-width:340px;font-size:clamp(23px,5vw,29px);line-height:1.13;letter-spacing:-.04em}
+.sf-workout-promo>p:not(.sf-wm-label){max-width:355px;margin:0 auto 22px;color:#b8bdae;font-size:14px;line-height:1.65}
+.sf-workout-promo-actions{display:grid;gap:9px}
+.sf-workout-promo-actions button{display:flex;align-items:center;justify-content:center;gap:8px;min-height:46px;padding:11px 14px;border:1px solid #c6f36a;border-radius:12px;background:#c6f36a;color:#11150c;font-weight:800;cursor:pointer}
+.sf-workout-promo-actions button.is-secondary{background:transparent;color:#f5f7ee;border-color:rgba(255,255,255,.19)}
+.sf-workout-promo-actions button.is-dismiss{min-height:38px;border:0;background:transparent;color:#a9af9d;font-weight:500}
+@media(prefers-reduced-motion:reduce){.sf-workout-promo-backdrop{animation:none}}

@@ -11,6 +11,9 @@ type Props = {
   onGoToPlans: () => void;
   onBackToDashboard: () => void;
   onSaved: () => Promise<unknown> | unknown;
+  isPremium?: boolean;
+  onOpenStore?: () => void;
+  onOpenPremium?: () => void;
 };
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -125,7 +128,7 @@ function formatDuration(totalSeconds: number) {
     : `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
-export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved }: Props) {
+export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved, isPremium = false, onOpenStore, onOpenPremium }: Props) {
   const [plans, setPlans] = useState<WorkoutPlan[]>([]);
   const [draft, setDraft] = useState<WorkoutDraft | null>(null);
   const [title, setTitle] = useState('');
@@ -276,20 +279,31 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
     }
   };
 
-  const pauseWorkout = async () => {
+  const pauseWorkout = async (): Promise<boolean> => {
     const pausedDraft: WorkoutDraft = {
       title: title || 'Trening', performed_on: performedOn, notes, exercises,
       plan_id: draft?.plan_id, day_key: draft?.day_key, started: true,
-      started_at: startedAt ?? Date.now(),
+      // Nie zaliczaj czasu spędzonego w sklepie ani poza treningiem do czasu sesji.
+      started_at: Date.now() - Math.max(0, elapsedSeconds) * 1000,
     };
     try {
       await request('/api/v2/training/draft', { method: 'PUT', body: JSON.stringify({ draft: pausedDraft }) });
       setDraft(pausedDraft);
       setSessionActive(false);
       setError('');
+      return true;
     } catch (e) {
       setError(e instanceof Error ? `Nie udało się zachować treningu do późniejszego wznowienia: ${e.message}` : 'Nie udało się zachować treningu do późniejszego wznowienia.');
+      return false;
     }
+  };
+
+  const navigateFromWorkoutPromo = async (destination: 'store' | 'premium') => {
+    const saved = await pauseWorkout();
+    if (!saved) return false;
+    if (destination === 'store') onOpenStore?.();
+    else onOpenPremium?.();
+    return true;
   };
 
   if (loading) return <section className="sf-view"><p className="sf-muted">Ładowanie treningów…</p></section>;
@@ -315,6 +329,7 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved 
         title={title} elapsedLabel={formatDuration(elapsedSeconds)} exercises={exercises} notes={notes} saving={saving}
         onExercisesChange={setExercises} onNotesChange={setNotes}
         onFinish={() => void finish()} onCancel={() => void pauseWorkout()}
+        isPremium={isPremium} promoSessionId={`${draft?.plan_id || title}:${draft?.day_key || performedOn}:${performedOn}`} onPromoNavigate={navigateFromWorkoutPromo}
       />
     </section>;
   }
