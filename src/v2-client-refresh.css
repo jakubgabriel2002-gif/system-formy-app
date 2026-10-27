@@ -468,3 +468,47 @@
 .sf-store-view .sf-product-grid{align-items:stretch}
 @media(max-width:760px){.sf-mobile-nav:not(.sf-mobile-nav-admin){grid-template-columns:repeat(7,minmax(0,1fr))}.sf-mobile-nav:not(.sf-mobile-nav-admin) button span{font-size:8px;letter-spacing:-.02em}}
 @media(max-width:390px){.sf-mobile-nav:not(.sf-mobile-nav-admin){padding-inline:4px}.sf-mobile-nav:not(.sf-mobile-nav-admin) button{gap:4px;padding-inline:0}.sf-mobile-nav:not(.sf-mobile-nav-admin) button svg{width:17px;height:17px}.sf-mobile-nav:not(.sf-mobile-nav-admin) button span{font-size:7px}.sf-library-order{grid-template-columns:34px minmax(0,1fr);gap:9px}.sf-library-order-icon{width:34px;height:34px}.sf-library-order-total{grid-column:2;display:flex;align-items:center;justify-content:space-between;justify-items:initial;padding-top:2px}}
+
+/* System Formy Premium: membership, transparent member prices and native product promotions. */
+.sf-member-price{display:grid;gap:4px;margin-top:10px;padding:11px 12px;border:1px solid rgba(198,243,106,.24);border-radius:12px;background:linear-gradient(120deg,rgba(198,243,106,.08),rgba(198,243,106,.025));min-width:0}
+.sf-member-price>span{font-size:10px;font-weight:850;letter-spacing:.08em;text-transform:uppercase;color:var(--lime)}
+.sf-member-price>b{font-size:14px;line-height:1.35;color:#f2f6eb;overflow-wrap:anywhere}
+.sf-member-price>small{font-size:10px;color:var(--muted);line-height:1.45}
+.sf-member-price-detail{margin:15px 0}
+.sf-premium-promo-card,.sf-store-premium-banner{display:flex;align-items:center;gap:18px;margin:0 0 22px;padding:20px;border:1px solid rgba(198,243,106,.32);border-radius:20px;background:radial-gradient(ellipse at 100% 0,rgba(198,243,106,.12),transparent 48%),linear-gradient(120deg,#20251a,#171a14);min-width:0}
+.sf-premium-promo-icon{display:grid;place-items:center;flex:0 0 48px;width:48px;height:48px;border:1px solid rgba(198,243,106,.4);border-radius:15px;background:rgba(198,243,106,.09);color:var(--lime)}
+.sf-premium-promo-copy,.sf-store-premium-banner>div{flex:1;min-width:0}
+.sf-premium-promo-copy .sf-eyebrow,.sf-store-premium-banner .sf-eyebrow{margin:0 0 5px;color:var(--lime)}
+.sf-premium-promo-copy h2,.sf-store-premium-banner h2{margin:0 0 6px;font-size:clamp(1.1rem,2.4vw,1.55rem);letter-spacing:-.035em}
+.sf-premium-promo-copy>p:last-child,.sf-store-premium-banner>div>p:last-child{margin:0;color:var(--muted);font-size:12px;line-height:1.65;max-width:740px}
+.sf-premium-view{gap:20px}
+.sf-premium-active-card{display:grid;justify-items:center;text-align:center;gap:13px;max-width:760px;margin:0 auto;padding:clamp(24px,4vw,42px);border:1px solid rgba(198,243,106,.35);border-radius:24px;background:radial-gradient(ellipse at 50% 0,rgba(198,243,106,.15),transparent 55%),linear-gradient(145deg,#1d2318,#151713)}
+.sf-premium-active-icon{display:grid;place-items:center;width:64px;height:64px;border:1px solid rgba(198,243,106,.5);border-radius:21px;background:rgba(198,243,106,.1);color:var(--lime)}
+.sf-premium-active-card>.sf-eyebrow,.sf-premium-active-card>p{margin:0}
+.sf-premium-active-card h2{margin:0;font-size:clamp(1.5rem,4vw,2.3rem);letter-spacing:-.045em}
+.sf-premium-active-card>p:not(.sf-eyebrow){max-width:540px;color:var(--muted);font-size:13px;line-height:1.7}
+.sf-premium-active-card>small{max-width:560px;line-height:1.6}
+.sf-premium-benefit-chips{display:flex;justify-content:center;flex-wrap:wrap;gap:8px;margin:2px 0}
+.sf-premium-benefit-chips span{display:inline-flex;align-items:center;gap:6px;padding:8px 11px;border:1px solid rgba(198,243,106,.22);border-radius:999px;background:rgba(198,243,106,.06);color:#e4efda;font-size:11px;font-weight:700}
+.sf-premium-benefit-chips svg{color:var(--lime)}
+.sf-premium-benefit-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px}
+.sf-premium-benefit-grid article{display:grid;align-content:start;gap:8px;padding:18px;border:1px solid #30372a;border-radius:17px;background:linear-gradient(145deg,#1b1f18,#151713);min-width:0}
+.sf-premium-benefit-grid article>span{display:grid;place-items:center;width:39px;height:39px;border:1px solid rgba(198,243,106,.25);border-radius:12px;background:rgba(198,243,106,.07);color:var(--lime)}
+.sf-premium-benefit-grid h3{margin:0;font-size:14px;letter-spacing:-.02em}
+.sf-premium-benefit-grid p{margin:0;color:var(--muted);font-size:12px;line-height:1.6}
+.sf-premium-pricing-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:stretch}
+.sf-premium-price-card{position:relative;display:flex;flex-direction:column;gap:12px;padding:22px;border:1px solid #34392e;border-radius:21px;background:linear-gradient(145deg,#1b1f18,#151713);min-width:0;overflow:hidden}
+.sf-premium-price-card.is-featured{border-color:rgba(198,243,106,.5);background:radial-gradient(ellipse at 100% 0,rgba(198,243,106,.12),transparent 55%),linear-gradient(145deg,#20271a,#151713)}
+.sf-premium-price-card>.sf-eyebrow{margin:0;color:var(--lime)}
+.sf-premium-price-card h2{margin:0;font-size:clamp(1.25rem,2.5vw,1.65rem);letter-spacing:-.035em}
+.sf-premium-price{margin:0;font-size:clamp(1.7rem,4vw,2.35rem);font-weight:900;letter-spacing:-.055em;color:#f3f7ed}
+.sf-premium-price small{font-size:12px;font-weight:650;letter-spacing:0;color:var(--muted)}
+.sf-premium-price-card>.sf-muted{flex:1;margin:0;font-size:12px;line-height:1.7}
+.sf-premium-best-value{align-self:flex-start;padding:6px 9px;border-radius:999px;background:var(--lime);color:#15180f;font-size:9px;font-weight:900;letter-spacing:.08em}
+.sf-premium-terms-note{max-width:900px;margin:0;color:var(--muted);font-size:11px;line-height:1.7}
+@media(max-width:850px){.sf-premium-benefit-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.sf-premium-promo-card,.sf-store-premium-banner{align-items:stretch;flex-wrap:wrap;padding:16px;gap:13px}.sf-premium-promo-icon{flex-basis:42px;width:42px;height:42px}.sf-premium-promo-copy,.sf-store-premium-banner>div{flex-basis:calc(100% - 58px)}.sf-premium-promo-card>.sf-button,.sf-store-premium-banner>.sf-button{width:100%;justify-content:center}.sf-premium-benefit-grid{grid-template-columns:1fr 1fr;gap:9px}.sf-premium-benefit-grid article{padding:13px}.sf-premium-benefit-grid h3{font-size:12px}.sf-premium-benefit-grid p{font-size:11px}.sf-premium-pricing-grid{grid-template-columns:1fr}.sf-premium-price-card{padding:19px}.sf-premium-active-card{padding:24px 17px}}
+@media(max-width:380px){.sf-premium-benefit-grid{grid-template-columns:1fr}.sf-premium-benefit-grid article{grid-template-columns:36px minmax(0,1fr);align-items:start}.sf-premium-benefit-grid article>span{grid-row:span 2}.sf-premium-benefit-grid article h3{align-self:end}}
+
+.sf-premium-billing-warning{border-color:rgba(245,158,11,.42);background:radial-gradient(ellipse at 50% 0,rgba(245,158,11,.09),transparent 55%),linear-gradient(145deg,#211e17,#151713)}
+.sf-premium-billing-warning .sf-premium-active-icon{color:#fbbf24;border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.08)}
