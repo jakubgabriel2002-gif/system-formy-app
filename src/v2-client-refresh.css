@@ -413,3 +413,25 @@
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.sf-header,.sf-app-top,.sf-public-content,.sf-view,.sf-dashboard,.sf-home .sf-hero-copy,.sf-home-section,.sf-preview-window,.sf-preview-glow,.sf-preview-floating,.sf-notification-toast{animation:none!important;animation-timeline:auto!important}.sf-button,.sf-icon-button,.sf-round-link,.sf-feature-grid article,.sf-product-card,.sf-process-grid article{transition:none!important}.sf-button:hover,.sf-icon-button:hover,.sf-round-link:hover,.sf-feature-grid article:hover,.sf-product-card:hover,.sf-process-grid article:hover{transform:none!important}}
 
 .sf-lazy-screen{min-height:50vh;display:flex;align-items:center;justify-content:center;gap:14px;padding:24px;color:#aeb7a4;font-size:13px}.sf-lazy-screen .sf-page-loading{position:static;flex:0 0 24px}
+
+
+/* Popovery w warstwie dokumentu — bez obcinania przez kontenery aplikacji. */
+.sf-app-top{position:relative;z-index:1000;overflow:visible}
+.sf-app-header-actions{z-index:1001}
+.sf-notification-panel{position:fixed!important;z-index:10000!important;top:calc(env(safe-area-inset-top,0px) + 104px)!important;right:clamp(12px,4vw,56px)!important;width:min(380px,calc(100vw - 24px))!important;max-height:min(70dvh,560px)!important;overflow:auto;overscroll-behavior:contain;isolation:isolate}
+.sf-dropdown{z-index:10001!important;isolation:isolate}
+.sf-public-dropdown{position:fixed!important;top:calc(env(safe-area-inset-top,0px) + 72px)!important;right:12px!important;left:auto!important;max-height:calc(100dvh - env(safe-area-inset-top,0px) - 88px)!important;overflow:auto}
+.sf-app-dropdown{position:fixed!important;top:calc(env(safe-area-inset-top,0px) + 104px)!important;right:clamp(12px,4vw,56px)!important;max-height:calc(100dvh - env(safe-area-inset-top,0px) - 120px)!important;overflow:auto}
+.sf-notification-toast,.sf-toast{z-index:10002!important}
+.sf-challenges-view{gap:24px}
+.sf-challenge-group{display:flex;flex-direction:column;gap:13px;min-width:0}
+.sf-challenge-group>.sf-panel-heading{margin-bottom:0}
+.sf-challenge-group .sf-section-heading{align-items:center}
+.sf-challenge-group .sf-section-heading h2{margin:0;font-size:clamp(20px,2.5vw,27px)}
+.sf-challenge-section-count{display:grid;place-items:center;flex:0 0 38px;width:38px;height:38px;border:1px solid rgba(198,243,106,.25);border-radius:12px;background:rgba(198,243,106,.07);color:var(--lime);font-size:13px;font-weight:850}
+.sf-challenge-completed-group{padding-top:22px;border-top:1px solid #30362a}
+.sf-challenge-completed-group .sf-challenge-card{background:linear-gradient(145deg,rgba(198,243,106,.035),rgba(24,29,22,.5))}
+@media(max-width:640px){.sf-notification-panel{top:calc(env(safe-area-inset-top,0px) + 92px)!important;right:10px!important;width:calc(100vw - 20px)!important;max-height:65dvh!important}.sf-app-dropdown{top:calc(env(safe-area-inset-top,0px) + 92px)!important;right:10px!important}.sf-challenge-group .sf-section-heading{align-items:flex-start}.sf-challenge-section-count{flex-basis:32px;width:32px;height:32px}}
+
+.sf-challenge-catalog-toggle{align-self:flex-start;min-height:44px}
+@media(max-width:640px){.sf-challenge-catalog-toggle{align-self:stretch;width:100%}}
