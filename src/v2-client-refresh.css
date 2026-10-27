@@ -435,3 +435,16 @@
 
 .sf-challenge-catalog-toggle{align-self:flex-start;min-height:44px}
 @media(max-width:640px){.sf-challenge-catalog-toggle{align-self:stretch;width:100%}}
+
+/* iOS PWA: odsuń interfejs od paska statusu, nie zmieniając zwykłej strony WWW. */
+@media (display-mode: standalone) and (max-width: 760px) {
+  html, body, #root, .sf-root { min-height: 100%; }
+  .sf-root:has(.sf-app-shell) { padding-top: env(safe-area-inset-top, 0px); }
+  .sf-root:has(.sf-app-shell) .sf-app-main { padding-top: 8px; }
+  .sf-root:has(.sf-app-shell) .sf-app-top { padding-top: 4px; }
+}
+/* Starsze wersje iOS potrafią uruchomić PWA bez display-mode; bezpieczny fallback. */
+@media (max-width: 760px) and (display-mode: standalone) {
+  .sf-app-shell { min-height: 100dvh; }
+  .sf-mobile-nav { padding-bottom: calc(7px + env(safe-area-inset-bottom, 0px)); }
+}

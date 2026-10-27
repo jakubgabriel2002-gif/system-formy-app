@@ -468,8 +468,76 @@ export default function AppV2() {
     if (path.startsWith('/acp') && !user && path !== '/login') go(`/login?next=${encodeURIComponent(route)}`, true);
   }, [authReady, user?.id, path, admin, adminReady, route, go, notify]);
 
-  // Weryfikuj ważność sesji podczas aktywnego korzystania z aplikacji.
-  // Ostateczne uprawnienia nadal sprawdza Worker przy każdym żądaniu.
+  // W aplikacji (także zainstalowanej jako PWA) wyloguj po 4 godzinach bezczynności.
+  // Każde zdarzenie użytkownika resetuje licznik; przy wznowieniu aplikacji sprawdzamy sesję z Workerem.
+  useEffect(() => {
+    if (!user) return;
+    const INACTIVITY_LIMIT = 4 * 60 * 60 * 1000;
+    let inactivityTimer: number | undefined;
+    let checking = false;
+    let lastActivity = Date.now();
+    let signedOut = false;
+
+    const goToLogin = (message: string) => {
+      if (signedOut) return;
+      signedOut = true;
+      setUser(null);
+      setAdmin(false);
+      if (path.startsWith('/app') || path.startsWith('/acp')) {
+        go(`/login?next=${encodeURIComponent(route)}`, true);
+      } else {
+        go('/login', true);
+      }
+      notify(message, 'info');
+    };
+
+    const checkSession = async () => {
+      if (checking || signedOut || document.visibilityState !== 'visible') return;
+      checking = true;
+      try {
+        const result = await api<{ user: User | null }>('/api/auth/me');
+        if (!result.user) goToLogin('Sesja wygasła. Zaloguj się ponownie.');
+      } catch { /* chwilowy błąd sieci nie powinien wylogowywać użytkownika */ }
+      finally { checking = false; }
+    };
+
+    const resetTimer = () => {
+      if (signedOut) return;
+      lastActivity = Date.now();
+      if (inactivityTimer !== undefined) window.clearTimeout(inactivityTimer);
+      inactivityTimer = window.setTimeout(() => {
+        goToLogin('Wylogowano po 4 godzinach bezczynności. Zaloguj się ponownie.');
+        void api('/api/auth/logout', { method: 'POST', body: '{}' }).catch(() => {});
+      }, INACTIVITY_LIMIT);
+    };
+
+    const onActivity = () => {
+      if (document.visibilityState === 'visible') resetTimer();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastActivity >= INACTIVITY_LIMIT) {
+        goToLogin('Wylogowano po 4 godzinach bezczynności. Zaloguj się ponownie.');
+        void api('/api/auth/logout', { method: 'POST', body: '{}' }).catch(() => {});
+      } else {
+        resetTimer();
+        void checkSession();
+      }
+    };
+
+    resetTimer();
+    const activityEvents: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'scroll', 'touchstart'];
+    activityEvents.forEach(eventName => window.addEventListener(eventName, onActivity, { passive: true }));
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onVisibility);
+    return () => {
+      if (inactivityTimer !== undefined) window.clearTimeout(inactivityTimer);
+      activityEvents.forEach(eventName => window.removeEventListener(eventName, onActivity));
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onVisibility);
+    };
+  }, [user?.id, path, route, go, notify]);
+
   useEffect(() => {
     if (!user) return;
     let lastPing = Date.now();
