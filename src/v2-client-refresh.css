@@ -448,3 +448,23 @@
   .sf-app-shell { min-height: 100dvh; }
   .sf-mobile-nav { padding-bottom: calc(7px + env(safe-area-inset-bottom, 0px)); }
 }
+
+
+/* Sklep w aplikacji i skrócona historia zamówień w bibliotece. */
+.sf-library-orders{margin-top:24px;gap:16px}
+.sf-library-orders .sf-panel-heading{align-items:flex-start}
+.sf-library-orders .sf-panel-heading h2{margin:2px 0 5px;font-size:clamp(20px,2.5vw,26px)}
+.sf-library-orders .sf-panel-heading .sf-muted{margin:0;font-size:12px;line-height:1.6}
+.sf-library-orders-list{display:grid;gap:0}
+.sf-library-order{display:grid;grid-template-columns:42px minmax(0,1fr) auto;align-items:center;gap:12px;padding:14px 0;border-top:1px solid rgba(215,230,199,.1)}
+.sf-library-order-icon{width:40px;height:40px;display:grid;place-items:center;border:1px solid #39432d;border-radius:13px;background:rgba(198,243,106,.07);color:var(--lime)}
+.sf-library-order-main{display:grid;gap:4px;min-width:0}
+.sf-library-order-main>b{font-size:13px;overflow-wrap:anywhere}
+.sf-library-order-main>small{font-size:10px;color:var(--muted)}
+.sf-library-order-main>span{font-size:11px;color:#c3cbbb;line-height:1.45;overflow-wrap:anywhere}
+.sf-library-order-total{display:grid;justify-items:end;gap:7px}
+.sf-library-order-total>b{font-size:13px;white-space:nowrap}
+.sf-library-order-total .sf-status{font-size:9px;white-space:nowrap}
+.sf-store-view .sf-product-grid{align-items:stretch}
+@media(max-width:760px){.sf-mobile-nav:not(.sf-mobile-nav-admin){grid-template-columns:repeat(7,minmax(0,1fr))}.sf-mobile-nav:not(.sf-mobile-nav-admin) button span{font-size:8px;letter-spacing:-.02em}}
+@media(max-width:390px){.sf-mobile-nav:not(.sf-mobile-nav-admin){padding-inline:4px}.sf-mobile-nav:not(.sf-mobile-nav-admin) button{gap:4px;padding-inline:0}.sf-mobile-nav:not(.sf-mobile-nav-admin) button svg{width:17px;height:17px}.sf-mobile-nav:not(.sf-mobile-nav-admin) button span{font-size:7px}.sf-library-order{grid-template-columns:34px minmax(0,1fr);gap:9px}.sf-library-order-icon{width:34px;height:34px}.sf-library-order-total{grid-column:2;display:flex;align-items:center;justify-content:space-between;justify-items:initial;padding-top:2px}}
