@@ -531,3 +531,41 @@
 
 .sf-premium-trial-actions{display:grid;gap:10px;margin-top:18px}
 .sf-premium-trial-actions small{display:block;line-height:1.55}
+
+/* Launch hardening: sticky app controls and iPhone safe-area support on every route. */
+.sf-root:has(.sf-app-shell){overflow-x:clip!important;overflow-y:visible!important}
+.sf-app-main{overflow:visible}
+.sf-app-top{position:sticky!important;top:0;z-index:1100!important;display:flex;align-items:center;justify-content:space-between;gap:14px;padding-top:12px;padding-bottom:12px;background:rgba(16,18,14,.96);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid rgba(198,243,106,.12);isolation:isolate}
+.sf-app-top>div:first-child{min-width:0}
+.sf-app-header-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+@media(max-width:760px){
+  .sf-root:has(.sf-app-shell){padding-top:0!important}
+  .sf-app-top{top:0!important;margin:0 -14px 14px;padding:calc(9px + env(safe-area-inset-top,0px)) 14px 12px;min-height:calc(82px + env(safe-area-inset-top,0px));}
+  .sf-app-top h1{overflow-wrap:anywhere}
+}
+/* In an installed iOS PWA, the public login/register header must also sit below the status bar. */
+@media (display-mode:standalone) and (max-width:760px){
+  .sf-root:has(.sf-header){padding-top:0!important;overflow-x:clip;overflow-y:visible}
+  .sf-header{top:0!important;height:calc(66px + env(safe-area-inset-top,0px))!important;padding:env(safe-area-inset-top,0px) 16px 0!important;z-index:1100!important;background:rgba(16,17,15,.97)}
+}
+/* A click on the shaded background must not accidentally dismiss the offer. */
+.sf-product-popup-backdrop{cursor:default;touch-action:pan-y}
+.sf-product-popup{cursor:auto;overscroll-behavior:contain}
+
+
+/* Final launch fixes: keep app/public headers above content on iOS PWA, even on auth routes. */
+.sf-root:has(.sf-app-shell),
+.sf-root:has(.sf-header){overflow-x:clip!important;overflow-y:visible!important}
+.sf-app-shell{overflow:visible!important}
+.sf-app-main{position:relative;min-height:0;overflow:visible!important}
+.sf-app-top{position:sticky!important;top:0!important;z-index:12000!important;isolation:isolate}
+.sf-root:has(.sf-header)>.sf-header{position:sticky!important;top:0!important;z-index:12000!important;flex:0 0 auto;isolation:isolate}
+@media (display-mode:standalone) and (max-width:760px){
+  .sf-root:has(.sf-app-shell){padding-top:0!important}
+  .sf-root:has(.sf-header){padding-top:0!important}
+  .sf-root:has(.sf-header)>.sf-header{height:calc(66px + env(safe-area-inset-top,0px))!important;min-height:calc(66px + env(safe-area-inset-top,0px));padding:env(safe-area-inset-top,0px) 12px 0!important;box-sizing:border-box;background:rgba(16,17,15,.98);border-bottom-color:rgba(198,243,106,.18)}
+  .sf-root:has(.sf-app-shell) .sf-app-top{top:0!important;padding-top:calc(10px + env(safe-area-inset-top,0px))!important;min-height:calc(82px + env(safe-area-inset-top,0px));background:rgba(16,18,14,.98)}
+}
+/* Explicit background taps are consumed by the modal; only its labelled buttons close it. */
+.sf-product-popup-backdrop{z-index:20000!important;pointer-events:auto;touch-action:pan-y}
+.sf-product-popup{position:relative;z-index:1;pointer-events:auto;overscroll-behavior:contain;max-height:min(88dvh,760px)}
