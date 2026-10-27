@@ -19,6 +19,58 @@ const REMEMBER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const IDLE_TTL_MS = 10 * 60 * 1000;
 const PASSWORD_ITERATIONS = 100_000;
 
+const MAX_API_BODY_BYTES = 1 * 1024 * 1024;
+const MAX_WEBHOOK_BODY_BYTES = 2 * 1024 * 1024;
+const MAX_UPLOAD_BODY_BYTES = 27 * 1024 * 1024;
+
+function addSecurityHeaders(response: Response, request: Request): Response {
+  const headers = new Headers(response.headers);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('X-Frame-Options', 'DENY');
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), usb=()');
+  headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+  headers.set('Cross-Origin-Resource-Policy', 'same-origin');
+  if (new URL(request.url).protocol === 'https:') headers.set('Strict-Transport-Security', 'max-age=31536000');
+  const contentType = headers.get('Content-Type') || '';
+  if (contentType.toLowerCase().includes('text/html')) {
+    if (!headers.has('Content-Security-Policy')) {
+      headers.set('Content-Security-Policy', [
+        "default-src 'self'",
+        "base-uri 'self'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "form-action 'self' https://checkout.stripe.com",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com data:",
+        "img-src 'self' data: blob:",
+        "connect-src 'self'",
+        "manifest-src 'self'",
+        "worker-src 'self'",
+        'upgrade-insecure-requests',
+      ].join('; '));
+    }
+    // Avoid stale application shells after deployment; hashed assets remain cacheable.
+    headers.set('Cache-Control', 'no-store');
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+function requestBodyLimit(request: Request, path: string): number {
+  if (path === '/api/stripe/webhook') return MAX_WEBHOOK_BODY_BYTES;
+  if (path === '/api/admin/products' && request.method.toUpperCase() === 'POST') return MAX_UPLOAD_BODY_BYTES;
+  if ((path.startsWith('/api/v2/admin/products/') && path.endsWith('/file')) || path === '/api/v2/admin/covers') return MAX_UPLOAD_BODY_BYTES;
+  return MAX_API_BODY_BYTES;
+}
+
+function requestJsonError(status: number, message: string): Response {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
+  });
+}
+
 class HttpError extends Error {
   status: number;
   constructor(status: number, message: string) { super(message); this.status = status; }
@@ -82,14 +134,37 @@ function appendCookie(response: Response, cookie: string): Response {
   headers.append('Set-Cookie', cookie);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
+async function readBoundedText(request: Request, maxBytes = MAX_API_BODY_BYTES): Promise<string> {
+  const reader = request.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const part = await reader.read();
+    if (part.done) break;
+    total += part.value.byteLength;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch { /* stream may already be closed */ }
+      throw new HttpError(413, 'Wysłane dane są zbyt duże.');
+    }
+    chunks.push(part.value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder().decode(bytes);
+}
 async function readJson(request: Request): Promise<JsonRecord> {
   const type = request.headers.get('Content-Type') ?? '';
   if (!type.toLowerCase().includes('application/json')) throw new HttpError(415, 'Wysłane dane muszą być w formacie JSON.');
   try {
-    const value: unknown = await request.json();
+    const value: unknown = JSON.parse(await readBoundedText(request));
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid body');
     return value as JsonRecord;
-  } catch { throw new HttpError(400, 'Nie udało się odczytać danych formularza.'); }
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(400, 'Nie udało się odczytać danych formularza.');
+  }
 }
 function stringField(body: JsonRecord, key: string): string { return typeof body[key] === 'string' ? (body[key] as string).trim() : ''; }
 function normalizedEmail(value: string): string { return value.trim().toLowerCase(); }
@@ -268,12 +343,35 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const lockedPage = await handleSitePageLock(request, env);
-    if (lockedPage) return lockedPage;
     const url = new URL(request.url);
-    if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
+    const path = url.pathname;
+    const method = request.method.toUpperCase();
+
+    // Reject oversized API requests before parsing JSON or multipart data.
+    if (path.startsWith('/api/')) {
+      const contentLength = Number(request.headers.get('Content-Length') || 0);
+      const maximum = requestBodyLimit(request, path);
+      if (contentLength > maximum) {
+        return addSecurityHeaders(requestJsonError(413, 'Żądanie jest zbyt duże.'), request);
+      }
+
+      // Browser writes must originate from this exact origin. Stripe signs its webhook separately.
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) && path !== '/api/stripe/webhook') {
+        const origin = request.headers.get('Origin');
+        if (!origin || origin !== url.origin) {
+          return addSecurityHeaders(requestJsonError(403, 'Odrzucono żądanie spoza zaufanej domeny.'), request);
+        }
+      }
+    }
+
+    const lockedPage = await handleSitePageLock(request, env);
+    if (lockedPage) return addSecurityHeaders(lockedPage, request);
+    if (!path.startsWith('/api/')) {
+      const assetResponse = await env.ASSETS.fetch(request);
+      return addSecurityHeaders(assetResponse, request);
+    }
     const platformResponse = await handlePlatformApi(request, env);
     const response = platformResponse ?? await handleApi(request, env);
-    return refreshRollingSessionCookie(request, env, response);
+    return addSecurityHeaders(await refreshRollingSessionCookie(request, env, response), request);
   },
 };

@@ -10,7 +10,10 @@ type V2Session = { id: string; email: string };
 type V2Body = Record<string, unknown>;
 type V2Product = { id: string; product_key: string; title: string; description: string; product_type: string; price_amount: number; currency: string; is_free: number; is_published: number; checkout_url: string | null; file_key: string; original_filename: string; file_content_type: string; created_at: string; updated_at: string };
 type V2PromoCandidate = { id: string; code: string; discount_type: string; discount_value: number; max_uses: number | null; used_count: number; product_key: string | null };
-class V2InputError extends Error { readonly status = 400; }
+class V2InputError extends Error {
+  readonly status: number;
+  constructor(message: string, status = 400) { super(message); this.status = status; }
+}
 const V2_COOKIE = 'sf_session';
 const V2_MAX_FILE = 25 * 1024 * 1024;
 const V2_GENERATOR_PRODUCT_KEY = 'generator-planu-treningowego';
@@ -237,9 +240,31 @@ function v2Field(body: V2Body, key: string, max = 2000): string {
   if (value.length > max) throw new V2InputError(`Pole ${key} jest zbyt długie.`);
   return value;
 }
+async function v2ReadBoundedText(request: Request, maxBytes = 1024 * 1024): Promise<string> {
+  const reader = request.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const part = await reader.read();
+    if (part.done) break;
+    total += part.value.byteLength;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch { /* stream may already be closed */ }
+      throw new V2InputError('Wysłane dane są zbyt duże.', 413);
+    }
+    chunks.push(part.value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder().decode(bytes);
+}
 async function v2Body(request: Request): Promise<V2Body> {
   if (!(request.headers.get('Content-Type') || '').toLowerCase().includes('application/json')) throw new V2InputError('Dane muszą być przesłane jako JSON.');
-  const value: unknown = await request.json();
+  let value: unknown;
+  try { value = JSON.parse(await v2ReadBoundedText(request)); }
+  catch (error) { if (error instanceof V2InputError) throw error; throw new V2InputError('Nieprawidłowe dane formularza.'); }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new V2InputError('Nieprawidłowe dane formularza.');
   return value as V2Body;
 }

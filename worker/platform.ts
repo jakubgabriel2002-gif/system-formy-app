@@ -10,7 +10,14 @@ async function digest(v:string):Promise<string>{const b=await crypto.subtle.dige
 async function sessionFor(r:Request,e:PlatformEnv):Promise<Session|null>{const t=tokenFrom(r);if(!t)return null;return e.DB.prepare('SELECT u.id,u.email FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? LIMIT 1').bind(await digest(t),Date.now()).first<Session>();}
 function isAdmin(s:Session|null,e:PlatformEnv):boolean{return Boolean(s&&e.ADMIN_EMAIL&&s.email.trim().toLowerCase()===e.ADMIN_EMAIL.trim().toLowerCase());}
 function badOrigin(r:Request):boolean{const o=r.headers.get('Origin');return ['POST','PUT','PATCH','DELETE'].includes(r.method.toUpperCase())&&Boolean(o&&o!==new URL(r.url).origin);}
-async function readBody(r:Request):Promise<Body>{if(!(r.headers.get('Content-Type')||'').toLowerCase().includes('application/json'))throw new Error('Dane muszą być przesłane jako JSON.');const x:unknown=await r.json();if(!x||typeof x!=='object'||Array.isArray(x))throw new Error('Nieprawidłowe dane formularza.');return x as Body;}
+async function readBody(r:Request):Promise<Body>{
+ if(!(r.headers.get('Content-Type')||'').toLowerCase().includes('application/json'))throw new Error('Dane muszą być przesłane jako JSON.');
+ const reader=r.body?.getReader();let text='',total=0;const chunks:Uint8Array[]=[];
+ if(reader){while(true){const part=await reader.read();if(part.done)break;total+=part.value.byteLength;if(total>1024*1024){try{await reader.cancel();}catch{}throw new Error('Wysłane dane są zbyt duże.');}chunks.push(part.value);}}
+ const bytes=new Uint8Array(total);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}text=new TextDecoder().decode(bytes);
+ let x:unknown;try{x=JSON.parse(text);}catch{throw new Error('Nieprawidłowe dane formularza.');}
+ if(!x||typeof x!=='object'||Array.isArray(x))throw new Error('Nieprawidłowe dane formularza.');return x as Body;
+}
 function field(b:Body,k:string,max=2000):string{const x=typeof b[k]==='string'?(b[k] as string).trim():'';if(x.length>max)throw new Error('Pole '+k+' jest zbyt długie.');return x;}
 async function product(e:PlatformEnv,k:string):Promise<Product|null>{return e.DB.prepare('SELECT * FROM products WHERE product_key=? LIMIT 1').bind(k).first<Product>();}
 async function adminGate(r:Request,e:PlatformEnv){const s=await sessionFor(r,e);if(!s)return{session:null,response:reply({error:'Zaloguj się ponownie.'},401)};if(!isAdmin(s,e))return{session:s,response:reply({error:'Ta funkcja jest dostępna wyłącznie dla administratora.'},403)};return{session:s,response:null};}
