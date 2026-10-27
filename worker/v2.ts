@@ -71,6 +71,74 @@ async function ensureNotificationTables(env: V2Env): Promise<void> {
   )`).run();
 }
 
+const SF_CHALLENGE_FREE_ID = 'challenge-7-day-return';
+const SF_CHALLENGE_PAID_ID = 'challenge-14-day-consistency';
+const SF_CHALLENGE_PAID_PRODUCT_KEY = 'wyzwanie-14-dni-systematycznosci';
+type SFChallengeDay = { day: number; title: string; kind: 'workout' | 'recovery' | 'review'; details: string[] };
+const SF_FREE_CHALLENGE_DAYS: SFChallengeDay[] = [
+  { day: 1, title: 'Start i punkt odniesienia', kind: 'review', details: ['Zapisz swój cel na najbliższe 7 dni.', 'Wykonaj 10–20 minut spokojnego ruchu.', 'Zanotuj samopoczucie i realną dostępność czasową.'] },
+  { day: 2, title: 'Trening całego ciała A', kind: 'workout', details: ['Przysiady bez obciążenia — 3 × 10.', 'Pompki w odpowiednim wariancie — 3 × 6–10.', 'Most biodrowy — 3 × 12.', 'Zapisz wykonane powtórzenia i trudność.'] },
+  { day: 3, title: 'Regeneracja i spacer', kind: 'recovery', details: ['Wybierz spacer albo lekką aktywność przez 15–30 minut.', 'Nie nadrabiaj opuszczonych treningów na siłę.', 'Zadbaj o sen i nawodnienie.'] },
+  { day: 4, title: 'Trening całego ciała B', kind: 'workout', details: ['Wykroki w miejscu — 3 × 8 na stronę.', 'Pompki w wybranym wariancie — 3 × 6–10.', 'Bird dog — 3 × 8 na stronę.', 'Zachowaj kontrolę ruchu, nie ścigaj się z czasem.'] },
+  { day: 5, title: 'Utrwal nawyk', kind: 'review', details: ['Zaplanuj konkretny termin kolejnego treningu.', 'Przygotuj miejsce lub torbę treningową.', 'Zanotuj, co najbardziej ułatwiało regularność.'] },
+  { day: 6, title: 'Trening całego ciała C', kind: 'workout', details: ['Przysiady — 3 × 12.', 'Most biodrowy — 3 × 12.', 'Plank — 3 × 20–30 sekund.', 'Dostosuj wariant do możliwości i przerwij przy niepokojącym bólu.'] },
+  { day: 7, title: 'Podsumowanie tygodnia', kind: 'review', details: ['Sprawdź, ile dni udało się zrealizować.', 'Zapisz jedną rzecz, którą chcesz poprawić.', 'Wybierz realną liczbę treningów na następny tydzień.'] },
+];
+const SF_PAID_CHALLENGE_DAYS: SFChallengeDay[] = [
+  { day: 1, title: 'Start i pomiar bazowy', kind: 'review', details: ['Ustal cel i zapisz punkt startowy.', 'Wybierz 3 dni treningowe na ten tydzień.', 'Nie zmieniaj kilku nawyków naraz.'] },
+  { day: 2, title: 'Trening A — całe ciało', kind: 'workout', details: ['Przysiad lub suwnica — 3 × 8–12.', 'Wyciskanie lub pompki — 3 × 8–12.', 'Ściąganie drążka lub wiosłowanie — 3 × 10–12.', 'Zapisz serie, powtórzenia i użyty ciężar.'] },
+  { day: 3, title: 'Regeneracja', kind: 'recovery', details: ['Spacer 20–30 minut albo lekka mobilność.', 'Oceń sen i poziom energii.', 'Nie dodawaj dodatkowych ciężkich serii.'] },
+  { day: 4, title: 'Trening B — całe ciało', kind: 'workout', details: ['Rumuński martwy ciąg lub hip hinge — 3 × 8–10.', 'Wiosłowanie — 3 × 10–12.', 'Wyciskanie nad głowę lub jego wariant — 3 × 8–12.', 'Notuj ciężar i jakość techniki.'] },
+  { day: 5, title: 'Przegląd regularności', kind: 'review', details: ['Sprawdź wykonanie planu.', 'Zapisz, co przeszkadzało lub pomagało.', 'Przygotuj rzeczy do kolejnej sesji.'] },
+  { day: 6, title: 'Regeneracja i ruch', kind: 'recovery', details: ['Lekki spacer lub aktywność, którą lubisz.', 'Nie traktuj regeneracji jak zaległego treningu.', 'Zadbaj o odpowiednią ilość snu.'] },
+  { day: 7, title: 'Trening C — całe ciało', kind: 'workout', details: ['Wypychanie nóg lub przysiad — 3 × 10.', 'Wyciskanie hantli lub pompki — 3 × 8–12.', 'Ściąganie drążka lub wiosłowanie — 3 × 10–12.', 'Porównaj wyniki z pierwszą sesją bez pogarszania techniki.'] },
+  { day: 8, title: 'Podsumowanie tygodnia', kind: 'review', details: ['Podsumuj sesje i dni regeneracji.', 'Nie zwiększaj obciążenia, jeżeli technika na tym traci.', 'Ustal priorytet na drugi tydzień.'] },
+  { day: 9, title: 'Trening A — powtórz i porównaj', kind: 'workout', details: ['Powtórz zestaw z dnia 2.', 'Spróbuj poprawić jedną rzecz: powtórzenie, kontrolę lub mały ciężar.', 'Zapisz rezultat.'] },
+  { day: 10, title: 'Regeneracja', kind: 'recovery', details: ['Spacer albo lekka mobilność.', 'Sprawdź zmęczenie i samopoczucie.', 'Przy dużym zmęczeniu zmniejsz obciążenie.'] },
+  { day: 11, title: 'Trening B — powtórz i porównaj', kind: 'workout', details: ['Powtórz zestaw z dnia 4.', 'Zostaw 1–3 powtórzenia w zapasie w większości serii.', 'Porównaj powtórzenia i obciążenia.'] },
+  { day: 12, title: 'Dzień nawyków', kind: 'review', details: ['Sprawdź, czy kolejny trening jest zaplanowany.', 'Przygotuj sprzęt i miejsce.', 'Zapisz największą przeszkodę i sposób jej obejścia.'] },
+  { day: 13, title: 'Trening C — powtórz i porównaj', kind: 'workout', details: ['Powtórz zestaw z dnia 7.', 'Skup się na powtarzalnej technice.', 'Nie wymuszaj rekordu za wszelką cenę.'] },
+  { day: 14, title: 'Podsumowanie wyzwania', kind: 'review', details: ['Podsumuj ukończone dni i treningi.', 'Porównaj zapiski z dni 1 i 14.', 'Ustal następny realny krok treningowy.'] },
+];
+const SF_CHALLENGE_GUIDE = [
+  'Zapisuj wykonanie każdego dnia w aplikacji — nie polegaj na pamięci.',
+  'W treningu notuj ćwiczenie, serie, powtórzenia oraz ciężar lub wariant.',
+  'Progres może oznaczać lepszą kontrolę, więcej powtórzeń albo większy ciężar przy podobnej technice.',
+  'Dni regeneracyjne są częścią planu; nie nadrabiaj ich dodatkowym ciężkim treningiem.',
+  'Jeśli pojawi się niepokojący ból, przerwij ćwiczenie i nie próbuj go przetrenować.',
+];
+async function ensureChallengeTables(env: V2Env): Promise<void> {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS sf_challenges (
+    id TEXT PRIMARY KEY, challenge_key TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+    price_amount REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'PLN', is_free INTEGER NOT NULL DEFAULT 1,
+    product_key TEXT, duration_days INTEGER NOT NULL, training_plan_json TEXT NOT NULL, progress_guide_json TEXT NOT NULL,
+    is_published INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`).run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS sf_challenge_participants (
+    id TEXT PRIMARY KEY, challenge_id TEXT NOT NULL, user_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+    joined_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(challenge_id,user_id)
+  )`).run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS sf_challenge_day_logs (
+    id TEXT PRIMARY KEY, challenge_id TEXT NOT NULL, user_id TEXT NOT NULL, day_number INTEGER NOT NULL,
+    completed_at TEXT NOT NULL, UNIQUE(challenge_id,user_id,day_number)
+  )`).run();
+  await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_sf_challenge_participants_user ON sf_challenge_participants(user_id,status)').run();
+  const now = new Date().toISOString();
+  const productTitle = 'Wyzwanie 14 dni — systematyczność (edycja testowa)';
+  const productDescription = 'Testowe wyzwanie Systemu Formy na 14 dni z planem treningowym, regeneracją i śledzeniem wykonanych dni.';
+  await env.DB.prepare(`INSERT OR IGNORE INTO products(id,product_key,title,description,product_type,price_amount,currency,is_free,is_published,checkout_url,file_key,original_filename,file_content_type,created_at,updated_at)
+    VALUES(?,?,?,?,'other',29.99,'PLN',0,1,NULL,'','','application/octet-stream',?,?)`).bind(crypto.randomUUID(), SF_CHALLENGE_PAID_PRODUCT_KEY, productTitle, productDescription, now, now).run();
+  await env.DB.prepare("UPDATE products SET title=?,description=?,product_type='other',price_amount=29.99,currency='PLN',is_free=0,is_published=1,updated_at=? WHERE product_key=?")
+    .bind(productTitle, productDescription, now, SF_CHALLENGE_PAID_PRODUCT_KEY).run();
+  await env.DB.prepare(`INSERT OR IGNORE INTO sf_challenges(id,challenge_key,title,description,price_amount,currency,is_free,product_key,duration_days,training_plan_json,progress_guide_json,is_published,created_at,updated_at)
+    VALUES(?,?,?,?,0,'PLN',1,NULL,7,?,?,1,?,?)`).bind(SF_CHALLENGE_FREE_ID, 'powrot-7-dni', '7 dni powrotu do regularności', 'Krótkie bezpłatne wyzwanie na ponowne wejście w rytm: proste treningi, regeneracja i codzienny mały krok.', JSON.stringify(SF_FREE_CHALLENGE_DAYS), JSON.stringify(SF_CHALLENGE_GUIDE), now, now).run();
+  await env.DB.prepare(`INSERT OR IGNORE INTO sf_challenges(id,challenge_key,title,description,price_amount,currency,is_free,product_key,duration_days,training_plan_json,progress_guide_json,is_published,created_at,updated_at)
+    VALUES(?,?,?,?,29.99,'PLN',0,?,14,?,?,1,?,?)`).bind(SF_CHALLENGE_PAID_ID, 'systematycznosc-14-dni', productTitle, 'Testowy program na 14 dni: sześć zaplanowanych sesji, dni regeneracyjne i proste śledzenie progresu.', SF_CHALLENGE_PAID_PRODUCT_KEY, JSON.stringify(SF_PAID_CHALLENGE_DAYS), JSON.stringify(SF_CHALLENGE_GUIDE), now, now).run();
+}
+function notificationInsert(env: V2Env, userId: string, title: string, message: string, createdAt = new Date().toISOString()): D1PreparedStatement {
+  return env.DB.prepare('INSERT INTO app_notifications(id,title,message,target_user_id,created_by,created_at) VALUES(?,?,?,?,NULL,?)').bind(crypto.randomUUID(), title, message.slice(0, 1200), userId, createdAt);
+}
+
 async function ensureSystemTrainingProducts(env: V2Env): Promise<void> {
   const now = new Date().toISOString();
   const products = [
@@ -247,12 +315,14 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
       return reject('Nie znaleziono oczekującego formularza powiązanego z tą płatnością. Skontaktuj się z obsługą, nie płać ponownie.', sessionId);
     }
     const now = new Date().toISOString(), orderId = crypto.randomUUID(), display = await v2DisplayNumber(env, now);
+    await ensureNotificationTables(env);
     await env.DB.batch([
       env.DB.prepare('INSERT INTO stripe_webhook_events(event_id,event_type,received_at) VALUES(?,?,?)').bind(eventId, eventType, now),
       env.DB.prepare("INSERT INTO orders(id,user_id,order_number,status,total_amount,currency,created_at,updated_at) VALUES(?,?,?,'paid',?,?,?,?)").bind(orderId, userId, `STRIPE-${sessionId}`, amount / 100, currency, now, now),
       env.DB.prepare('INSERT INTO order_display_numbers(order_id,display_number,created_at) VALUES(?,?,?)').bind(orderId, display, now),
       env.DB.prepare('INSERT INTO order_items(id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES(?,?,?,?,?,1,?,?)').bind(crypto.randomUUID(), orderId, productKey, item.title, item.product_type, amount / 100, now),
       env.DB.prepare("UPDATE individual_plan_requests SET status='awaiting_questionnaire',payment_status='paid',order_id=?,updated_at=? WHERE id=? AND user_id=? AND checkout_session_id=? AND payment_status='pending'").bind(orderId, now, requestId, userId, sessionId),
+      notificationInsert(env, userId, 'Zakup potwierdzony', 'Płatność za plan indywidualny została potwierdzona. Twoje zamówienie czeka na realizację.', now),
       env.DB.prepare("UPDATE stripe_webhook_diagnostics SET status='processed',error_message='',checkout_session_id=?,order_id=?,processed_at=? WHERE event_id=?").bind(sessionId, orderId, now, eventId),
     ]);
     return v2Reply({ received: true, paid: true, order_id: orderId, display_order_number: display, individual_plan_request_id: requestId });
@@ -263,14 +333,25 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
   const discount = Math.max(0, Number(checkout.metadata?.discount_cents || 0)) / 100;
   const analyticsSession = typeof checkout.metadata?.analytics_session_key === 'string' ? checkout.metadata.analytics_session_key.slice(0, 100) : '';
   const display = await v2DisplayNumber(env, now);
+  await ensureNotificationTables(env);
+  const isPaidChallenge = productKey === SF_CHALLENGE_PAID_PRODUCT_KEY;
+  if (isPaidChallenge) await ensureChallengeTables(env);
   const statements: D1PreparedStatement[] = [
     env.DB.prepare('INSERT INTO stripe_webhook_events(event_id,event_type,received_at) VALUES(?,?,?)').bind(eventId, eventType, now),
     env.DB.prepare("INSERT INTO orders(id,user_id,order_number,status,total_amount,currency,created_at,updated_at) VALUES(?,?,?,'paid',?,?,?,?)").bind(orderId, userId, `STRIPE-${sessionId}`, amount / 100, currency, now, now),
     env.DB.prepare('INSERT INTO order_display_numbers(order_id,display_number,created_at) VALUES(?,?,?)').bind(orderId, display, now),
     env.DB.prepare('INSERT INTO order_items(id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES(?,?,?,?,?,1,?,?)').bind(crypto.randomUUID(), orderId, productKey, item.title, item.product_type, amount / 100, now),
     env.DB.prepare("INSERT INTO user_entitlements(id,user_id,order_id,product_key,product_title,product_type,access_status,created_at) SELECT ?,?,?,?,?,?,'active',? WHERE NOT EXISTS (SELECT 1 FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active')").bind(crypto.randomUUID(), userId, orderId, productKey, item.title, item.product_type, now, userId, productKey),
+    notificationInsert(env, userId, 'Zakup potwierdzony', `Płatność za „${item.title}” została potwierdzona. Produkt jest przypisany do Twojego konta.`, now),
     env.DB.prepare("UPDATE stripe_webhook_diagnostics SET status='processed',error_message='',checkout_session_id=?,order_id=?,processed_at=? WHERE event_id=?").bind(sessionId, orderId, now, eventId),
   ];
+  if (isPaidChallenge) {
+    const existingParticipant = await env.DB.prepare('SELECT id FROM sf_challenge_participants WHERE challenge_id=? AND user_id=? LIMIT 1').bind(SF_CHALLENGE_PAID_ID, userId).first<{id:string}>();
+    if (!existingParticipant) {
+      statements.push(env.DB.prepare("INSERT OR IGNORE INTO sf_challenge_participants(id,challenge_id,user_id,status,joined_at,updated_at) VALUES(?,?,?,'active',?,?)").bind(crypto.randomUUID(), SF_CHALLENGE_PAID_ID, userId, now, now));
+      statements.push(notificationInsert(env, userId, 'Wyzwanie rozpoczęte', 'Dołączyłeś do wyzwania „' + item.title + '”. Otwórz zakładkę Wyzwania, aby zobaczyć plan i zaznaczać wykonane dni.', now));
+    }
+  }
   if (item.product_type === 'bundle') {
     const components = await env.DB.prepare('SELECT p.product_key,p.title,p.product_type FROM bundle_items b JOIN products p ON p.product_key=b.component_product_key WHERE b.bundle_key=? ORDER BY b.sort_order,b.component_product_key').bind(productKey).all<{ product_key: string; title: string; product_type: string }>();
     for (const component of components.results) {
@@ -309,7 +390,11 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (!item.is_free) return v2Reply({ error: 'Ten produkt nie jest dostępny do bezpłatnego odbioru.' }, 403);
       const old = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(session.id, item.product_key).first<{id:string}>();
       const now = new Date().toISOString(), statements: D1PreparedStatement[] = [];
-      if (!old) statements.push(env.DB.prepare("INSERT INTO user_entitlements(id,user_id,order_id,product_key,product_title,product_type,access_status,created_at) VALUES(?,?,NULL,?,?,?,'active',?)").bind(crypto.randomUUID(), session.id, item.product_key, item.title, item.product_type, now));
+      if (!old) {
+        await ensureNotificationTables(env);
+        statements.push(env.DB.prepare("INSERT INTO user_entitlements(id,user_id,order_id,product_key,product_title,product_type,access_status,created_at) VALUES(?,?,NULL,?,?,?,'active',?)").bind(crypto.randomUUID(), session.id, item.product_key, item.title, item.product_type, now));
+        statements.push(notificationInsert(env, session.id, 'Materiał odblokowany', `Bezpłatny materiał „${item.title}” został przypisany do Twojego konta.`, now));
+      }
       if (item.product_type === 'bundle') {
         const components = await env.DB.prepare('SELECT p.product_key,p.title,p.product_type FROM bundle_items b JOIN products p ON p.product_key=b.component_product_key WHERE b.bundle_key=? AND p.is_published=1 ORDER BY b.sort_order,p.title').bind(item.product_key).all<{product_key:string;title:string;product_type:string}>();
         for (const component of components.results) statements.push(env.DB.prepare("INSERT INTO user_entitlements(id,user_id,order_id,product_key,product_title,product_type,access_status,created_at) SELECT ?,?,?,?, ?,?,'active',? WHERE NOT EXISTS (SELECT 1 FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active')").bind(crypto.randomUUID(),session.id,null,component.product_key,component.title,component.product_type,now,session.id,component.product_key));
@@ -340,6 +425,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
   try {
     // Publiczny katalog, kategorie i szczegóły produktu.
     if (path === '/api/v2/products' && method === 'GET') {
+      await ensureChallengeTables(env);
       const [rows, cats] = await Promise.all([
         env.DB.prepare("SELECT p.id,p.product_key,p.title,p.description,p.product_type,p.price_amount,p.currency,p.is_free,p.is_published,p.checkout_url,p.created_at,COALESCE(m.category_slug,'inne') AS category_slug,COALESCE(m.target_audience,'') AS target_audience,COALESCE(m.contents_json,'[]') AS contents_json,m.cover_key,d.discount_percent AS discount_percent,d.starts_at AS discount_starts_at,d.ends_at AS discount_ends_at,d.is_active AS discount_is_active FROM products p LEFT JOIN product_metadata m ON m.product_key=p.product_key LEFT JOIN product_discounts d ON d.product_key=p.product_key WHERE p.is_published=1 ORDER BY p.created_at DESC").all(),
         env.DB.prepare('SELECT slug,title,description FROM product_categories WHERE is_active=1 ORDER BY sort_order,title').all(),
@@ -439,6 +525,8 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const appliedCouponDiscount = Math.min(totalCents, Math.max(0, couponDiscount)); discountCents += appliedCouponDiscount; totalCents -= appliedCouponDiscount;
       }
       if (totalCents === 0) {
+        await ensureNotificationTables(env);
+        await ensureChallengeTables(env);
         const now = new Date().toISOString(), orderId = crypto.randomUUID(), number = `PROMO-${crypto.randomUUID().slice(0, 12).toUpperCase()}`;
         // Numery SF są osobne od numerów technicznych używanych przez Stripe i zachowują istniejące zamówienia.
         const display = await v2DisplayNumber(env, now);
@@ -447,7 +535,12 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
           env.DB.prepare('INSERT INTO order_display_numbers(order_id,display_number,created_at) VALUES(?,?,?)').bind(orderId, display, now),
           env.DB.prepare('INSERT INTO order_items(id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES(?,?,?,?,?,1,0,?)').bind(crypto.randomUUID(), orderId, key, item.title, item.product_type, now),
           env.DB.prepare("INSERT INTO user_entitlements(id,user_id,order_id,product_key,product_title,product_type,access_status,created_at) SELECT ?,?,?,?,?,?,'active',? WHERE NOT EXISTS (SELECT 1 FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active')").bind(crypto.randomUUID(), gate.session!.id, orderId, key, item.title, item.product_type, now, gate.session!.id, key),
+          notificationInsert(env, gate.session!.id, 'Produkt odblokowany', `Produkt „${item.title}” został odblokowany na Twoim koncie.`, now),
         ];
+        if (key === SF_CHALLENGE_PAID_PRODUCT_KEY) {
+          statements.push(env.DB.prepare("INSERT OR IGNORE INTO sf_challenge_participants(id,challenge_id,user_id,status,joined_at,updated_at) VALUES(?,?,?,'active',?,?)").bind(crypto.randomUUID(), SF_CHALLENGE_PAID_ID, gate.session!.id, now, now));
+          statements.push(notificationInsert(env, gate.session!.id, 'Wyzwanie rozpoczęte', 'Dołączyłeś do wyzwania „' + item.title + '”. Plan i postęp znajdziesz w zakładce Wyzwania.', now));
+        }
         if (item.product_type === 'bundle') {
           const components = await env.DB.prepare('SELECT p.product_key,p.title,p.product_type FROM bundle_items b JOIN products p ON p.product_key=b.component_product_key WHERE b.bundle_key=? AND p.is_published=1 ORDER BY b.sort_order,b.component_product_key').bind(key).all<{ product_key: string; title: string; product_type: string }>();
           for (const component of components.results) statements.push(env.DB.prepare("INSERT INTO user_entitlements(id,user_id,order_id,product_key,product_title,product_type,access_status,created_at) SELECT ?,?,?,?,?,?,'active',? WHERE NOT EXISTS (SELECT 1 FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active')").bind(crypto.randomUUID(), gate.session!.id, orderId, component.product_key, component.title, component.product_type, now, gate.session!.id, component.product_key));
@@ -497,7 +590,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     }
     if (path === '/api/v2/account/materials' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
-      const rows = await env.DB.prepare("SELECT e.id,e.product_key,e.product_title,e.product_type,e.access_status,e.created_at,p.description,p.is_published FROM user_entitlements e LEFT JOIN products p ON p.product_key=e.product_key WHERE e.user_id=? AND e.access_status='active' ORDER BY e.created_at DESC").bind(gate.session!.id).all();
+      const rows = await env.DB.prepare("SELECT e.id,e.product_key,e.product_title,e.product_type,e.access_status,e.created_at,p.description,p.is_published FROM user_entitlements e LEFT JOIN products p ON p.product_key=e.product_key WHERE e.user_id=? AND e.access_status='active' AND e.product_key!=? ORDER BY e.created_at DESC").bind(gate.session!.id, SF_CHALLENGE_PAID_PRODUCT_KEY).all();
       return v2Reply({ materials: rows.results });
     }
 
@@ -567,7 +660,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (!consent) return v2Reply({ error: 'Zaznacz zgodę na wykorzystanie odpowiedzi do obsługi zamówienia.' }, 400);
       const profile = await env.DB.prepare('SELECT first_name FROM user_profiles WHERE user_id=? LIMIT 1').bind(gate.session!.id).first<{ first_name: string | null }>().catch(() => null);
       const fullName = (profile?.first_name || '').trim().slice(0, 80), now = new Date().toISOString();
-      let requestId = crypto.randomUUID();
+      let requestId: string = crypto.randomUUID();
       if (requestedId) {
         const draft = await env.DB.prepare('SELECT id,user_id,payment_status FROM individual_plan_requests WHERE id=? LIMIT 1').bind(requestedId).first<{id:string;user_id:string;payment_status:string}>();
         if (!draft || draft.user_id !== gate.session!.id || draft.payment_status !== 'pending') return v2Reply({ error: 'Nie można wznowić tego formularza. Odśwież stronę i rozpocznij nowe zamówienie.' }, 409);
@@ -847,6 +940,57 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       return v2Reply({ ok: true, id, status: 'open' }, 201);
     }
 
+    if (path === '/api/v2/challenges' && method === 'GET') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      await ensureChallengeTables(env);
+      const rows = await env.DB.prepare(`SELECT c.*,COALESCE(p.status,'') AS user_status,p.joined_at,
+        (SELECT COUNT(*) FROM sf_challenge_participants cp WHERE cp.challenge_id=c.id AND cp.status IN ('active','completed')) AS participants_count,
+        (SELECT COUNT(*) FROM sf_challenge_day_logs l WHERE l.challenge_id=c.id AND l.user_id=?) AS completed_days,
+        COALESCE((SELECT group_concat(l.day_number, ',') FROM sf_challenge_day_logs l WHERE l.challenge_id=c.id AND l.user_id=?),'') AS completed_day_numbers
+        FROM sf_challenges c LEFT JOIN sf_challenge_participants p ON p.challenge_id=c.id AND p.user_id=?
+        WHERE c.is_published=1 ORDER BY c.is_free DESC,c.duration_days ASC`).bind(gate.session!.id, gate.session!.id, gate.session!.id).all();
+      return v2Reply({ challenges: rows.results || [] });
+    }
+    const challengeActionMatch = path.match(/^\/api\/v2\/challenges\/([a-z0-9-]+)\/(join|progress)$/i);
+    if (challengeActionMatch && method === 'POST') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      await ensureChallengeTables(env); await ensureNotificationTables(env);
+      const challengeId = challengeActionMatch[1], action = challengeActionMatch[2].toLowerCase();
+      const challenge = await env.DB.prepare('SELECT id,title,is_free,product_key,duration_days FROM sf_challenges WHERE id=? AND is_published=1 LIMIT 1').bind(challengeId).first<{id:string;title:string;is_free:number;product_key:string|null;duration_days:number}>();
+      if (!challenge) return v2Reply({error:'Nie znaleziono aktywnego wyzwania.'},404);
+      const now = new Date().toISOString();
+      if (action === 'join') {
+        if (!challenge.is_free && challenge.product_key) {
+          const access = await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(gate.session!.id, challenge.product_key).first<{id:string}>();
+          if (!access) return v2Reply({error:'To wyzwanie jest płatne. Najpierw opłać produkt.'},402);
+        }
+        const existingParticipant = await env.DB.prepare('SELECT id,status FROM sf_challenge_participants WHERE challenge_id=? AND user_id=? LIMIT 1').bind(challenge.id, gate.session!.id).first<{id:string;status:string}>();
+        if (existingParticipant) return v2Reply({ok:true,already_joined:true,status:existingParticipant.status});
+        await env.DB.batch([
+          env.DB.prepare("INSERT INTO sf_challenge_participants(id,challenge_id,user_id,status,joined_at,updated_at) VALUES(?,?,?,'active',?,?)").bind(crypto.randomUUID(), challenge.id, gate.session!.id, now, now),
+          notificationInsert(env, gate.session!.id, 'Wyzwanie rozpoczęte', `Rozpocząłeś wyzwanie „${challenge.title}”. Plan i wykonane dni znajdziesz w zakładce Wyzwania.`, now),
+        ]);
+        return v2Reply({ok:true,status:'active'},201);
+      }
+      const body = await v2Body(request), dayNumber = Number(body.day_number);
+      if (!Number.isInteger(dayNumber) || dayNumber < 1 || dayNumber > challenge.duration_days) return v2Reply({error:'Wskaż prawidłowy dzień wyzwania.'},400);
+      const participant = await env.DB.prepare('SELECT id,status FROM sf_challenge_participants WHERE challenge_id=? AND user_id=? LIMIT 1').bind(challenge.id, gate.session!.id).first<{id:string;status:string}>();
+      if (!participant) return v2Reply({error:'Najpierw dołącz do wyzwania.'},403);
+      if (participant.status === 'completed') return v2Reply({ok:true,already_completed:true,status:'completed'});
+      const result = await env.DB.prepare('INSERT OR IGNORE INTO sf_challenge_day_logs(id,challenge_id,user_id,day_number,completed_at) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(), challenge.id, gate.session!.id, dayNumber, now).run();
+      const count = await env.DB.prepare('SELECT COUNT(*) AS count FROM sf_challenge_day_logs WHERE challenge_id=? AND user_id=?').bind(challenge.id, gate.session!.id).first<{count:number}>();
+      const complete = Number(count?.count || 0) >= challenge.duration_days;
+      if (complete && participant.status !== 'completed') {
+        await env.DB.batch([
+          env.DB.prepare("UPDATE sf_challenge_participants SET status='completed',updated_at=? WHERE challenge_id=? AND user_id=?").bind(now, challenge.id, gate.session!.id),
+          notificationInsert(env, gate.session!.id, 'Wyzwanie ukończone', `Ukończyłeś wyzwanie „${challenge.title}”. Sprawdź swój zapisany postęp i zaplanuj kolejny krok.`, now),
+        ]);
+      } else if (result.meta.changes) {
+        await env.DB.prepare('UPDATE sf_challenge_participants SET updated_at=? WHERE challenge_id=? AND user_id=?').bind(now, challenge.id, gate.session!.id).run();
+      }
+      return v2Reply({ok:true,completed_days:Number(count?.count||0),duration_days:challenge.duration_days,status:complete?'completed':'active'});
+    }
+
     if (path === '/api/v2/notifications' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       await ensureNotificationTables(env);
@@ -957,14 +1101,23 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const b = await v2Body(request), status = v2Field(b, 'status', 30), adminNote = v2Field(b, 'admin_note', 4000);
         if (!['awaiting_questionnaire','in_preparation','ready','canceled','refunded'].includes(status)) return v2Reply({ error: 'Nieprawidłowy status zamówienia planu indywidualnego.' }, 400);
         const now = new Date().toISOString();
-        const existing = await env.DB.prepare('SELECT id,training_plan_id,training_plan_json FROM individual_plan_requests WHERE id=? LIMIT 1').bind(individualRequestMatch[1]).first<{id:string;training_plan_id:string|null;training_plan_json:string|null}>();
+        const existing = await env.DB.prepare('SELECT id,user_id,status,training_plan_id,training_plan_json,training_plan_name FROM individual_plan_requests WHERE id=? LIMIT 1').bind(individualRequestMatch[1]).first<{id:string;user_id:string;status:string;training_plan_id:string|null;training_plan_json:string|null;training_plan_name:string|null}>();
         if (!existing) return v2Reply({ error: 'Nie znaleziono zamówienia planu indywidualnego.' }, 404);
         if (status === 'ready' && (!existing.training_plan_id || !existing.training_plan_json)) return v2Reply({ error: 'Najpierw zapisz plan treningowy w edytorze poniżej. Dopiero potem ustaw status „Zrealizowany”.' }, 409);
         const orderStatus = status === 'in_preparation' ? 'processing' : status === 'ready' ? 'fulfilled' : status === 'canceled' ? 'canceled' : status === 'refunded' ? 'refunded' : 'paid';
-        const results = await env.DB.batch([
+        const statements: D1PreparedStatement[] = [
           env.DB.prepare('UPDATE individual_plan_requests SET status=?,admin_note=?,updated_at=? WHERE id=?').bind(status, adminNote, now, individualRequestMatch[1]),
           env.DB.prepare(`UPDATE orders SET status=?,updated_at=? WHERE id=(SELECT order_id FROM individual_plan_requests WHERE id=?) AND EXISTS (SELECT 1 FROM order_items i WHERE i.order_id=orders.id AND i.product_key=?)`).bind(orderStatus, now, individualRequestMatch[1], V2_INDIVIDUAL_PLAN_PRODUCT_KEY),
-        ]);
+        ];
+        if (existing.status !== status) {
+          await ensureNotificationTables(env);
+          if (status === 'in_preparation') statements.push(notificationInsert(env, existing.user_id, 'Twój plan jest realizowany', 'Rozpoczęliśmy przygotowanie Twojego planu indywidualnego. Status zamówienia został zmieniony na „W realizacji”.', now));
+          else if (status === 'ready') statements.push(notificationInsert(env, existing.user_id, 'Twój plan jest gotowy', `Plan „${existing.training_plan_name || 'Plan indywidualny'}” został zrealizowany i przypisany do Twojego konta. Otwórz zakładkę Plan, aby go zobaczyć.`, now));
+          else if (status === 'canceled') statements.push(notificationInsert(env, existing.user_id, 'Zamówienie anulowane', 'Twoje zamówienie planu indywidualnego zostało anulowane. W razie pytań skontaktuj się z obsługą.', now));
+          else if (status === 'refunded') statements.push(notificationInsert(env, existing.user_id, 'Zwrot zamówienia', 'Status zamówienia planu indywidualnego zmieniono na „Zwrócono”.', now));
+          else if (status === 'awaiting_questionnaire' && existing.status !== 'awaiting_questionnaire') statements.push(notificationInsert(env, existing.user_id, 'Potrzebujemy Twojej ankiety', 'Aby rozpocząć przygotowanie planu, dokończ ankietę w panelu klienta.', now));
+        }
+        const results = await env.DB.batch(statements);
         if (!results[0]?.meta?.changes) return v2Reply({ error: 'Nie udało się zapisać statusu zamówienia.' }, 500);
         // Status zamówienia i status realizacji są synchronizowane. E-mail wysyła administrator ręcznie poza aplikacją.
         return v2Reply({ ok: true, status, order_status: orderStatus, updated_at: now });

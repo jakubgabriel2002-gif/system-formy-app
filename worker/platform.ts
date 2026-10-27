@@ -55,10 +55,13 @@ export async function handlePlatformApi(request:Request,env:PlatformEnv):Promise
    const now=new Date().toISOString();
    if(existingOrder){await env.DB.prepare('INSERT INTO stripe_webhook_events (event_id,event_type,received_at) VALUES (?,?,?)').bind(eventId,eventType,now).run();return reply({received:true,duplicate:true});}
    const orderId=crypto.randomUUID(),entitlement=await env.DB.prepare("SELECT id FROM user_entitlements WHERE user_id=? AND product_key=? AND access_status='active' LIMIT 1").bind(userId,key).first<{id:string}>();
+   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS app_notifications (id TEXT PRIMARY KEY, title TEXT NOT NULL, message TEXT NOT NULL, target_user_id TEXT, created_by TEXT, created_at TEXT NOT NULL)`).run();
+   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS app_notification_reads (notification_id TEXT NOT NULL, user_id TEXT NOT NULL, read_at TEXT NOT NULL, PRIMARY KEY(notification_id,user_id))`).run();
    const stmts:D1PreparedStatement[]=[
     env.DB.prepare('INSERT INTO stripe_webhook_events (event_id,event_type,received_at) VALUES (?,?,?)').bind(eventId,eventType,now),
     env.DB.prepare("INSERT INTO orders (id,user_id,order_number,status,total_amount,currency,created_at,updated_at) VALUES (?,?,?,'paid',?,?,?,?)").bind(orderId,userId,`STRIPE-${sessionId}`,amount/100,currency,now,now),
-    env.DB.prepare('INSERT INTO order_items (id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES (?,?,?,?,?,1,?,?)').bind(crypto.randomUUID(),orderId,key,item.title,item.product_type,amount/100,now,now)
+    env.DB.prepare('INSERT INTO order_items (id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES (?,?,?,?,?,1,?,?)').bind(crypto.randomUUID(),orderId,key,item.title,item.product_type,amount/100,now),
+    env.DB.prepare('INSERT INTO app_notifications(id,title,message,target_user_id,created_by,created_at) VALUES(?,?,?,?,NULL,?)').bind(crypto.randomUUID(),'Zakup potwierdzony',`Płatność za „${item.title}” została potwierdzona. Produkt jest przypisany do Twojego konta.`,userId,now)
    ];
    if(!entitlement)stmts.push(env.DB.prepare("INSERT INTO user_entitlements (id,user_id,order_id,product_key,product_title,product_type,access_status,created_at) VALUES (?,?,?,?,?,?,'active',?)").bind(crypto.randomUUID(),userId,orderId,key,item.title,item.product_type,now));
    await env.DB.batch(stmts);return reply({received:true,paid:true});
