@@ -4,7 +4,7 @@ Aplikacja fitness oparta na React, TypeScript i Vite, z API w Cloudflare Workers
 
 ## Uruchomienie i build
 
-Wymagany Node.js 22 lub nowszy.
+Wymagany Node.js 22.12.0 lub nowszy (wymaganie wersji Vite z lockfile).
 
 ```bash
 npm ci
@@ -45,4 +45,4 @@ W części endpointów tabela lub indeks jest tworzony idempotentnie przez Worke
 3. Przetestuj widoki na wąskim ekranie i w trybie „ogranicz ruch” systemu.
 4. Uzupełnij i zweryfikuj treści regulaminu oraz polityki prywatności przed sprzedażą publiczną.
 
-Szczegółowe decyzje dotyczące porządków, wydajności oraz bezpiecznego czyszczenia repozytorium opisuje `docs/OPTYMALIZACJA_I_PORZADKI.md`.
+Plan bezpieczeństwa, przygotowania do produkcji i rozwoju w stronę aplikacji mobilnej opisuje `docs/OPTYMALIZACJA_I_PORZADKI.md`. Uwaga: w aktualnym archiwum nie ma jeszcze wersjonowanych migracji D1; nie odtwarzaj bazy produkcyjnej ani nie uruchamiaj migracji na danych produkcyjnych bez przygotowanego i sprawdzonego schematu.
