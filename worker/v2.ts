@@ -278,47 +278,13 @@ async function createNotificationTables(env: V2Env): Promise<void> {
   await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_app_notification_reads_user ON app_notification_reads(user_id, notification_id)').run();
 }
 
-const SF_CHALLENGE_FREE_ID = 'challenge-7-day-return';
-const SF_CHALLENGE_PAID_ID = 'challenge-14-day-consistency';
-const SF_CHALLENGE_PAID_PRODUCT_KEY = 'wyzwanie-14-dni-systematycznosci';
-type SFChallengeDay = { day: number; title: string; kind: 'workout' | 'recovery' | 'review'; details: string[] };
-const SF_FREE_CHALLENGE_DAYS: SFChallengeDay[] = [
-  { day: 1, title: 'Start i punkt odniesienia', kind: 'review', details: ['Zapisz swój cel na najbliższe 7 dni.', 'Wykonaj 10–20 minut spokojnego ruchu.', 'Zanotuj samopoczucie i realną dostępność czasową.'] },
-  { day: 2, title: 'Trening całego ciała A', kind: 'workout', details: ['Przysiady bez obciążenia — 3 × 10.', 'Pompki w odpowiednim wariancie — 3 × 6–10.', 'Most biodrowy — 3 × 12.', 'Zapisz wykonane powtórzenia i trudność.'] },
-  { day: 3, title: 'Regeneracja i spacer', kind: 'recovery', details: ['Wybierz spacer albo lekką aktywność przez 15–30 minut.', 'Nie nadrabiaj opuszczonych treningów na siłę.', 'Zadbaj o sen i nawodnienie.'] },
-  { day: 4, title: 'Trening całego ciała B', kind: 'workout', details: ['Wykroki w miejscu — 3 × 8 na stronę.', 'Pompki w wybranym wariancie — 3 × 6–10.', 'Bird dog — 3 × 8 na stronę.', 'Zachowaj kontrolę ruchu, nie ścigaj się z czasem.'] },
-  { day: 5, title: 'Utrwal nawyk', kind: 'review', details: ['Zaplanuj konkretny termin kolejnego treningu.', 'Przygotuj miejsce lub torbę treningową.', 'Zanotuj, co najbardziej ułatwiało regularność.'] },
-  { day: 6, title: 'Trening całego ciała C', kind: 'workout', details: ['Przysiady — 3 × 12.', 'Most biodrowy — 3 × 12.', 'Plank — 3 × 20–30 sekund.', 'Dostosuj wariant do możliwości i przerwij przy niepokojącym bólu.'] },
-  { day: 7, title: 'Podsumowanie tygodnia', kind: 'review', details: ['Sprawdź, ile dni udało się zrealizować.', 'Zapisz jedną rzecz, którą chcesz poprawić.', 'Wybierz realną liczbę treningów na następny tydzień.'] },
-];
-const SF_PAID_CHALLENGE_DAYS: SFChallengeDay[] = [
-  { day: 1, title: 'Start i pomiar bazowy', kind: 'review', details: ['Ustal cel i zapisz punkt startowy.', 'Wybierz 3 dni treningowe na ten tydzień.', 'Nie zmieniaj kilku nawyków naraz.'] },
-  { day: 2, title: 'Trening A — całe ciało', kind: 'workout', details: ['Przysiad lub suwnica — 3 × 8–12.', 'Wyciskanie lub pompki — 3 × 8–12.', 'Ściąganie drążka lub wiosłowanie — 3 × 10–12.', 'Zapisz serie, powtórzenia i użyty ciężar.'] },
-  { day: 3, title: 'Regeneracja', kind: 'recovery', details: ['Spacer 20–30 minut albo lekka mobilność.', 'Oceń sen i poziom energii.', 'Nie dodawaj dodatkowych ciężkich serii.'] },
-  { day: 4, title: 'Trening B — całe ciało', kind: 'workout', details: ['Rumuński martwy ciąg lub hip hinge — 3 × 8–10.', 'Wiosłowanie — 3 × 10–12.', 'Wyciskanie nad głowę lub jego wariant — 3 × 8–12.', 'Notuj ciężar i jakość techniki.'] },
-  { day: 5, title: 'Przegląd regularności', kind: 'review', details: ['Sprawdź wykonanie planu.', 'Zapisz, co przeszkadzało lub pomagało.', 'Przygotuj rzeczy do kolejnej sesji.'] },
-  { day: 6, title: 'Regeneracja i ruch', kind: 'recovery', details: ['Lekki spacer lub aktywność, którą lubisz.', 'Nie traktuj regeneracji jak zaległego treningu.', 'Zadbaj o odpowiednią ilość snu.'] },
-  { day: 7, title: 'Trening C — całe ciało', kind: 'workout', details: ['Wypychanie nóg lub przysiad — 3 × 10.', 'Wyciskanie hantli lub pompki — 3 × 8–12.', 'Ściąganie drążka lub wiosłowanie — 3 × 10–12.', 'Porównaj wyniki z pierwszą sesją bez pogarszania techniki.'] },
-  { day: 8, title: 'Podsumowanie tygodnia', kind: 'review', details: ['Podsumuj sesje i dni regeneracji.', 'Nie zwiększaj obciążenia, jeżeli technika na tym traci.', 'Ustal priorytet na drugi tydzień.'] },
-  { day: 9, title: 'Trening A — powtórz i porównaj', kind: 'workout', details: ['Powtórz zestaw z dnia 2.', 'Spróbuj poprawić jedną rzecz: powtórzenie, kontrolę lub mały ciężar.', 'Zapisz rezultat.'] },
-  { day: 10, title: 'Regeneracja', kind: 'recovery', details: ['Spacer albo lekka mobilność.', 'Sprawdź zmęczenie i samopoczucie.', 'Przy dużym zmęczeniu zmniejsz obciążenie.'] },
-  { day: 11, title: 'Trening B — powtórz i porównaj', kind: 'workout', details: ['Powtórz zestaw z dnia 4.', 'Zostaw 1–3 powtórzenia w zapasie w większości serii.', 'Porównaj powtórzenia i obciążenia.'] },
-  { day: 12, title: 'Dzień nawyków', kind: 'review', details: ['Sprawdź, czy kolejny trening jest zaplanowany.', 'Przygotuj sprzęt i miejsce.', 'Zapisz największą przeszkodę i sposób jej obejścia.'] },
-  { day: 13, title: 'Trening C — powtórz i porównaj', kind: 'workout', details: ['Powtórz zestaw z dnia 7.', 'Skup się na powtarzalnej technice.', 'Nie wymuszaj rekordu za wszelką cenę.'] },
-  { day: 14, title: 'Podsumowanie wyzwania', kind: 'review', details: ['Podsumuj ukończone dni i treningi.', 'Porównaj zapiski z dni 1 i 14.', 'Ustal następny realny krok treningowy.'] },
-];
-const SF_CHALLENGE_GUIDE = [
-  'Zapisuj wykonanie każdego dnia w aplikacji — nie polegaj na pamięci.',
-  'W treningu notuj ćwiczenie, serie, powtórzenia oraz ciężar lub wariant.',
-  'Progres może oznaczać lepszą kontrolę, więcej powtórzeń albo większy ciężar przy podobnej technice.',
-  'Dni regeneracyjne są częścią planu; nie nadrabiaj ich dodatkowym ciężkim treningiem.',
-  'Jeśli pojawi się niepokojący ból, przerwij ćwiczenie i nie próbuj go przetrenować.',
-];
 function ensureChallengeTables(env: V2Env): Promise<void> {
   return ensureSchemaOnce(env, 'challenges', () => createChallengeTables(env));
 }
 
 async function createChallengeTables(env: V2Env): Promise<void> {
+  // Tworzymy wyłącznie schemat. Wyzwania nie są już automatycznie seedowane:
+  // administrator publikuje tylko wybrane, przygotowane oferty.
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS sf_challenges (
     id TEXT PRIMARY KEY, challenge_key TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
     price_amount REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'PLN', is_free INTEGER NOT NULL DEFAULT 1,
@@ -335,17 +301,6 @@ async function createChallengeTables(env: V2Env): Promise<void> {
   )`).run();
   await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_sf_challenge_participants_user ON sf_challenge_participants(user_id,status)').run();
   await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_sf_challenge_day_logs_user ON sf_challenge_day_logs(user_id,challenge_id,day_number)').run();
-  const now = new Date().toISOString();
-  const productTitle = 'Wyzwanie 14 dni — systematyczność (edycja testowa)';
-  const productDescription = 'Testowe wyzwanie Systemu Formy na 14 dni z planem treningowym, regeneracją i śledzeniem wykonanych dni.';
-  await env.DB.prepare(`INSERT OR IGNORE INTO products(id,product_key,title,description,product_type,price_amount,currency,is_free,is_published,checkout_url,file_key,original_filename,file_content_type,created_at,updated_at)
-    VALUES(?,?,?,?,'other',29.99,'PLN',0,1,NULL,'','','application/octet-stream',?,?)`).bind(crypto.randomUUID(), SF_CHALLENGE_PAID_PRODUCT_KEY, productTitle, productDescription, now, now).run();
-  await env.DB.prepare("UPDATE products SET title=?,description=?,product_type='other',price_amount=29.99,currency='PLN',is_free=0,is_published=1,updated_at=? WHERE product_key=?")
-    .bind(productTitle, productDescription, now, SF_CHALLENGE_PAID_PRODUCT_KEY).run();
-  await env.DB.prepare(`INSERT OR IGNORE INTO sf_challenges(id,challenge_key,title,description,price_amount,currency,is_free,product_key,duration_days,training_plan_json,progress_guide_json,is_published,created_at,updated_at)
-    VALUES(?,?,?,?,0,'PLN',1,NULL,7,?,?,1,?,?)`).bind(SF_CHALLENGE_FREE_ID, 'powrot-7-dni', '7 dni powrotu do regularności', 'Krótkie bezpłatne wyzwanie na ponowne wejście w rytm: proste treningi, regeneracja i codzienny mały krok.', JSON.stringify(SF_FREE_CHALLENGE_DAYS), JSON.stringify(SF_CHALLENGE_GUIDE), now, now).run();
-  await env.DB.prepare(`INSERT OR IGNORE INTO sf_challenges(id,challenge_key,title,description,price_amount,currency,is_free,product_key,duration_days,training_plan_json,progress_guide_json,is_published,created_at,updated_at)
-    VALUES(?,?,?,?,29.99,'PLN',0,?,14,?,?,1,?,?)`).bind(SF_CHALLENGE_PAID_ID, 'systematycznosc-14-dni', productTitle, 'Testowy program na 14 dni: sześć zaplanowanych sesji, dni regeneracyjne i proste śledzenie progresu.', SF_CHALLENGE_PAID_PRODUCT_KEY, JSON.stringify(SF_PAID_CHALLENGE_DAYS), JSON.stringify(SF_CHALLENGE_GUIDE), now, now).run();
 }
 function notificationInsert(env: V2Env, userId: string, title: string, message: string, createdAt = new Date().toISOString()): D1PreparedStatement {
   return env.DB.prepare('INSERT INTO app_notifications(id,title,message,target_user_id,created_by,created_at) VALUES(?,?,?,?,NULL,?)').bind(crypto.randomUUID(), title, message.slice(0, 1200), userId, createdAt);
@@ -1678,20 +1633,57 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         if (!target) return v2Reply({error:'Nie znaleziono użytkownika.'},404);
         if (method === 'DELETE') {
           if (target.email.trim().toLowerCase() === (env.ADMIN_EMAIL || '').trim().toLowerCase()) return v2Reply({error:'Nie można usunąć konta administratora.'},400);
-          const statements:D1PreparedStatement[]=[
-            env.DB.prepare('DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE user_id=?)').bind(userId),
-            env.DB.prepare('DELETE FROM order_display_numbers WHERE order_id IN (SELECT id FROM orders WHERE user_id=?)').bind(userId),
-            env.DB.prepare('DELETE FROM promotion_redemptions WHERE user_id=?').bind(userId),
-            env.DB.prepare('DELETE FROM orders WHERE user_id=?').bind(userId),
-            env.DB.prepare('DELETE FROM auth_sessions WHERE user_id=?').bind(userId),
-            env.DB.prepare('DELETE FROM user_entitlements WHERE user_id=?').bind(userId),
-            env.DB.prepare('DELETE FROM user_profiles WHERE user_id=?').bind(userId),
-            env.DB.prepare('DELETE FROM workout_sessions WHERE user_id=?').bind(userId),
-            env.DB.prepare('DELETE FROM workout_plans WHERE user_id=?').bind(userId),
-            env.DB.prepare('DELETE FROM support_tickets WHERE user_id=?').bind(userId),
-            env.DB.prepare('DELETE FROM product_analytics WHERE user_id=?').bind(userId),
-            env.DB.prepare('DELETE FROM users WHERE id=?').bind(userId)
-          ]; await env.DB.batch(statements);
+          // Tabela zależne są sprawdzane przed budowaniem DELETE. Dzięki temu starsze
+          // albo nieużywane tabele nie powodują 500 podczas usuwania konta.
+          const deleteTableNames = [
+            'orders','order_items','order_display_numbers','promotion_redemptions','auth_sessions','user_entitlements',
+            'user_profiles','workout_sessions','training_plans_v2','training_plan_days_v2','training_plan_exercises_v2',
+            'training_session_drafts','individual_plan_requests','support_tickets','product_analytics','weekly_checkins',
+            'user_goals','user_measurements','app_notification_reads','app_notifications','sf_challenge_day_logs',
+            'sf_challenge_participants','premium_trials','premium_subscriptions','users'
+          ];
+          const tableInfo = await env.DB.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${deleteTableNames.map(()=>'?').join(',')})`)
+            .bind(...deleteTableNames).all<{name:string}>();
+          const existingTables = new Set((tableInfo.results || []).map(row => row.name));
+          // Nie usuwamy konta z aktywną subskrypcją pozostawioną w Stripe, bo mogłoby to
+          // odciąć możliwość prawidłowego powiązania odnowień/anulowania z użytkownikiem.
+          if (existingTables.has('premium_subscriptions')) {
+            const activeSubscription = await env.DB.prepare(`SELECT stripe_subscription_id FROM premium_subscriptions
+              WHERE user_id=? AND status IN ('active','trialing','past_due')
+              AND (current_period_end IS NULL OR current_period_end>?) LIMIT 1`)
+              .bind(userId,new Date().toISOString()).first<{stripe_subscription_id:string}>();
+            if (activeSubscription) return v2Reply({error:'Konto ma aktywną subskrypcję Premium. Anuluj ją w Stripe i poczekaj na aktualizację statusu przed usunięciem użytkownika.'},409);
+          }
+          const statements:D1PreparedStatement[]=[];
+          const addDelete = (table:string, sql:string, values:unknown[]=[userId]) => {
+            if (existingTables.has(table)) statements.push(env.DB.prepare(sql).bind(...values));
+          };
+          if (existingTables.has('order_items') && existingTables.has('orders')) {
+            addDelete('order_items','DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE user_id=?)');
+          }
+          if (existingTables.has('order_display_numbers') && existingTables.has('orders')) {
+            addDelete('order_display_numbers','DELETE FROM order_display_numbers WHERE order_id IN (SELECT id FROM orders WHERE user_id=?)');
+          }
+          for (const table of [
+            'promotion_redemptions','auth_sessions','user_entitlements','user_profiles','workout_sessions',
+            'training_session_drafts','individual_plan_requests','support_tickets','product_analytics',
+            'weekly_checkins','user_goals','user_measurements','app_notification_reads','sf_challenge_day_logs',
+            'sf_challenge_participants','premium_trials','premium_subscriptions'
+          ]) addDelete(table,`DELETE FROM ${table} WHERE user_id=?`);
+          if (existingTables.has('app_notifications')) {
+            addDelete('app_notifications','DELETE FROM app_notifications WHERE target_user_id=?');
+          }
+          if (existingTables.has('training_plan_exercises_v2') && existingTables.has('training_plan_days_v2') && existingTables.has('training_plans_v2')) {
+            addDelete('training_plan_exercises_v2','DELETE FROM training_plan_exercises_v2 WHERE day_id IN (SELECT id FROM training_plan_days_v2 WHERE plan_id IN (SELECT id FROM training_plans_v2 WHERE user_id=?))');
+          }
+          if (existingTables.has('training_plan_days_v2') && existingTables.has('training_plans_v2')) {
+            addDelete('training_plan_days_v2','DELETE FROM training_plan_days_v2 WHERE plan_id IN (SELECT id FROM training_plans_v2 WHERE user_id=?)');
+          }
+          if (existingTables.has('training_plans_v2')) addDelete('training_plans_v2','DELETE FROM training_plans_v2 WHERE user_id=?');
+          if (existingTables.has('orders')) addDelete('orders','DELETE FROM orders WHERE user_id=?');
+          addDelete('users','DELETE FROM users WHERE id=?');
+          if (!existingTables.has('users')) return v2Reply({error:'Nie można usunąć konta: tabela użytkowników jest niedostępna.'},500);
+          await env.DB.batch(statements);
           return v2Reply({ok:true,deleted:true});
         }
         const b=await v2Body(request), email=v2Field(b,'email',254).toLowerCase(), password=v2Field(b,'new_password',128);
