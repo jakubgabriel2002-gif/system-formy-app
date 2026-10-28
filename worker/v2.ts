@@ -890,7 +890,14 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     if (path === '/api/v2/account/materials' && method === 'GET') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       await v2IsPremium(env, gate.session!.id);
-      const rows = await env.DB.prepare("SELECT e.id,e.product_key,e.product_title,e.product_type,e.access_status,e.created_at,p.description,p.is_published FROM user_entitlements e LEFT JOIN products p ON p.product_key=e.product_key WHERE e.user_id=? AND e.access_status='active' AND e.product_key!=? ORDER BY e.created_at DESC").bind(gate.session!.id, SF_CHALLENGE_PAID_PRODUCT_KEY).all();
+      await ensureChallengeTables(env);
+      // Wyklucz produkty przypisane do wyzwań na podstawie relacji w bazie,
+      // nie przez stały klucz produktu, który może nie istnieć w danej instalacji.
+      const rows = await env.DB.prepare(`SELECT e.id,e.product_key,e.product_title,e.product_type,e.access_status,e.created_at,p.description,p.is_published
+        FROM user_entitlements e LEFT JOIN products p ON p.product_key=e.product_key
+        WHERE e.user_id=? AND e.access_status='active'
+          AND NOT EXISTS (SELECT 1 FROM sf_challenges c WHERE c.product_key=e.product_key)
+        ORDER BY e.created_at DESC`).bind(gate.session!.id).all();
       return v2Reply({ materials: rows.results });
     }
 
@@ -1520,7 +1527,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const key = adminProductMatch[1];
         const item = await v2Product(env, key);
         if (!item) return v2Reply({ error: 'Nie znaleziono produktu.' }, 404);
-        const protectedKeys = [V2_GENERATOR_PRODUCT_KEY, V2_INDIVIDUAL_PLAN_PRODUCT_KEY, SF_CHALLENGE_PAID_PRODUCT_KEY];
+        const protectedKeys = [V2_GENERATOR_PRODUCT_KEY, V2_INDIVIDUAL_PLAN_PRODUCT_KEY];
         if (protectedKeys.includes(key)) {
           return v2Reply({ error: 'To produkt systemowy wymagany przez aplikację. Nie można go trwale usunąć z ACP. Jego działanie i dostępność są zarządzane przez moduł aplikacji.' }, 409);
         }
