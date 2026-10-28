@@ -46,4 +46,6 @@ export type WorkoutDraft = {
   day_key?: string;
   started?: boolean;
   started_at?: number | null;
+  /** Stable request ID used to make finishing a workout idempotent after a network retry. */
+  completion_key?: string;
 };

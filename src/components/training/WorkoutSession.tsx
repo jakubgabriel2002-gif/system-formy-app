@@ -8,6 +8,7 @@ type Props = {
   exercises: WorkoutExercise[];
   notes: string;
   saving?: boolean;
+  draftSaveStatus?: 'saving' | 'saved' | 'local' | 'error';
   onExercisesChange: (exercises: WorkoutExercise[]) => void;
   onNotesChange: (notes: string) => void;
   onFinish: () => void;
@@ -27,7 +28,7 @@ function clock(seconds: number) {
 
 type HistorySet = { exerciseName: string; exerciseIndex: number; setIndex: number; reps: number; weight_kg: number | null };
 
-export default function WorkoutSession({ title, elapsedLabel = "00:00", exercises, notes, saving = false, onExercisesChange, onNotesChange, onFinish, onCancel, isPremium = false, promoSessionId = title, onPromoNavigate }: Props) {
+export default function WorkoutSession({ title, elapsedLabel = "00:00", exercises, notes, saving = false, draftSaveStatus = 'saved', onExercisesChange, onNotesChange, onFinish, onCancel, isPremium = false, promoSessionId = title, onPromoNavigate }: Props) {
   const [activeExercise, setActiveExercise] = useState(() => Math.max(0, exercises.findIndex((exercise) => exercise.sets_detail.some((set) => !set.completed))));
   const [restEnd, setRestEnd] = useState<number | null>(null);
   const [restSeconds, setRestSeconds] = useState(0);
@@ -130,6 +131,7 @@ export default function WorkoutSession({ title, elapsedLabel = "00:00", exercise
         <div className="sf-wm-session-title">
           <p className="sf-wm-eyebrow"><span className="sf-wm-status-pulse" /> TRENING W TOKU</p>
           <p>{doneExercises} z {exercises.length} ćwiczeń · {doneSets} z {allSets} serii</p>
+          <p className={`sf-wm-draft-status is-${draftSaveStatus}`} role="status" aria-live="polite">{draftSaveStatus === 'saving' ? 'Zapisuję postęp…' : draftSaveStatus === 'saved' ? 'Postęp zsynchronizowany' : draftSaveStatus === 'local' ? 'Kopia na tym urządzeniu · synchronizacja oczekuje' : 'Nie udało się zapisać kopii treningu'}</p>
         </div>
         <div className="sf-wm-header-tools">
           <button className="sf-wm-button sf-wm-button-quiet" onClick={onCancel}><X size={16} /> Zakończ później</button>

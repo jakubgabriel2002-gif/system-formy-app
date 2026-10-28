@@ -27,6 +27,38 @@ const V2_PREMIUM_PRODUCT_DISCOUNT_PERCENT = 20;
 const V2_PREMIUM_INCLUDED_CHALLENGE_PRICE_CENTS = 1999;
 const V2_PREMIUM_CHALLENGE_PRICE_CENTS = 500;
 
+// Best-effort, per-isolate throttle for anonymous client diagnostics. Nothing is written to D1.
+const clientErrorBuckets = new Map<string, { windowStartedAt: number; count: number }>();
+function allowClientErrorReport(key: string, now = Date.now()): boolean {
+  if (clientErrorBuckets.size > 512) {
+    for (const [candidate, bucket] of clientErrorBuckets) {
+      if (now - bucket.windowStartedAt > 2 * 60 * 1000) clientErrorBuckets.delete(candidate);
+    }
+    while (clientErrorBuckets.size > 512) {
+      const oldest = clientErrorBuckets.keys().next().value as string | undefined;
+      if (!oldest) break;
+      clientErrorBuckets.delete(oldest);
+    }
+  }
+  const bucket = clientErrorBuckets.get(key);
+  if (!bucket || now - bucket.windowStartedAt >= 60_000) {
+    clientErrorBuckets.set(key, { windowStartedAt: now, count: 1 });
+    return true;
+  }
+  if (bucket.count >= 6) return false;
+  bucket.count += 1;
+  return true;
+}
+function safeClientErrorMessage(value: unknown): string {
+  if (typeof value !== 'string') return 'Nieznany błąd klienta';
+  return value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email]')
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')
+    .replace(/(password|passwd|secret|token|api[_ -]?key)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+    .replace(/\s+/g, ' ').trim().slice(0, 180) || 'Nieznany błąd klienta';
+}
+
 // Schema setup is idempotent and only needs to run once per D1 binding per Worker isolate.
 // Failed setup promises are evicted so the next request can retry instead of caching a failure.
 const schemaSetupCache = new WeakMap<object, Map<string, Promise<void>>>();
@@ -353,29 +385,6 @@ async function v2Digest(value: string): Promise<string> {
 async function v2SitePasswordHash(password:string):Promise<string>{const saltBytes=crypto.getRandomValues(new Uint8Array(16));const salt=Array.from(saltBytes,b=>b.toString(16).padStart(2,'0')).join('');const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:saltBytes,iterations:100000,hash:'SHA-256'},key,256);const hash=Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('');return `${salt}:${hash}`;}
 async function v2SitePasswordMatches(password:string,stored:string):Promise<boolean>{const [salt,expected]=stored.split(':');if(!/^[a-f0-9]{32}$/.test(salt||'')||!/^[a-f0-9]{64}$/.test(expected||''))return false;const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);const saltBytes=Uint8Array.from((salt.match(/.{2}/g)||[]).map(x=>parseInt(x,16)));const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:saltBytes,iterations:100000,hash:'SHA-256'},key,256);const actual=Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('');return actual===expected;}
 
-async function v2LimitSiteUnlockAttempts(request: Request, env: V2Env): Promise<void> {
-  await ensureSchemaOnce(env, 'site-lock-rate-limit', async () => {
-    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS site_lock_rate_limit_events (
-      scope TEXT NOT NULL,
-      created_at INTEGER NOT NULL
-    )`).run();
-    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_site_lock_rate_limit_scope_time ON site_lock_rate_limit_events(scope, created_at)').run();
-  });
-  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-  const scope = await v2Digest(`site-lock:${ip}`);
-  const now = Date.now();
-  const row = await env.DB.prepare('SELECT COUNT(*) AS total FROM site_lock_rate_limit_events WHERE scope=? AND created_at>=?')
-    .bind(scope, now - 15 * 60 * 1000).first<{ total: number }>();
-  if (Number(row?.total || 0) >= 8) {
-    throw new V2InputError('Wykonano zbyt wiele prób odblokowania. Odczekaj 15 minut i spróbuj ponownie.', 429);
-  }
-  await env.DB.prepare('INSERT INTO site_lock_rate_limit_events(scope,created_at) VALUES(?,?)').bind(scope, now).run();
-  // Cleanup only during a short window each hour, not on every unlock attempt.
-  if (now % (60 * 60 * 1000) < 10_000) {
-    await env.DB.prepare('DELETE FROM site_lock_rate_limit_events WHERE created_at < ?').bind(now - 24 * 60 * 60 * 1000).run();
-  }
-}
-
 async function v2VerifySiteUnlockToken(storedHash:string,token:string):Promise<boolean>{const [expiresRaw,signature,extra]=token.split('.');if(!expiresRaw||!signature||extra!==undefined||!/^\d{10,13}$/.test(expiresRaw)||!/^[a-f0-9]{64}$/.test(signature))return false;const expires=Number(expiresRaw);if(!Number.isSafeInteger(expires)||expires<=Date.now()||expires>Date.now()+24*60*60*1000+60000)return false;const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(storedHash),{name:'HMAC',hash:'SHA-256'},false,['sign']);const bytes=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(`system-formy-site-unlock:${expiresRaw}`));const expected=Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');let diff=0;for(let i=0;i<expected.length;i++)diff|=expected.charCodeAt(i)^signature.charCodeAt(i);return diff===0;}
 async function v2Session(request: Request, env: V2Env): Promise<V2Session | null> {
   const token = v2Token(request); if (!token) return null;
@@ -630,6 +639,31 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
 }
 export async function handleV2Api(request: Request, env: V2Env): Promise<Response | null> {
   const url = new URL(request.url), path = url.pathname, method = request.method.toUpperCase();
+  if (path === '/api/v2/client-error' && method === 'POST') {
+    // This endpoint intentionally does not persist diagnostics in D1. It writes only sanitized
+    // structured entries to Cloudflare runtime logs, with a small per-isolate abuse throttle.
+    const origin = request.headers.get('Origin');
+    if (origin && origin !== url.origin) return v2Reply({ error: 'Nieprawidłowe źródło żądania.' }, 403);
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    if (!allowClientErrorReport(ip)) return v2Reply({ ok: false }, 429);
+    try {
+      if (!(request.headers.get('Content-Type') || '').toLowerCase().includes('application/json')) throw new V2InputError('Dane muszą być przesłane jako JSON.');
+      let parsed: unknown;
+      try { parsed = JSON.parse(await v2ReadBoundedText(request, 4096)); } catch (error) { if (error instanceof V2InputError) throw error; throw new V2InputError('Nieprawidłowe zgłoszenie.'); }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new V2InputError('Nieprawidłowe zgłoszenie.');
+      const body = parsed as V2Body;
+      const allowedKinds = new Set(['runtime', 'unhandled-rejection', 'react-boundary']);
+      const kind = typeof body.kind === 'string' && allowedKinds.has(body.kind) ? body.kind : 'runtime';
+      const message = safeClientErrorMessage(body.message);
+      const requestedPath = typeof body.path === 'string' && body.path.startsWith('/') ? body.path : '/';
+      const clientPath = requestedPath.split('?')[0].slice(0, 160).replace(/[\u0000-\u001f\u007f]/g, '');
+      console.error('System Formy client-side error', JSON.stringify({ kind, message, path: clientPath || '/' }));
+      return v2Reply({ ok: true });
+    } catch (error) {
+      const status = error instanceof V2InputError ? error.status : 400;
+      return v2Reply({ error: 'Nie udało się przyjąć zgłoszenia diagnostycznego.' }, status);
+    }
+  }
   if (path === '/api/stripe/webhook' && method === 'POST') {
     try { return await v2Webhook(request, env); }
     catch (error) { console.error('System Formy V2 webhook processing error:', error); return v2Reply({ error: 'Nie udało się przetworzyć webhooka. Stripe może bezpiecznie ponowić dostarczenie.' }, 500); }
@@ -782,7 +816,6 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     if (path === '/api/v2/site-lock/unlock' && method === 'POST') {
       const b=await v2Body(request),password=v2Field(b,'password',200); const row=await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='site_lock_password_hash'").first<{setting_value:string}>();
       if(!row?.setting_value)return v2Reply({error:'Blokada hasłem nie jest skonfigurowana.'},400);
-      await v2LimitSiteUnlockAttempts(request, env);
       if(!(await v2SitePasswordMatches(password,row.setting_value)))return v2Reply({error:'Nieprawidłowe hasło.'},401);
       const expires=Date.now()+24*60*60*1000, expiresRaw=String(expires), key=await crypto.subtle.importKey('raw',new TextEncoder().encode(row.setting_value),{name:'HMAC',hash:'SHA-256'},false,['sign']);
       const signatureBytes=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(`system-formy-site-unlock:${expiresRaw}`));
@@ -1215,10 +1248,34 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
           exercises.push({ name, sets: setCount, reps, weight_kg: weight, rest_seconds: restSeconds, transition_rest_seconds: transitionRestSeconds });
         }
       }
-      const id = crypto.randomUUID(), now = new Date().toISOString();
-      await env.DB.prepare('INSERT INTO workout_sessions(id,user_id,title,performed_on,notes,exercises_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').bind(id, gate.session!.id, title, performed, notes, JSON.stringify(exercises), now, now).run();
-      await env.DB.prepare('DELETE FROM training_session_drafts WHERE user_id=?').bind(gate.session!.id).run();
-      return v2Reply({ ok: true, id, created_at: now, exercises }, 201);
+      const requestedIdempotencyKey = v2Field(b, 'idempotency_key', 80);
+      if (requestedIdempotencyKey && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestedIdempotencyKey)) {
+        return v2Reply({ error: 'Nieprawidłowy identyfikator zapisu treningu.' }, 400);
+      }
+      const id = requestedIdempotencyKey || crypto.randomUUID();
+      const now = new Date().toISOString();
+      if (requestedIdempotencyKey) {
+        const existing = await env.DB.prepare('SELECT id,created_at,exercises_json FROM workout_sessions WHERE id=? AND user_id=? LIMIT 1')
+          .bind(id, gate.session!.id).first<{ id: string; created_at: string; exercises_json: string }>();
+        if (existing) {
+          // The original request may have committed while its HTTP response was lost. Return success without duplicating history.
+          await env.DB.prepare('DELETE FROM training_session_drafts WHERE user_id=?').bind(gate.session!.id).run();
+          return v2Reply({ ok: true, duplicate: true, id: existing.id, created_at: existing.created_at });
+        }
+      }
+      // A stable id makes retries idempotent. The conditional draft delete is in the same
+      // transaction as INSERT OR IGNORE, so a rare ID collision with another account cannot
+      // erase this account's draft. A duplicate request from the same account is still success.
+      await env.DB.batch([
+        env.DB.prepare('INSERT OR IGNORE INTO workout_sessions(id,user_id,title,performed_on,notes,exercises_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').bind(id, gate.session!.id, title, performed, notes, JSON.stringify(exercises), now, now),
+        env.DB.prepare('DELETE FROM training_session_drafts WHERE user_id=? AND EXISTS (SELECT 1 FROM workout_sessions WHERE id=? AND user_id=?)').bind(gate.session!.id, id, gate.session!.id),
+      ]);
+      const stored = await env.DB.prepare('SELECT id,created_at,exercises_json FROM workout_sessions WHERE id=? AND user_id=? LIMIT 1')
+        .bind(id, gate.session!.id).first<{ id: string; created_at: string; exercises_json: string }>();
+      if (!stored) return v2Reply({ error: 'Nie udało się potwierdzić zapisu treningu. Kopia robocza została zachowana — spróbuj ponownie.' }, 409);
+      let storedExercises: unknown = exercises;
+      try { storedExercises = JSON.parse(stored.exercises_json); } catch { /* Leave the validated request as fallback. */ }
+      return v2Reply({ ok: true, id: stored.id, created_at: stored.created_at, exercises: storedExercises }, 201);
     }
 
     // Cele i pomiary: wyłącznie realne dane zapisane dla zalogowanego konta.

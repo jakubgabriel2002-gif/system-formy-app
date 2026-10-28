@@ -157,3 +157,9 @@
 .sf-workout-promo-actions button.is-secondary{background:transparent;color:#f5f7ee;border-color:rgba(255,255,255,.19)}
 .sf-workout-promo-actions button.is-dismiss{min-height:38px;border:0;background:transparent;color:#a9af9d;font-weight:500}
 @media(prefers-reduced-motion:reduce){.sf-workout-promo-backdrop{animation:none}}
+
+.sf-wm-draft-status{font-size:11px!important;line-height:1.35;margin:5px 0 0;color:var(--sf-wm-muted,#9aa094)}
+.sf-wm-draft-status.is-saved{color:#a8d883}
+.sf-wm-draft-status.is-saving{color:#cbd7b4}
+.sf-wm-draft-status.is-local{color:#f2cf76}
+.sf-wm-draft-status.is-error{color:#ff9a9a}

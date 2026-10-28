@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import WorkoutLanding from './WorkoutLanding';
 import WorkoutSession from './WorkoutSession';
 import WorkoutSummary from './WorkoutSummary';
 import type { WorkoutDraft, WorkoutExercise, WorkoutPlan, WorkoutPlanDay } from './workoutTypes';
+import { chooseWorkoutDraftToRestore, clearLocalWorkoutDraft, readLocalWorkoutDraft, saveLocalWorkoutDraft } from './workoutDraftPersistence';
 import { exerciseForProgramWeek, getProgramWeek, PROGRAM_WEEKS } from '../../lib/trainingProgram';
 import './workout.css';
 import './workout-fix-extra.css';
 
 type Props = {
+  userId: string;
   onGoToPlans: () => void;
   onBackToDashboard: () => void;
   onSaved: () => Promise<unknown> | unknown;
@@ -34,6 +36,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 function localDate() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function newCompletionKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, char => { const value = Math.random() * 16 | 0; return (char === 'x' ? value : (value & 0x3 | 0x8)).toString(16); });
 }
 function sampleProgramStartDate(planId: string) {
   const fallback = localDate();
@@ -128,7 +135,7 @@ function formatDuration(totalSeconds: number) {
     : `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
-export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved, isPremium = false, onOpenStore, onOpenPremium }: Props) {
+export default function TrainingRoute({ userId, onGoToPlans, onBackToDashboard, onSaved, isPremium = false, onOpenStore, onOpenPremium }: Props) {
   const [plans, setPlans] = useState<WorkoutPlan[]>([]);
   const [draft, setDraft] = useState<WorkoutDraft | null>(null);
   const [title, setTitle] = useState('');
@@ -142,38 +149,116 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved,
   const [error, setError] = useState('');
   const [summary, setSummary] = useState(false);
   const [sessionActive, setSessionActive] = useState(false);
+  const [draftSaveStatus, setDraftSaveStatus] = useState<'saving' | 'saved' | 'local' | 'error'>('saved');
+  const draftSaveVersionRef = useRef(0);
+  const draftSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [planResult, draftResult] = await Promise.all([
-        request<{ plans?: WorkoutPlan[] }>('/api/v2/training/plans'),
-        request<{ draft?: WorkoutDraft | null }>('/api/v2/training/draft'),
-      ]);
+    let planLoadError = '';
+    let loadedDraft: WorkoutDraft | null = null;
+
+    // Plans and an in-progress workout are independent: a failed plans request must not
+    // prevent the user from recovering a draft that is already stored on this device.
+    try {
+      const planResult = await request<{ plans?: WorkoutPlan[] }>('/api/v2/training/plans');
       setPlans(Array.isArray(planResult.plans) ? planResult.plans : []);
-      const loadedDraft = draftResult.draft?.started && draftResult.draft.plan_id ? draftResult.draft : null;
-      setDraft(loadedDraft);
-      setSessionActive(false);
-      if (loadedDraft) {
-        setTitle(loadedDraft.title || 'Trening');
-        setPerformedOn(loadedDraft.performed_on || localDate());
-        setNotes(loadedDraft.notes || '');
-        setExercises(Array.isArray(loadedDraft.exercises) ? loadedDraft.exercises : []);
-        const startTime = Number(loadedDraft.started_at);
-        const validStart = Number.isFinite(startTime) && startTime > 0 ? startTime : Date.now();
-        setStartedAt(validStart);
-        setElapsedSeconds(Math.max(0, Math.floor((Date.now() - validStart) / 1000)));
-      } else {
-        setStartedAt(null);
-        setElapsedSeconds(0);
-      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Nie udało się pobrać danych treningowych.');
+      setPlans([]);
+      planLoadError = e instanceof Error ? `Nie udało się pobrać listy planów: ${e.message}` : 'Nie udało się pobrać listy planów.';
+    }
+
+    const localSnapshot = readLocalWorkoutDraft(userId);
+    try {
+      const draftResult = await request<{ draft?: WorkoutDraft | null; updated_at?: string | null }>('/api/v2/training/draft');
+      if (draftResult.draft) {
+        const choice = chooseWorkoutDraftToRestore(draftResult.draft, draftResult.updated_at, localSnapshot);
+        loadedDraft = choice.draft;
+        if (loadedDraft && choice.source === 'local') {
+          setDraftSaveStatus('local');
+          try {
+            await request('/api/v2/training/draft', { method: 'PUT', body: JSON.stringify({ draft: loadedDraft }) });
+            saveLocalWorkoutDraft(userId, loadedDraft);
+            setDraftSaveStatus('saved');
+          } catch {
+            // The local copy remains available if the server cannot be updated yet.
+            setDraftSaveStatus('local');
+          }
+        } else if (loadedDraft) {
+          saveLocalWorkoutDraft(userId, loadedDraft);
+          setDraftSaveStatus('saved');
+        }
+      } else if (localSnapshot) {
+        // A previous finish request may have reached the server even if its response was lost.
+        // The stable completion key lets us distinguish a completed session from a draft needing recovery.
+        let alreadyCompleted = false;
+        if (localSnapshot.draft.completion_key) {
+          try {
+            const saved = await request<{ sessions?: Array<{ id: string }> }>('/api/v2/training/sessions');
+            alreadyCompleted = Boolean(saved.sessions?.some(session => session.id === localSnapshot.draft.completion_key));
+          } catch {
+            // If the history cannot be checked, prefer recovery over silently discarding the user's work.
+          }
+        }
+        if (alreadyCompleted) {
+          clearLocalWorkoutDraft(userId);
+          setDraftSaveStatus('saved');
+        } else {
+          loadedDraft = localSnapshot.draft;
+          setDraftSaveStatus('local');
+          try {
+            await request('/api/v2/training/draft', { method: 'PUT', body: JSON.stringify({ draft: loadedDraft }) });
+            saveLocalWorkoutDraft(userId, loadedDraft);
+            setDraftSaveStatus('saved');
+          } catch {
+            setDraftSaveStatus('local');
+          }
+        }
+      } else {
+        clearLocalWorkoutDraft(userId);
+        setDraftSaveStatus('saved');
+      }
+    } catch (draftError) {
+      if (localSnapshot) {
+        loadedDraft = localSnapshot.draft;
+        setDraftSaveStatus('local');
+      } else {
+        setDraftSaveStatus('error');
+        if (!planLoadError) planLoadError = draftError instanceof Error
+          ? `Nie udało się zsynchronizować kopii treningu: ${draftError.message}`
+          : 'Nie udało się zsynchronizować kopii treningu.';
+      }
+    }
+
+    setDraft(loadedDraft);
+    setSessionActive(false);
+    if (loadedDraft) {
+      setTitle(loadedDraft.title || 'Trening');
+      setPerformedOn(loadedDraft.performed_on || localDate());
+      setNotes(loadedDraft.notes || '');
+      setExercises(Array.isArray(loadedDraft.exercises) ? loadedDraft.exercises : []);
+      const startTime = Number(loadedDraft.started_at);
+      const validStart = Number.isFinite(startTime) && startTime > 0 ? startTime : Date.now();
+      setStartedAt(validStart);
+      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - validStart) / 1000)));
+    } else {
+      setStartedAt(null);
+      setElapsedSeconds(0);
+    }
+
+    if (planLoadError) {
+      setError(loadedDraft
+        ? 'Nie udało się odświeżyć listy planów lub synchronizacji. Zapisany trening roboczy został zachowany; synchronizacja wymaga połączenia z internetem.'
+        : planLoadError);
+    }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się przywrócić treningu. Lokalna kopia, jeśli istnieje, pozostaje na tym urządzeniu.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -190,16 +275,49 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved,
   const draftToSave = useMemo<WorkoutDraft | null>(() => active ? ({
     title, performed_on: performedOn, notes, exercises,
     plan_id: draft?.plan_id, day_key: draft?.day_key, started: true,
-    started_at: startedAt,
-  }) : null, [active, title, performedOn, notes, exercises, draft?.plan_id, draft?.day_key, startedAt]);
+    started_at: startedAt, completion_key: draft?.completion_key,
+  }) : null, [active, title, performedOn, notes, exercises, draft?.plan_id, draft?.day_key, draft?.completion_key, startedAt]);
 
   useEffect(() => {
-    if (!draftToSave || loading) return;
+    if (!draftToSave || loading || saving || !userId) return;
+    const version = ++draftSaveVersionRef.current;
+    const hasLocalCopy = saveLocalWorkoutDraft(userId, draftToSave);
+    setDraftSaveStatus(hasLocalCopy ? 'local' : 'error');
     const timer = window.setTimeout(() => {
-      void request('/api/v2/training/draft', { method: 'PUT', body: JSON.stringify({ draft: draftToSave }) }).catch(() => {});
-    }, 500);
+      if (draftSaveVersionRef.current !== version) return;
+      setDraftSaveStatus('saving');
+      const saveTask = draftSaveQueueRef.current.catch(() => undefined).then(async () => {
+        if (draftSaveVersionRef.current !== version) return;
+        await request('/api/v2/training/draft', { method: 'PUT', body: JSON.stringify({ draft: draftToSave }) });
+        if (draftSaveVersionRef.current === version) setDraftSaveStatus('saved');
+      }).catch(() => {
+        // The separately stored local backup is kept; the UI tells the user it is not synced.
+        if (draftSaveVersionRef.current === version) setDraftSaveStatus(hasLocalCopy ? 'local' : 'error');
+      });
+      draftSaveQueueRef.current = saveTask;
+    }, 450);
     return () => window.clearTimeout(timer);
-  }, [draftToSave, loading]);
+  }, [draftToSave, loading, saving, userId]);
+
+  // Retry synchronization when connectivity returns; keep the local snapshot if it still fails.
+  useEffect(() => {
+    if (!draftToSave || !userId) return;
+    const syncWhenOnline = () => {
+      if (saving) return;
+      const version = ++draftSaveVersionRef.current;
+      setDraftSaveStatus('saving');
+      const syncTask = draftSaveQueueRef.current.catch(() => undefined).then(async () => {
+        if (draftSaveVersionRef.current !== version) return;
+        await request('/api/v2/training/draft', { method: 'PUT', body: JSON.stringify({ draft: draftToSave }) });
+        if (draftSaveVersionRef.current === version) setDraftSaveStatus('saved');
+      }).catch(() => {
+        if (draftSaveVersionRef.current === version) setDraftSaveStatus(readLocalWorkoutDraft(userId) ? 'local' : 'error');
+      });
+      draftSaveQueueRef.current = syncTask;
+    };
+    window.addEventListener('online', syncWhenOnline);
+    return () => window.removeEventListener('online', syncWhenOnline);
+  }, [draftToSave, saving, userId]);
 
   const start = (plan: WorkoutPlan, dayKey: string) => {
     const day = plan.days.find((item) => item.day_key === dayKey);
@@ -218,7 +336,7 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved,
     const next: WorkoutDraft = {
       title: `${plan.name} — ${day.title} — Tydzień ${week}/${plan.duration_weeks || PROGRAM_WEEKS}`.slice(0, 120),
       performed_on: localDate(), notes: '', exercises: nextExercises,
-      plan_id: plan.id, day_key: day.day_key, started: true, started_at: now,
+      plan_id: plan.id, day_key: day.day_key, started: true, started_at: now, completion_key: newCompletionKey(),
     };
     setDraft(next);
     setSessionActive(true);
@@ -230,8 +348,11 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved,
     setElapsedSeconds(0);
     setSummary(false);
     setError('');
+    const localCopySaved = saveLocalWorkoutDraft(userId, next);
+    setDraftSaveStatus(localCopySaved ? 'local' : 'error');
     void request('/api/v2/training/draft', { method: 'PUT', body: JSON.stringify({ draft: next }) }).catch((e) => {
-      setError(e instanceof Error ? `Trening rozpoczęty, ale nie udało się zapisać kopii roboczej: ${e.message}` : 'Trening rozpoczęty, ale kopia robocza nie została zapisana.');
+      setDraftSaveStatus(localCopySaved ? 'local' : 'error');
+      setError(e instanceof Error ? `Trening rozpoczęty. ${localCopySaved ? 'Kopia jest zachowana na tym urządzeniu, ale nie zsynchronizowała się z serwerem: ' : 'Nie udało się zapisać kopii: '}${e.message}` : 'Trening rozpoczęty, ale kopia robocza nie została zsynchronizowana.');
     });
   };
 
@@ -258,22 +379,49 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved,
     }
     setSaving(true);
     setError('');
+    const completionKey = draft?.completion_key || newCompletionKey();
+    // Invalidate pending debounced autosaves and wait for an in-flight save before committing the session.
+    draftSaveVersionRef.current += 1;
+    await draftSaveQueueRef.current.catch(() => undefined);
+    const finalDraft: WorkoutDraft = { title: title || 'Trening', performed_on: performedOn, notes, exercises, plan_id: draft?.plan_id, day_key: draft?.day_key, started: true, started_at: startedAt, completion_key: completionKey };
+    setDraft(finalDraft);
+    const finalDraftSavedLocally = saveLocalWorkoutDraft(userId, finalDraft);
+    if (finalDraftSavedLocally) setDraftSaveStatus('local');
     try {
       await request('/api/v2/training/sessions', {
         method: 'POST',
         body: JSON.stringify({
+          idempotency_key: completionKey,
           title: title || 'Trening', performed_on: performedOn, notes,
           exercises: exercises.filter((exercise) => exercise.name.trim()).map((exercise) => ({
             ...exercise, name: exercise.name.trim(),
           })),
         }),
       });
-      await request('/api/v2/training/draft', { method: 'DELETE' }).catch(() => {});
+      clearLocalWorkoutDraft(userId);
       setDraft(null);
+      setDraftSaveStatus('saved');
       setSummary(true);
       await onSaved();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Nie udało się zapisać treningu.');
+      // If the server committed the session but the response was lost, recognize the stable key instead of creating a duplicate.
+      let committed = false;
+      if (completionKey) {
+        try {
+          const saved = await request<{ sessions?: Array<{ id: string }> }>('/api/v2/training/sessions');
+          committed = Boolean(saved.sessions?.some(session => session.id === completionKey));
+        } catch { /* keep the draft and its local backup if the server cannot be reached */ }
+      }
+      if (committed) {
+        clearLocalWorkoutDraft(userId);
+        setDraft(null);
+        setDraftSaveStatus('saved');
+        setSummary(true);
+        await onSaved();
+      } else {
+        setError(e instanceof Error ? e.message : 'Nie udało się zapisać treningu. Kopia robocza pozostaje zachowana.');
+        setDraftSaveStatus(saveLocalWorkoutDraft(userId, finalDraft) || finalDraftSavedLocally ? 'local' : 'error');
+      }
     } finally {
       setSaving(false);
     }
@@ -282,18 +430,23 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved,
   const pauseWorkout = async (): Promise<boolean> => {
     const pausedDraft: WorkoutDraft = {
       title: title || 'Trening', performed_on: performedOn, notes, exercises,
-      plan_id: draft?.plan_id, day_key: draft?.day_key, started: true,
+      plan_id: draft?.plan_id, day_key: draft?.day_key, started: true, completion_key: draft?.completion_key || newCompletionKey(),
       // Nie zaliczaj czasu spędzonego w sklepie ani poza treningiem do czasu sesji.
       started_at: Date.now() - Math.max(0, elapsedSeconds) * 1000,
     };
+    const localCopySaved = saveLocalWorkoutDraft(userId, pausedDraft);
+    setDraftSaveStatus(localCopySaved ? 'local' : 'error');
     try {
       await request('/api/v2/training/draft', { method: 'PUT', body: JSON.stringify({ draft: pausedDraft }) });
+      saveLocalWorkoutDraft(userId, pausedDraft);
+      setDraftSaveStatus('saved');
       setDraft(pausedDraft);
       setSessionActive(false);
       setError('');
       return true;
     } catch (e) {
-      setError(e instanceof Error ? `Nie udało się zachować treningu do późniejszego wznowienia: ${e.message}` : 'Nie udało się zachować treningu do późniejszego wznowienia.');
+      setDraftSaveStatus(localCopySaved ? 'local' : 'error');
+      setError(e instanceof Error ? `${localCopySaved ? 'Kopia została zachowana na tym urządzeniu, ale nie zsynchronizowała się z serwerem: ' : 'Nie udało się zachować treningu: '}${e.message}` : 'Nie udało się zsynchronizować treningu.');
       return false;
     }
   };
@@ -307,7 +460,7 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved,
   };
 
   if (loading) return <section className="sf-view"><p className="sf-muted">Ładowanie treningów…</p></section>;
-  if (error && !plans.length && !active) return <section className="sf-view"><div className="sf-wm-empty"><h2>Nie udało się załadować treningów</h2><p>{error}</p><button className="sf-wm-button sf-wm-button-primary" onClick={() => void load()}>Spróbuj ponownie</button></div></section>;
+  if (error && !plans.length && !active && !draft) return <section className="sf-view"><div className="sf-wm-empty"><h2>Nie udało się załadować treningów</h2><p>{error}</p><button className="sf-wm-button sf-wm-button-primary" onClick={() => void load()}>Spróbuj ponownie</button></div></section>;
 
   if (summary) {
     return <WorkoutSummary
@@ -326,7 +479,7 @@ export default function TrainingRoute({ onGoToPlans, onBackToDashboard, onSaved,
     return <section className="sf-view">
       {error && <p role="alert" className="sf-wm-error">{error}</p>}
       <WorkoutSession
-        title={title} elapsedLabel={formatDuration(elapsedSeconds)} exercises={exercises} notes={notes} saving={saving}
+        title={title} elapsedLabel={formatDuration(elapsedSeconds)} exercises={exercises} notes={notes} saving={saving} draftSaveStatus={draftSaveStatus}
         onExercisesChange={setExercises} onNotesChange={setNotes}
         onFinish={() => void finish()} onCancel={() => void pauseWorkout()}
         isPremium={isPremium} promoSessionId={`${draft?.plan_id || title}:${draft?.day_key || performedOn}:${performedOn}`} onPromoNavigate={navigateFromWorkoutPromo}

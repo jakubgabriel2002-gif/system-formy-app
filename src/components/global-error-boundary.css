@@ -1,0 +1,6 @@
+.sf-fatal-error{min-height:100dvh;display:grid;place-items:center;padding:24px;background:#10110f;color:#f2f5ed}
+.sf-fatal-error-card{width:min(100%,520px);padding:clamp(24px,5vw,42px);border:1px solid #343b2f;border-radius:24px;background:#171a15;box-shadow:0 25px 80px rgba(0,0,0,.32)}
+.sf-fatal-error-card>svg{color:#d9ff43;margin-bottom:20px}
+.sf-fatal-error-card h1{font-size:clamp(26px,5vw,38px);line-height:1.08;letter-spacing:-.035em;margin:10px 0 12px}
+.sf-fatal-error-card p:not(.sf-eyebrow){color:#b8c0b1;line-height:1.65}
+.sf-fatal-error-card button{display:inline-flex;align-items:center;gap:9px;margin-top:12px;min-height:48px;padding:0 17px;border:0;border-radius:12px;background:#d9ff43;color:#11150a;font-weight:850;cursor:pointer}

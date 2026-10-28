@@ -1,0 +1,23 @@
+.sf-pwa-guide-backdrop{position:fixed;inset:0;z-index:1600;display:grid;place-items:center;padding:max(16px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom));background:rgba(5,7,5,.78);backdrop-filter:blur(12px);overflow-y:auto}
+.sf-pwa-guide{position:relative;width:min(100%,560px);max-height:calc(100dvh - 32px);overflow:auto;padding:clamp(22px,5vw,34px);border:1px solid rgba(255,255,255,.13);border-radius:24px;background:#121511;color:#f3f5f1;box-shadow:0 28px 90px rgba(0,0,0,.5)}
+.sf-pwa-guide-close{position:absolute;right:16px;top:16px;width:40px;height:40px;display:grid;place-items:center;border-radius:12px;border:1px solid #343a30;background:#1c2119;color:inherit;cursor:pointer}
+.sf-pwa-guide-mark{display:grid;place-items:center;width:54px;height:54px;border-radius:17px;background:#d9ff43;color:#15190d;margin-bottom:18px}
+.sf-pwa-guide-eyebrow{color:#d9ff43;font-size:11px;font-weight:850;letter-spacing:.16em;margin:0 42px 10px 0}
+.sf-pwa-guide h2{font-size:clamp(25px,5vw,34px);line-height:1.08;letter-spacing:-.035em;margin:0 0 12px;max-width:450px}
+.sf-pwa-guide-intro{color:#b8c0b2;line-height:1.6;margin:0 0 22px}
+.sf-pwa-platform-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:5px;border:1px solid #30372b;border-radius:14px;background:#0d100c;margin-bottom:20px}
+.sf-pwa-platform-tabs button{min-height:42px;border:0;border-radius:10px;background:transparent;color:#aeb6a7;font-size:12px;font-weight:750;cursor:pointer;padding:8px 5px}
+.sf-pwa-platform-tabs button.is-active{background:#d9ff43;color:#14180c}
+.sf-pwa-guide-steps{list-style:none;padding:0;margin:0;display:grid;gap:15px}
+.sf-pwa-guide-steps li{display:grid;grid-template-columns:34px minmax(0,1fr);gap:12px;align-items:start}
+.sf-pwa-guide-steps li>span{display:grid;place-items:center;width:32px;height:32px;border:1px solid #40483a;border-radius:11px;color:#d9ff43;font-size:13px;font-weight:850}
+.sf-pwa-guide-steps b{display:flex;align-items:center;gap:6px;font-size:14px;margin:2px 0 5px}
+.sf-pwa-guide-steps p{font-size:13px;line-height:1.55;color:#aeb6a7;margin:0}
+.sf-pwa-install-action{width:100%;min-height:50px;display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:22px;padding:0 16px;border:0;border-radius:13px;background:#d9ff43;color:#11150a;font-weight:850;cursor:pointer}
+.sf-pwa-install-action:disabled{opacity:.6;cursor:wait}
+.sf-pwa-guide-message{padding:11px 12px;border:1px solid #4b553d;border-radius:12px;color:#d8e2c9;font-size:13px;line-height:1.5;margin:14px 0 0}
+.sf-pwa-guide-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid #2a3025;margin-top:24px;padding-top:18px}
+.sf-pwa-guide-footer span{display:flex;align-items:center;gap:6px;color:#9eaa94;font-size:11px}
+.sf-pwa-guide-footer button{border:0;background:transparent;color:#e8eddf;text-decoration:underline;text-underline-offset:3px;font-size:12px;cursor:pointer;padding:8px 0}
+.sf-pwa-ios-note{display:flex;align-items:center;gap:6px;color:#9eaa94;font-size:11px;margin:12px 0 0}
+@media(max-width:420px){.sf-pwa-guide{padding:22px 18px;border-radius:20px}.sf-pwa-platform-tabs button{font-size:11px}.sf-pwa-guide-footer{align-items:flex-start;flex-direction:column}}

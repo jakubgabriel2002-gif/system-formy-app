@@ -1,0 +1,7 @@
+.sf-pwa-install-banner{display:flex;align-items:center;gap:13px;margin:16px clamp(12px,2.3vw,28px) 0;padding:14px 16px;border:1px solid rgba(217,255,67,.24);border-radius:16px;background:linear-gradient(115deg,rgba(217,255,67,.075),rgba(20,24,17,.97));color:#f3f5f1}
+.sf-pwa-install-banner-icon{display:grid;place-items:center;flex:0 0 42px;width:42px;height:42px;border-radius:13px;background:#d9ff43;color:#14180c}
+.sf-pwa-install-banner-copy{min-width:0;flex:1}
+.sf-pwa-install-banner-copy strong{font-size:13px;line-height:1.35}
+.sf-pwa-install-banner-copy p{color:#aeb6a7;font-size:12px;line-height:1.45;margin:4px 0 0}
+.sf-pwa-install-banner button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:40px;border:0;border-radius:11px;padding:0 12px;background:#d9ff43;color:#14180c;font-size:12px;font-weight:850;white-space:nowrap;cursor:pointer}
+@media(max-width:560px){.sf-pwa-install-banner{align-items:flex-start;flex-wrap:wrap}.sf-pwa-install-banner-copy{flex-basis:calc(100% - 60px)}.sf-pwa-install-banner button{width:100%}}
