@@ -60,8 +60,36 @@ function addSecurityHeaders(response: Response, request: Request): Response {
 function requestBodyLimit(request: Request, path: string): number {
   if (path === '/api/stripe/webhook') return MAX_WEBHOOK_BODY_BYTES;
   if (path === '/api/admin/products' && request.method.toUpperCase() === 'POST') return MAX_UPLOAD_BODY_BYTES;
-  if ((path.startsWith('/api/v2/admin/products/') && path.endsWith('/file')) || path === '/api/v2/admin/covers') return MAX_UPLOAD_BODY_BYTES;
+  if (path === '/api/v2/admin/covers') return 5 * 1024 * 1024; // 4 MB file + multipart overhead
+  if (path.startsWith('/api/v2/admin/products/') && path.endsWith('/file')) return MAX_UPLOAD_BODY_BYTES;
   return MAX_API_BODY_BYTES;
+}
+
+/** Buffer multipart upload bodies with a hard byte limit, including chunked requests without Content-Length. */
+async function bufferUploadWithinLimit(request: Request, maxBytes: number): Promise<Request> {
+  const reader = request.body?.getReader();
+  if (!reader) return request;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      total += part.value.byteLength;
+      if (total > maxBytes) {
+        try { await reader.cancel(); } catch { /* stream may already be closed */ }
+        throw new HttpError(413, 'Wysłany plik jest zbyt duży.');
+      }
+      chunks.push(part.value);
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(400, 'Nie udało się odczytać przesyłanego pliku. Spróbuj ponownie.');
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return new Request(request, { body: bytes });
 }
 
 function requestJsonError(status: number, message: string): Response {
@@ -183,14 +211,36 @@ function safeFailure(error: unknown): Response {
   console.error('System Formy API error:', error);
   return json({ error: 'Wystąpił błąd serwera. Sprawdź konfigurację i spróbuj ponownie.' }, 500);
 }
+const authRateLimitSchemaCache = new WeakMap<object, Promise<void>>();
+async function ensureAuthRateLimitSchema(db: D1Database): Promise<void> {
+  const key = db as object;
+  const cached = authRateLimitSchemaCache.get(key);
+  if (cached) return cached;
+  const pending = (async () => {
+    await db.prepare(`CREATE TABLE IF NOT EXISTS auth_rate_limit_events (
+      scope TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )`).run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_auth_rate_limit_scope_created ON auth_rate_limit_events(scope, created_at)').run();
+  })().catch((error: unknown) => {
+    authRateLimitSchemaCache.delete(key);
+    throw error;
+  });
+  authRateLimitSchemaCache.set(key, pending);
+  return pending;
+}
 async function applyRateLimit(request: Request, db: D1Database, route: string, limit: number): Promise<void> {
+  await ensureAuthRateLimitSchema(db);
   const ip = request.headers.get('CF-Connecting-IP') ?? 'local-development';
   const scope = `${route}:${await sha256(ip)}`;
   const now = Date.now(), windowStart = now - 15 * 60 * 1000;
-  await db.prepare('DELETE FROM auth_rate_limit_events WHERE created_at < ?').bind(now - 24 * 60 * 60 * 1000).run();
   const row = await db.prepare('SELECT COUNT(*) AS total FROM auth_rate_limit_events WHERE scope = ? AND created_at >= ?').bind(scope, windowStart).first<{ total: number }>();
   if ((row?.total ?? 0) >= limit) throw new HttpError(429, 'Wykonano zbyt wiele prób. Odczekaj 15 minut i spróbuj ponownie.');
   await db.prepare('INSERT INTO auth_rate_limit_events (scope, created_at) VALUES (?, ?)').bind(scope, now).run();
+  // The index keeps normal requests cheap; retain a small amount of maintenance work once an hour.
+  if (now % (60 * 60 * 1000) < 10_000) {
+    await db.prepare('DELETE FROM auth_rate_limit_events WHERE created_at < ?').bind(now - 24 * 60 * 60 * 1000).run();
+  }
 }
 async function currentSession(request: Request, env: Env): Promise<SessionRow | null> {
   const token = parseCookie(request, SESSION_COOKIE);
@@ -381,6 +431,25 @@ export default {
     if (!path.startsWith('/api/')) {
       const assetResponse = await env.ASSETS.fetch(request);
       return addSecurityHeaders(assetResponse, request);
+    }
+    const isMultipartUpload =
+      (path === '/api/admin/products' && method === 'POST') ||
+      (/^\/api\/v2\/admin\/products\/[a-z0-9-]+\/file$/i.test(path) && method === 'POST') ||
+      (path === '/api/v2/admin/covers' && method === 'POST');
+    if (isMultipartUpload) {
+      // Reject unauthenticated/non-admin requests before buffering potentially large multipart bodies.
+      const uploadSession = await currentSession(request, env).catch(() => null);
+      if (!uploadSession) return addSecurityHeaders(requestJsonError(401, 'Zaloguj się ponownie.'), request);
+      if (!env.ADMIN_EMAIL || uploadSession.email.trim().toLowerCase() !== env.ADMIN_EMAIL.trim().toLowerCase()) {
+        return addSecurityHeaders(requestJsonError(403, 'Ta funkcja jest dostępna wyłącznie dla administratora.'), request);
+      }
+      try {
+        request = await bufferUploadWithinLimit(request, requestBodyLimit(request, path));
+      } catch (error) {
+        const status = error instanceof HttpError ? error.status : 400;
+        const message = error instanceof HttpError ? error.message : 'Nie udało się odczytać przesyłanego pliku.';
+        return addSecurityHeaders(requestJsonError(status, message), request);
+      }
     }
     const platformResponse = await handlePlatformApi(request, env);
     const response = platformResponse ?? await handleApi(request, env);

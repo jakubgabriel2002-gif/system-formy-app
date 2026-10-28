@@ -216,7 +216,7 @@ export async function handlePlatformApi(request:Request,env:PlatformEnv):Promise
    const now=new Date().toISOString();await env.DB.prepare('INSERT INTO weekly_checkins (id,user_id,week_start,training_count,regularity,notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(user_id,week_start) DO UPDATE SET training_count=excluded.training_count,regularity=excluded.regularity,notes=excluded.notes,updated_at=excluded.updated_at').bind(crypto.randomUUID(),s.id,week,count,rating,notes,now,now).run();return reply({ok:true});
   }
   return null;
- }catch(error){console.error('System Formy platform API error:',error);return reply({error:error instanceof Error?error.message:'Nie udało się wykonać operacji.'},500);}
+ }catch(error){console.error('System Formy platform API error:',error);return reply({error:'Wystąpił błąd serwera. Spróbuj ponownie.'},500);}
 }
 
 /** Global password gate. Called before API and ASSETS routing. */

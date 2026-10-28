@@ -353,6 +353,29 @@ async function v2Digest(value: string): Promise<string> {
 async function v2SitePasswordHash(password:string):Promise<string>{const saltBytes=crypto.getRandomValues(new Uint8Array(16));const salt=Array.from(saltBytes,b=>b.toString(16).padStart(2,'0')).join('');const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:saltBytes,iterations:100000,hash:'SHA-256'},key,256);const hash=Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('');return `${salt}:${hash}`;}
 async function v2SitePasswordMatches(password:string,stored:string):Promise<boolean>{const [salt,expected]=stored.split(':');if(!/^[a-f0-9]{32}$/.test(salt||'')||!/^[a-f0-9]{64}$/.test(expected||''))return false;const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);const saltBytes=Uint8Array.from((salt.match(/.{2}/g)||[]).map(x=>parseInt(x,16)));const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:saltBytes,iterations:100000,hash:'SHA-256'},key,256);const actual=Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('');return actual===expected;}
 
+async function v2LimitSiteUnlockAttempts(request: Request, env: V2Env): Promise<void> {
+  await ensureSchemaOnce(env, 'site-lock-rate-limit', async () => {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS site_lock_rate_limit_events (
+      scope TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )`).run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_site_lock_rate_limit_scope_time ON site_lock_rate_limit_events(scope, created_at)').run();
+  });
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const scope = await v2Digest(`site-lock:${ip}`);
+  const now = Date.now();
+  const row = await env.DB.prepare('SELECT COUNT(*) AS total FROM site_lock_rate_limit_events WHERE scope=? AND created_at>=?')
+    .bind(scope, now - 15 * 60 * 1000).first<{ total: number }>();
+  if (Number(row?.total || 0) >= 8) {
+    throw new V2InputError('Wykonano zbyt wiele prób odblokowania. Odczekaj 15 minut i spróbuj ponownie.', 429);
+  }
+  await env.DB.prepare('INSERT INTO site_lock_rate_limit_events(scope,created_at) VALUES(?,?)').bind(scope, now).run();
+  // Cleanup only during a short window each hour, not on every unlock attempt.
+  if (now % (60 * 60 * 1000) < 10_000) {
+    await env.DB.prepare('DELETE FROM site_lock_rate_limit_events WHERE created_at < ?').bind(now - 24 * 60 * 60 * 1000).run();
+  }
+}
+
 async function v2VerifySiteUnlockToken(storedHash:string,token:string):Promise<boolean>{const [expiresRaw,signature,extra]=token.split('.');if(!expiresRaw||!signature||extra!==undefined||!/^\d{10,13}$/.test(expiresRaw)||!/^[a-f0-9]{64}$/.test(signature))return false;const expires=Number(expiresRaw);if(!Number.isSafeInteger(expires)||expires<=Date.now()||expires>Date.now()+24*60*60*1000+60000)return false;const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(storedHash),{name:'HMAC',hash:'SHA-256'},false,['sign']);const bytes=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(`system-formy-site-unlock:${expiresRaw}`));const expected=Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');let diff=0;for(let i=0;i<expected.length;i++)diff|=expected.charCodeAt(i)^signature.charCodeAt(i);return diff===0;}
 async function v2Session(request: Request, env: V2Env): Promise<V2Session | null> {
   const token = v2Token(request); if (!token) return null;
@@ -759,6 +782,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     if (path === '/api/v2/site-lock/unlock' && method === 'POST') {
       const b=await v2Body(request),password=v2Field(b,'password',200); const row=await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='site_lock_password_hash'").first<{setting_value:string}>();
       if(!row?.setting_value)return v2Reply({error:'Blokada hasłem nie jest skonfigurowana.'},400);
+      await v2LimitSiteUnlockAttempts(request, env);
       if(!(await v2SitePasswordMatches(password,row.setting_value)))return v2Reply({error:'Nieprawidłowe hasło.'},401);
       const expires=Date.now()+24*60*60*1000, expiresRaw=String(expires), key=await crypto.subtle.importKey('raw',new TextEncoder().encode(row.setting_value),{name:'HMAC',hash:'SHA-256'},false,['sign']);
       const signatureBytes=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(`system-formy-site-unlock:${expiresRaw}`));
