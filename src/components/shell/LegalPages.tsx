@@ -166,7 +166,7 @@ function PrivacyPage() {
 
       <section className="sf-legal-section">
         <h2>5. Okres przechowywania</h2>
-        <p>Dane konta, profilu i aktywności są przechowywane tak długo, jak jest to potrzebne do obsługi konta i funkcji, a następnie przez okres konieczny do rozliczeń, realizacji obowiązków prawnych lub ustalenia, dochodzenia i obrony roszczeń. Dane zamówień i dokumenty rozliczeniowe są przechowywane przez okres wynikający z właściwych przepisów. Zapis potwierdzeń zgód zakupowych obejmuje identyfikator sesji płatności, konto i adres e-mail, produkt, wersję regulaminu i zgód, dokładną zaakceptowaną treść oraz datę i informację o wysłaniu potwierdzenia. Dane te są przechowywane przez okres niezbędny do wykazania przebiegu zawarcia i wykonania umowy, rozliczeń oraz ustalenia, dochodzenia lub obrony roszczeń.</p>
+        <p>Dane konta, profilu i aktywności są przechowywane tak długo, jak jest to potrzebne do obsługi konta i funkcji, a następnie przez okres konieczny do rozliczeń, realizacji obowiązków prawnych lub ustalenia, dochodzenia i obrony roszczeń. Dane zamówień i dokumenty rozliczeniowe są przechowywane przez okres wynikający z właściwych przepisów. Zapis potwierdzeń zgód zakupowych obejmuje identyfikator sesji płatności, konto i adres e-mail, produkt, wersję regulaminu i zgód, dokładną zaakceptowaną treść oraz datę akceptacji i potwierdzenia płatności. Kopia zapisu jest dostępna do pobrania w sekcji „Historia zakupów” na koncie użytkownika. Dane te są przechowywane przez okres niezbędny do wykazania przebiegu zawarcia i wykonania umowy, rozliczeń oraz ustalenia, dochodzenia lub obrony roszczeń.</p>
         <p>Zgłoszenia pomocy i reklamacje przechowuje się przez czas potrzebny do obsługi sprawy oraz ustalenia, dochodzenia lub obrony roszczeń. Informacje o zdrowiu ogranicza się do zakresu potrzebnego do realizacji zamówienia i przechowuje tylko przez okres uzasadniony celem oraz podstawą prawną. Po ustaniu celu i upływie okresów wymaganych prawem dane są usuwane lub anonimizowane, z uwzględnieniem kopii zapasowych i obowiązków prawnych.</p>
       </section>
 
@@ -196,7 +196,7 @@ function PrivacyPage() {
 
       <section className="sf-legal-section">
         <h2>10. Marketing i zmiany polityki</h2>
-        <p>Wiadomości niezbędne do obsługi konta, płatności, zamówienia i potwierdzenia zgód są wiadomościami transakcyjnymi. Wiadomości marketingowe będą wysyłane wyłącznie po uzyskaniu odrębnej zgody, jeżeli taka funkcja zostanie udostępniona; zgodę będzie można wycofać w sposób wskazany w wiadomości lub skontaktować się z administratorem.</p>
+        <p>Informacje o płatności, zamówieniu i zaakceptowanych zgodach są dostępne po zalogowaniu w sekcji „Historia zakupów”, gdzie można pobrać kopię zapisu. E-mail może być wykorzystywany do kontaktu dotyczącego obsługi konta, zamówienia lub zgłoszenia. Wiadomości marketingowe będą wysyłane wyłącznie po uzyskaniu odrębnej zgody, jeżeli taka funkcja zostanie udostępniona; zgodę będzie można wycofać w sposób wskazany w wiadomości lub skontaktować się z administratorem.</p>
         <p>Polityka może być aktualizowana, gdy zmienią się funkcje Serwisu, dostawcy, przepisy lub sposób przetwarzania danych. Aktualna wersja jest publikowana pod tym adresem.</p>
         <p>Kontakt w sprawach danych: <a href={`mailto:${LEGAL_EMAIL}`}>{LEGAL_EMAIL}</a>. Pomoc techniczna i zamówienia: <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. <a href="/regulamin">Przeczytaj regulamin.</a></p>
       </section>
