@@ -760,3 +760,24 @@
 .sf-library-empty>p:not(.sf-eyebrow){max-width:420px;color:var(--muted,#697064);font-size:12px;line-height:1.7;margin:0 0 17px}
 @media(max-width:900px){.sf-progress-hero{grid-template-columns:1fr}.sf-progress-hero-stats{grid-template-columns:repeat(3,minmax(0,1fr))}.sf-progress-hero-stats>div{grid-template-columns:1fr;gap:5px}.sf-progress-hero-stats strong{grid-column:auto;grid-row:auto;font-size:24px}.sf-library-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.sf-equipment-options{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:640px){.sf-gen-equipment-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.sf-progress-main-grid{grid-template-columns:1fr}.sf-progress-hero{padding:20px;border-radius:17px}.sf-progress-hero-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.sf-progress-hero-stats>div{padding:9px}.sf-progress-hero-stats small{font-size:9px}.sf-progress-hero-stats strong{font-size:21px}.sf-progress-hero-stats span{font-size:9px}.sf-progress-week-bars{gap:3px}.sf-progress-week>small{font-size:8px}.sf-progress-week>b{font-size:9px}.sf-progress-weight-bars{gap:4px}.sf-progress-weight-bars strong{font-size:8px}.sf-library-hero{grid-template-columns:1fr;gap:15px;padding:16px}.sf-library-hero-art{min-height:125px}.sf-library-stats{grid-template-columns:1fr;gap:8px;margin-bottom:25px}.sf-library-stats>div{padding:10px 12px}.sf-library-grid{grid-template-columns:1fr}.sf-library-card-art{min-height:98px}.sf-library-card-copy>p:not(.sf-eyebrow){min-height:0}.sf-individual-steps{gap:5px}.sf-individual-steps span{flex-direction:column;align-items:flex-start;padding:8px;font-size:10px}.sf-equipment-options,.sf-max-results-grid{grid-template-columns:1fr}.sf-question-section{padding:16px 0}.sf-gen-footer,.sf-gen-result-footer{align-items:stretch}.sf-gen-footer .sf-button,.sf-gen-result-footer .sf-button{width:100%;justify-content:center}}
+
+/* Legal documents and the Materials -> Challenges shortcut */
+.sf-legal-document{max-width:960px;padding:clamp(20px,4vw,38px);}
+.sf-legal-meta{margin-bottom:16px;color:var(--muted);font-size:11px;letter-spacing:.04em;text-transform:uppercase;}
+.sf-legal-warning,.sf-legal-placeholder{padding:16px 17px;border:1px solid rgba(198,243,106,.28);border-radius:14px;background:linear-gradient(135deg,rgba(198,243,106,.08),rgba(198,243,106,.025));color:#e4eadb;}
+.sf-legal-warning{margin:0 0 22px;}
+.sf-legal-warning>b,.sf-legal-placeholder>b{display:block;color:var(--lime);font-size:13px;margin-bottom:6px;}
+.sf-legal-warning p,.sf-legal-placeholder p{margin:0!important;color:#c0c8b7!important;font-size:12px!important;line-height:1.75!important;}
+.sf-legal-placeholder strong{color:#f5f7ef;font-weight:700;}
+.sf-legal-section{margin-top:25px;padding-top:23px;border-top:1px solid rgba(255,255,255,.075);}
+.sf-legal-section:first-of-type{margin-top:0;padding-top:0;border-top:0;}
+.sf-legal .sf-legal-section h2{margin:0 0 11px;font-size:20px;line-height:1.25;}
+.sf-legal .sf-legal-section p,.sf-legal .sf-legal-section li{color:#b6beb0;font-size:13px;line-height:1.85;}
+.sf-legal .sf-legal-section p{margin:0 0 12px;}
+.sf-legal .sf-legal-section ul{padding-left:21px;margin:0 0 14px;}
+.sf-legal .sf-legal-section li{padding-left:4px;margin:0 0 7px;}
+.sf-legal .sf-legal-section b{color:#eef2e8;}
+.sf-legal .sf-legal-section a{color:var(--lime);text-decoration:underline;text-underline-offset:3px;}
+.sf-library-hero-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:17px;}
+.sf-library-hero-actions .sf-button{min-height:42px;}
+@media(max-width:640px){.sf-legal-document{padding:17px!important}.sf-legal .sf-legal-section h2{font-size:18px}.sf-legal .sf-legal-section p,.sf-legal .sf-legal-section li{font-size:12px;line-height:1.8}.sf-legal-placeholder,.sf-legal-warning{padding:13px}.sf-library-hero-actions .sf-button{width:100%;justify-content:center}}
