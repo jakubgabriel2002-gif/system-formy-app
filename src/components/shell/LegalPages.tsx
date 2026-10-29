@@ -23,7 +23,6 @@ function ContactDetails() {
         Pomoc techniczna, zamówienia i reklamacje: <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a><br />
         Serwis: <a href={SITE_URL}>{SITE_URL}</a>
       </p>
-      <p>Numer NIP nie został podany. Dane identyfikacyjne należy utrzymywać zgodne z rzeczywistym statusem prawnym usługodawcy oraz informacjami przekazywanymi operatorowi płatności.</p>
     </section>
   );
 }
@@ -89,16 +88,22 @@ function TermsPage() {
 
       <section className="sf-legal-section">
         <h2>8. Odstąpienie od umowy i zwroty</h2>
-        <p>Prawo odstąpienia od umowy zawartej na odległość zależy od rodzaju umowy i przepisów mających zastosowanie do danego zakupu. Konsumentowi co do zasady przysługuje 14-dniowy termin na odstąpienie od umowy zawartej na odległość, z zastrzeżeniem ustawowych wyjątków.</p>
-        <p>W przypadku treści cyfrowych niedostarczanych na nośniku materialnym prawo odstąpienia nie jest automatycznie wyłączone tylko dlatego, że produkt jest cyfrowy lub został opłacony. Wyjątek może mieć zastosowanie, gdy spełnione są wymagania ustawowe, w tym uzyskanie uprzedniej wyraźnej zgody konsumenta na rozpoczęcie dostarczania treści przed upływem terminu odstąpienia, przyjęcie przez niego do wiadomości utraty prawa odstąpienia oraz przekazanie wymaganego potwierdzenia zawarcia umowy. Sam zapis w tym regulaminie nie zastępuje odpowiednich zgód i potwierdzeń w procesie zakupu.</p>
-        <p>Jeżeli wymagane zgody lub potwierdzenia nie zostały prawidłowo uzyskane, nie należy zakładać, że prawo odstąpienia zostało utracone. Każde zgłoszenie jest oceniane zgodnie z przepisami i okolicznościami konkretnej umowy.</p>
-        <p>Aby zgłosić odstąpienie lub zapytać o zwrot, napisz na <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. Dobrowolna polityka zwrotów, jeśli zostanie wprowadzona, nie ogranicza praw ustawowych.</p>
+        <p>Konsumentowi zawierającemu umowę na odległość co do zasady przysługuje 14 dni na odstąpienie od umowy, z uwzględnieniem wyjątków i warunków wynikających z obowiązujących przepisów. Zasady zależą od tego, czy zamówienie dotyczy treści cyfrowej, usługi cyfrowej, subskrypcji czy usługi indywidualnej.</p>
+        <p><strong>Treści cyfrowe dostarczane elektronicznie, np. e-booki, poradniki i pliki z planem:</strong> samo to, że plik można pobrać od razu, nie powoduje automatycznie utraty prawa odstąpienia. Ustawowy wyjątek może mieć zastosowanie, jeśli konsument przed rozpoczęciem dostarczania wyraźnie zgodzi się na rozpoczęcie przed upływem terminu odstąpienia, przyjmie do wiadomości, że prawo utraci po spełnieniu świadczenia przez sprzedawcę (czyli dostarczeniu zakupionej treści cyfrowej), a sprzedawca przekaże wymagane potwierdzenie na trwałym nośniku. W procesie zakupu odpowiednia zgoda jest zbierana osobnym, domyślnie niezaznaczonym polem. Po potwierdzeniu płatności wysyłamy e-mailem potwierdzenie zakupu i dokładną treść zaakceptowanej zgody. Jeżeli warunki ustawowego wyjątku nie zostały spełnione, nie zakładamy, że prawo odstąpienia wygasło.</p>
+        <p><strong>Usługi cyfrowe, Premium i usługi indywidualne:</strong> przed upływem terminu odstąpienia konsument może osobno zażądać rozpoczęcia świadczenia. W przypadku odstąpienia po rozpoczęciu wykonywania usługi konsument może być zobowiązany do zapłaty kwoty proporcjonalnej do świadczeń spełnionych do chwili odstąpienia, jeśli wymagane warunki zostały spełnione. Prawo odstąpienia od usługi wygasa po jej pełnym wykonaniu wyłącznie wtedy, gdy konsument uprzednio wyraził wyraźną zgodę na rozpoczęcie świadczenia przed upływem terminu, przyjął do wiadomości utratę tego prawa po pełnym wykonaniu i spełniono pozostałe wymagania ustawowe.</p>
+        <p><strong>Indywidualny plan treningowy:</strong> samo przygotowanie planu na podstawie ankiety lub dopasowanie go do konkretnej osoby nie jest traktowane w tym Regulaminie jako automatyczne wyłączenie wszystkich praw do odstąpienia lub zwrotu. Zastosowanie mają zasady właściwe dla rzeczywistego zakresu danej umowy, w tym treści cyfrowej i/lub usługi. Przed zamówieniem należy sprawdzić opis produktu oraz zaznaczyć odpowiednie zgody, gdy są wymagane.</p>
+        <p>Wyjątek dotyczący odstąpienia nie ogranicza praw konsumenta do reklamacji z powodu niezgodności treści lub usługi cyfrowej z umową. Reklamacje rozpatrujemy niezależnie od tego, czy w danej sprawie przysługuje prawo odstąpienia. Nie stosujemy ogólnej zasady, że każdy produkt cyfrowy lub plan indywidualny jest w każdych okolicznościach „bezzwrotny”.</p>
+        <p>Oświadczenie o odstąpieniu lub pytanie dotyczące zwrotu można wysłać na adres <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. Samo wysłanie prośby o zwrot nie oznacza automatycznego uznania każdego żądania; każdą sprawę rozpatrujemy według rodzaju umowy, przebiegu realizacji i obowiązujących przepisów. Żadne postanowienie Regulaminu nie ogranicza praw, których nie można wyłączyć umową.</p>
+        <p><strong>Wzór formularza odstąpienia od umowy (możesz też wysłać jednoznaczne oświadczenie własnymi słowami):</strong><br />Adresat: Jakub Gabriel, Kazimierza Wielkiego 4/28, Lubawa, Polska, e-mail: <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. „Ja/My (*) niniejszym informuję/informujemy (*) o odstąpieniu od umowy dotyczącej następujących towarów/usług (*): …; data zawarcia umowy/odbioru (*): …; imię i nazwisko konsumenta(-ów): …; adres konsumenta(-ów): …; podpis konsumenta(-ów) (tylko w przypadku formularza papierowego): …; data: …”. (*) Niepotrzebne skreślić.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>9. Reklamacje i pomoc</h2>
-        <p>Problemy z kontem, płatnością, dostępem do produktu lub działaniem funkcji można zgłaszać na adres <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> albo przez Centrum pomocy w Serwisie. W zgłoszeniu opisz problem i podaj informacje potrzebne do znalezienia zamówienia.</p>
-        <p>Nie wysyłaj hasła, pełnych danych karty płatniczej ani innych informacji, które nie są niezbędne do obsługi sprawy. Zgłoszenia będą rozpatrywane bez zbędnej zwłoki i w terminach wynikających z właściwych przepisów.</p>
+        <h2>9. Reklamacje produktów cyfrowych i pomoc</h2>
+        <p>Reklamacje dotyczące zakupionych e-booków, poradników, planów, wyzwań, funkcji Premium, planów indywidualnych oraz innych płatnych treści lub usług cyfrowych należy składać e-mailem na adres <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. Obsługa reklamacji jest prowadzona w języku polskim lub angielskim.</p>
+        <p>W zgłoszeniu należy w miarę możliwości podać adres e-mail przypisany do konta lub zamówienia, nazwę produktu, numer zamówienia (jeśli jest dostępny), datę zakupu lub wystąpienia problemu, opis niezgodności oraz oczekiwany sposób rozwiązania. Zrzut ekranu lub inny materiał pomocniczy można dołączyć, jeśli ułatwi wyjaśnienie sprawy, ale nie jest obowiązkowy. Jeżeli informacje są niewystarczające do znalezienia zamówienia lub oceny problemu, poprosimy o niezbędne uzupełnienie.</p>
+        <p>Po otrzymaniu zgłoszenia możemy potwierdzić jego przyjęcie e-mailem. Odpowiedź wysyłamy e-mailem, co do zasady w ciągu 14 dni kalendarzowych albo w innym terminie, jeśli wynika on z właściwych przepisów. W odpowiedzi przedstawimy rozstrzygnięcie i jego uzasadnienie. Brak zrzutu ekranu sam w sobie nie stanowi podstawy do odmowy rozpatrzenia reklamacji.</p>
+        <p>W zależności od rodzaju niezgodności i właściwych przepisów rozwiązaniem może być w szczególności usunięcie błędu, doprowadzenie treści lub usługi do zgodności z umową, przywrócenie dostępu, obniżenie ceny albo odstąpienie od umowy i zwrot płatności, jeżeli spełnione są przesłanki ustawowe. Zwroty realizowane przez Stripe są obsługiwane ręcznie przez usługodawcę; wewnętrzny proces nie ogranicza ustawowych praw ani terminów klienta.</p>
+        <p>Nie wysyłaj hasła, pełnych danych karty płatniczej ani innych danych, które nie są potrzebne do obsługi sprawy. Nie wysyłaj też szczegółowych informacji o zdrowiu w reklamacji, chyba że są niezbędne do wyjaśnienia konkretnego problemu. Regulamin nie wyłącza ani nie ogranicza bezwzględnie obowiązujących praw konsumenta dotyczących zgodności treści lub usług cyfrowych z umową.</p>
       </section>
 
       <section className="sf-legal-section">
@@ -136,7 +141,7 @@ function PrivacyPage() {
           <li><b>Dane zamówień:</b> kupione produkty, kwoty, status płatności, identyfikatory zamówień i informacje transakcyjne niezbędne do obsługi zakupu. Dane karty płatniczej obsługuje operator płatności; Serwis nie prosi o przekazywanie pełnych danych karty w wiadomościach.</li>
           <li><b>Dane ankiet i planów indywidualnych:</b> odpowiedzi potrzebne do przygotowania planu, które mogą obejmować wiek, parametry fizyczne, cele, dostępny sprzęt, ograniczenia ruchowe, kontuzje, choroby lub leki, jeżeli użytkownik je poda. Informacje o zdrowiu mogą stanowić szczególną kategorię danych osobowych.</li>
           <li><b>Dane kontaktowe i zgłoszenia:</b> adres e-mail, treść zgłoszenia i informacje potrzebne do rozwiązania problemu.</li>
-          <li><b>Dane techniczne i analityczne:</b> informacje o odwiedzanej ścieżce, zdarzeniu w Serwisie, produkcie i sesji analitycznej. Opcjonalna analityka aktywności sklepu w aplikacji jest uzależniona od wyboru użytkownika w banerze zgody. Inne narzędzia analityczne lub reklamowe nie zostały w tej polityce potwierdzone.</li>
+          <li><b>Dane techniczne i analityczne:</b> informacje o odwiedzanej ścieżce, zdarzeniu w Serwisie, produkcie i sesji analitycznej. Opcjonalna analityka aktywności sklepu w aplikacji jest uzależniona od wyboru użytkownika w banerze zgody. Serwis nie wczytuje obecnie zewnętrznych narzędzi analitycznych ani reklamowych.</li>
         </ul>
         <p>Nie przekazuj danych, które nie są potrzebne do danej funkcji. W szczególności informacje o zdrowiu podawaj tylko wtedy, gdy są potrzebne do realizacji wybranej usługi.</p>
       </section>
@@ -148,27 +153,27 @@ function PrivacyPage() {
           <li>obsługa płatności, zamówień, reklamacji i obowiązków rozliczeniowych — w celu wykonania umowy oraz wypełnienia obowiązków prawnych, które mają zastosowanie;</li>
           <li>zapewnienie bezpieczeństwa, zapobieganie nadużyciom i dochodzenie lub obrona roszczeń — w zakresie prawnie uzasadnionego interesu, jeśli ma zastosowanie;</li>
           <li>opcjonalna analityka zachowania w Serwisie — na podstawie wyboru użytkownika, zgodnie z mechanizmem zgody udostępnionym w aplikacji;</li>
-          <li>przetwarzanie danych o zdrowiu, jeżeli użytkownik poda takie dane w ankiecie — wyłącznie, gdy istnieje odpowiednia podstawa prawna, w tym wyraźna zgoda, jeśli jest wymagana. Przed wdrożeniem ankiety administrator powinien zapewnić właściwy sposób uzyskiwania i dokumentowania takiej zgody.</li>
+          <li>przetwarzanie informacji o zdrowiu i ograniczeniach treningowych podanych w ankiecie planu indywidualnego — na podstawie odrębnej, wyraźnej zgody zaznaczanej przez użytkownika w formularzu, wyłącznie w zakresie potrzebnym do przygotowania i realizacji zamówienia.</li>
         </ul>
         <p>Wycofanie zgody nie wpływa na zgodność z prawem przetwarzania dokonanego przed jej wycofaniem. Dane, które muszą być zachowane na innej podstawie prawnej, nie są automatycznie usuwane po wycofaniu zgody.</p>
       </section>
 
       <section className="sf-legal-section">
         <h2>4. Odbiorcy danych</h2>
-        <p>Dostęp do danych mogą mieć osoby upoważnione do obsługi Serwisu oraz dostawcy technologii niezbędni do jego działania. Aplikacja korzysta z usług Cloudflare do obsługi aplikacji, bazy danych i przechowywania plików oraz Stripe do obsługi płatności i subskrypcji. Dane mogą być również przekazane uprawnionym organom, jeśli wymaga tego prawo.</p>
-        <p>Przed publikacją administrator powinien zweryfikować aktualne warunki i role dostawców, umowy dotyczące przetwarzania danych oraz ewentualne transfery danych poza Europejski Obszar Gospodarczy.</p>
+        <p>Dostęp do danych mogą mieć osoby upoważnione do obsługi Serwisu oraz dostawcy technologii niezbędni do jego działania. Aplikacja korzysta z usług Cloudflare do obsługi aplikacji, bazy danych i przechowywania plików, Stripe do obsługi płatności i subskrypcji oraz Resend do wysyłania potwierdzeń transakcyjnych i zgód związanych z zakupem. Dane mogą być również przekazane uprawnionym organom, jeśli wymaga tego prawo.</p>
+        <p>Dostawcy mogą przetwarzać dane w różnych lokalizacjach, także poza Europejskim Obszarem Gospodarczym. Jeżeli dochodzi do transferu danych poza EOG, powinien on odbywać się z zastosowaniem mechanizmów przewidzianych przez RODO i warunki właściwego dostawcy.</p>
       </section>
 
       <section className="sf-legal-section">
         <h2>5. Okres przechowywania</h2>
-        <p>Dane konta, profilu i aktywności są przechowywane tak długo, jak jest to potrzebne do obsługi konta i funkcji, a następnie przez okres konieczny do rozliczeń, realizacji obowiązków prawnych lub ustalenia, dochodzenia i obrony roszczeń. Dane zamówień i dokumenty rozliczeniowe są przechowywane przez okres wynikający z właściwych przepisów.</p>
-        <p>Zgłoszenia pomocy przechowuje się przez czas potrzebny do ich obsługi i ewentualnego wykazania przebiegu sprawy. Dane o zdrowiu powinny być ograniczone do minimum i przechowywane wyłącznie przez okres uzasadniony celem i właściwą podstawą prawną. Konkretne okresy retencji i zasady usuwania danych, w tym kopii zapasowych, powinny zostać określone i wdrożone przez administratora.</p>
+        <p>Dane konta, profilu i aktywności są przechowywane tak długo, jak jest to potrzebne do obsługi konta i funkcji, a następnie przez okres konieczny do rozliczeń, realizacji obowiązków prawnych lub ustalenia, dochodzenia i obrony roszczeń. Dane zamówień i dokumenty rozliczeniowe są przechowywane przez okres wynikający z właściwych przepisów. Zapis potwierdzeń zgód zakupowych obejmuje identyfikator sesji płatności, konto i adres e-mail, produkt, wersję regulaminu i zgód, dokładną zaakceptowaną treść oraz datę i informację o wysłaniu potwierdzenia. Dane te są przechowywane przez okres niezbędny do wykazania przebiegu zawarcia i wykonania umowy, rozliczeń oraz ustalenia, dochodzenia lub obrony roszczeń.</p>
+        <p>Zgłoszenia pomocy i reklamacje przechowuje się przez czas potrzebny do obsługi sprawy oraz ustalenia, dochodzenia lub obrony roszczeń. Informacje o zdrowiu ogranicza się do zakresu potrzebnego do realizacji zamówienia i przechowuje tylko przez okres uzasadniony celem oraz podstawą prawną. Po ustaniu celu i upływie okresów wymaganych prawem dane są usuwane lub anonimizowane, z uwzględnieniem kopii zapasowych i obowiązków prawnych.</p>
       </section>
 
       <section className="sf-legal-section">
         <h2>6. Cookies, pamięć urządzenia i analityka</h2>
         <p>Serwis wykorzystuje techniczne mechanizmy potrzebne do logowania, utrzymania sesji, bezpieczeństwa i działania aplikacji. W pamięci przeglądarki może być zapisywana decyzja dotycząca opcjonalnej analityki oraz tymczasowy identyfikator sesji analitycznej.</p>
-        <p>Opcjonalna analityka aktywności sklepu jest uruchamiana po wybraniu akceptacji w banerze zgody. Użytkownik może ponownie otworzyć ustawienia prywatności z poziomu Serwisu i zmienić wybór. W tej wersji dokumentu nie deklaruje się użycia Google Analytics, Meta Pixel ani innych zewnętrznych narzędzi reklamowych, ponieważ nie zostało to potwierdzone.</p>
+        <p>Opcjonalna analityka aktywności sklepu jest uruchamiana po wybraniu akceptacji w banerze zgody. Użytkownik może ponownie otworzyć ustawienia prywatności z poziomu Serwisu i zmienić wybór. W tej wersji Serwisu nie są wykorzystywane Google Analytics ani Meta Pixel. Jeżeli zostaną dodane zewnętrzne narzędzia analityczne lub reklamowe, Polityka prywatności i mechanizm zgód zostaną odpowiednio zaktualizowane przed ich uruchomieniem.</p>
         <p>Usunięcie niezbędnych danych sesji lub zablokowanie pamięci przeglądarki może spowodować, że logowanie albo niektóre funkcje nie będą działać prawidłowo.</p>
       </section>
 
@@ -191,7 +196,7 @@ function PrivacyPage() {
 
       <section className="sf-legal-section">
         <h2>10. Marketing i zmiany polityki</h2>
-        <p>Na dzień publikacji polityki wysyłka newslettera lub marketingowych wiadomości e-mail nie została potwierdzona jako aktywna funkcja. Jeżeli zostanie wdrożona, użytkownik powinien otrzymać odpowiednią informację i — gdy jest to wymagane — możliwość udzielenia oraz wycofania zgody niezależnie od wiadomości niezbędnych do obsługi konta lub zamówienia.</p>
+        <p>Wiadomości niezbędne do obsługi konta, płatności, zamówienia i potwierdzenia zgód są wiadomościami transakcyjnymi. Wiadomości marketingowe będą wysyłane wyłącznie po uzyskaniu odrębnej zgody, jeżeli taka funkcja zostanie udostępniona; zgodę będzie można wycofać w sposób wskazany w wiadomości lub skontaktować się z administratorem.</p>
         <p>Polityka może być aktualizowana, gdy zmienią się funkcje Serwisu, dostawcy, przepisy lub sposób przetwarzania danych. Aktualna wersja jest publikowana pod tym adresem.</p>
         <p>Kontakt w sprawach danych: <a href={`mailto:${LEGAL_EMAIL}`}>{LEGAL_EMAIL}</a>. Pomoc techniczna i zamówienia: <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. <a href="/regulamin">Przeczytaj regulamin.</a></p>
       </section>
