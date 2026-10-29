@@ -27,6 +27,48 @@ const V2_PREMIUM_PRODUCT_DISCOUNT_PERCENT = 20;
 const V2_PREMIUM_INCLUDED_CHALLENGE_PRICE_CENTS = 1999;
 const V2_PREMIUM_CHALLENGE_PRICE_CENTS = 500;
 
+
+// Short-lived in-isolate cache for strictly public GET responses. User-specific/account/admin
+// endpoints are deliberately excluded. This reduces repeated D1 catalog reads during browsing.
+type V2PublicGetCacheEntry = { expiresAt: number; body: string };
+const v2PublicGetCache = new Map<string, V2PublicGetCacheEntry>();
+const V2_PUBLIC_GET_CACHE_TTL_MS = 15_000;
+const V2_PUBLIC_GET_CACHE_MAX_ENTRIES = 50;
+
+let lastLiveVisitorsCleanupAt = 0;
+let liveVisitorsCleanupPromise: Promise<void> | null = null;
+const LIVE_VISITORS_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const LIVE_VISITORS_RETENTION_MS = 24 * 60 * 60 * 1000;
+const LIVE_VISITOR_TOUCH_INTERVAL_MS = 240 * 1000;
+
+function ensureLiveVisitorsTable(env: V2Env): Promise<void> {
+  return ensureSchemaOnce(env, 'live-visitors', async () => {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS live_visitors (
+      session_key TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT,
+      path TEXT NOT NULL DEFAULT '/',
+      first_seen TEXT NOT NULL,
+      last_seen TEXT NOT NULL
+    )`).run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_live_visitors_last_seen ON live_visitors(last_seen)').run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_live_visitors_user_last_seen ON live_visitors(user_id,last_seen)').run();
+  });
+}
+
+async function cleanupLiveVisitorsOccasionally(env: V2Env): Promise<void> {
+  const now = Date.now();
+  if (now - lastLiveVisitorsCleanupAt < LIVE_VISITORS_CLEANUP_INTERVAL_MS) return;
+  if (liveVisitorsCleanupPromise) return liveVisitorsCleanupPromise;
+  lastLiveVisitorsCleanupAt = now;
+  liveVisitorsCleanupPromise = env.DB.prepare('DELETE FROM live_visitors WHERE last_seen < ?')
+    .bind(new Date(now - LIVE_VISITORS_RETENTION_MS).toISOString())
+    .run()
+    .then(() => undefined)
+    .catch(() => { lastLiveVisitorsCleanupAt = 0; })
+    .finally(() => { liveVisitorsCleanupPromise = null; });
+  await liveVisitorsCleanupPromise;
+}
+
 // Best-effort, per-isolate throttle for anonymous client diagnostics. Nothing is written to D1.
 const clientErrorBuckets = new Map<string, { windowStartedAt: number; count: number }>();
 function allowClientErrorReport(key: string, now = Date.now()): boolean {
@@ -48,6 +90,58 @@ function allowClientErrorReport(key: string, now = Date.now()): boolean {
   if (bucket.count >= 6) return false;
   bucket.count += 1;
   return true;
+}
+
+// Analytics is non-critical. Keep its abuse protection in memory so throttling itself does not
+// consume D1 reads/writes. User-facing purchases and training endpoints are not affected by this.
+const analyticsWriteBuckets = new Map<string, { windowStartedAt: number; count: number }>();
+const analyticsRecentEvents = new Map<string, number>();
+const ANALYTICS_WRITE_LIMIT_PER_IP_PER_MINUTE = 180;
+const ANALYTICS_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+let analyticsEnabledCache: { enabled: boolean; expiresAt: number } | null = null;
+function allowAnalyticsWrite(ip: string, eventKey: string, now = Date.now()): { allowed: boolean; duplicate: boolean } {
+  if (analyticsRecentEvents.size > 5000) {
+    for (const [key, timestamp] of analyticsRecentEvents) {
+      if (now - timestamp >= ANALYTICS_DEDUPE_WINDOW_MS) analyticsRecentEvents.delete(key);
+    }
+    while (analyticsRecentEvents.size > 5000) {
+      const oldest = analyticsRecentEvents.keys().next().value as string | undefined;
+      if (!oldest) break;
+      analyticsRecentEvents.delete(oldest);
+    }
+  }
+  const fullEventKey = `${ip}:${eventKey}`;
+  const previous = analyticsRecentEvents.get(fullEventKey);
+  if (previous !== undefined && now - previous < ANALYTICS_DEDUPE_WINDOW_MS) return { allowed: true, duplicate: true };
+
+  if (analyticsWriteBuckets.size > 2000) {
+    for (const [key, bucket] of analyticsWriteBuckets) {
+      if (now - bucket.windowStartedAt >= 60_000) analyticsWriteBuckets.delete(key);
+    }
+    while (analyticsWriteBuckets.size > 2000) {
+      const oldest = analyticsWriteBuckets.keys().next().value as string | undefined;
+      if (!oldest) break;
+      analyticsWriteBuckets.delete(oldest);
+    }
+  }
+  const bucket = analyticsWriteBuckets.get(ip);
+  if (!bucket || now - bucket.windowStartedAt >= 60_000) {
+    analyticsWriteBuckets.set(ip, { windowStartedAt: now, count: 1 });
+  } else {
+    if (bucket.count >= ANALYTICS_WRITE_LIMIT_PER_IP_PER_MINUTE) return { allowed: false, duplicate: false };
+    bucket.count += 1;
+  }
+  analyticsRecentEvents.set(fullEventKey, now);
+  return { allowed: true, duplicate: false };
+}
+async function isAnalyticsEnabled(env: V2Env): Promise<boolean> {
+  const now = Date.now();
+  if (analyticsEnabledCache && analyticsEnabledCache.expiresAt > now) return analyticsEnabledCache.enabled;
+  const setting = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='analytics_enabled'")
+    .first<{ setting_value: string }>();
+  const enabled = setting?.setting_value !== 'false';
+  analyticsEnabledCache = { enabled, expiresAt: now + 30_000 };
+  return enabled;
 }
 function safeClientErrorMessage(value: unknown): string {
   if (typeof value !== 'string') return 'Nieznany błąd klienta';
@@ -769,7 +863,7 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
   await env.DB.batch(statements);
   return v2Reply({ received: true, paid: true, display_order_number: display });
 }
-export async function handleV2Api(request: Request, env: V2Env): Promise<Response | null> {
+async function handleV2ApiInternal(request: Request, env: V2Env): Promise<Response | null> {
   const url = new URL(request.url), path = url.pathname, method = request.method.toUpperCase();
   if (path === '/api/v2/client-error' && method === 'POST') {
     // This endpoint intentionally does not persist diagnostics in D1. It writes only sanitized
@@ -953,23 +1047,37 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const settings: Record<string, string> = {}; for (const row of rows.results) settings[row.setting_key] = row.setting_value;
       return v2Reply({ support_email: settings.support_email || '', store_notice: settings.store_notice || '', analytics_enabled: settings.analytics_enabled !== 'false' });
     }
-    // Ephemeral presence: current activity only, no historical analytics timeline.
+    // Ephemeral presence. Heartbeats are throttled in the browser, and this endpoint no longer
+    // runs a table-wide cleanup for every visitor. Repeated same-page pings within the touch
+    // window do not update the D1 row at all.
     if (path === '/api/v2/presence/heartbeat' && method === 'POST') {
       const body = await v2Body(request), sessionKey = v2Field(body, 'session_key', 100), page = v2Field(body, 'path', 400).slice(0, 400);
       if (!/^[a-zA-Z0-9_-]{16,100}$/.test(sessionKey)) return v2Reply({ error: 'Nieprawidłowy identyfikator sesji.' }, 400);
-      const session = await v2Session(request, env), now = new Date().toISOString();
-      await env.DB.prepare('DELETE FROM live_visitors WHERE last_seen < ?').bind(new Date(Date.now() - 3 * 60 * 1000).toISOString()).run();
-      await env.DB.prepare('INSERT INTO live_visitors(session_key,user_id,path,first_seen,last_seen) VALUES(?,?,?,?,?) ON CONFLICT(session_key) DO UPDATE SET user_id=excluded.user_id,path=excluded.path,last_seen=excluded.last_seen').bind(sessionKey, session?.id || null, page || '/', now, now).run();
+      await ensureLiveVisitorsTable(env);
+      const session = await v2Session(request, env), nowMs = Date.now(), now = new Date(nowMs).toISOString();
+      const touchCutoff = new Date(nowMs - LIVE_VISITOR_TOUCH_INTERVAL_MS).toISOString();
+      await env.DB.prepare(`INSERT INTO live_visitors(session_key,user_id,path,first_seen,last_seen)
+        VALUES(?,?,?,?,?) ON CONFLICT(session_key) DO UPDATE SET
+          user_id=excluded.user_id,path=excluded.path,last_seen=excluded.last_seen
+        WHERE live_visitors.last_seen<=? OR live_visitors.path<>excluded.path
+          OR COALESCE(live_visitors.user_id,'')<>COALESCE(excluded.user_id,'')`)
+        .bind(sessionKey, session?.id || null, page || '/', now, now, touchCutoff).run();
       return v2Reply({ ok: true }, 200);
     }
 
     if (path === '/api/v2/analytics' && method === 'POST') {
-      const setting = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='analytics_enabled'").first<{ setting_value: string }>();
-      if (setting?.setting_value === 'false') return v2Reply({ ok: false, disabled: true });
       const body = await v2Body(request), type = v2Field(body, 'event_type', 40), productKey = v2Field(body, 'product_key', 100), page = v2Field(body, 'path', 400), sessionKey = v2Field(body, 'session_key', 100);
       if (!['page_view', 'product_view'].includes(type)) return v2Reply({ error: 'To zdarzenie może zapisać wyłącznie serwer.' }, 400);
-      const s = await v2Session(request, env);
-      await env.DB.prepare('INSERT INTO product_analytics(id,event_type,product_key,path,session_key,user_id,created_at) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(), type, productKey || null, page, sessionKey, s?.id || null, new Date().toISOString()).run();
+      if (!/^[a-zA-Z0-9_-]{16,100}$/.test(sessionKey) || !page.startsWith('/') || page.length > 400) return v2Reply({ error: 'Nieprawidłowe dane analityczne.' }, 400);
+      const ip = (request.headers.get('CF-Connecting-IP') || 'unknown').slice(0, 80);
+      const eventIdentity = `${sessionKey}:${type}:${type === 'product_view' ? productKey : page}`.slice(0, 600);
+      const allowance = allowAnalyticsWrite(ip, eventIdentity);
+      if (!allowance.allowed) return v2Reply({ ok: false, throttled: true }, 429);
+      if (allowance.duplicate) return v2Reply({ ok: true, deduplicated: true });
+      if (!(await isAnalyticsEnabled(env))) return v2Reply({ ok: false, disabled: true });
+      // The reporting UI only uses event/session aggregates. Looking up the user's account here
+      // added a D1 read for each anonymous, non-essential analytics event and stored needless linkage.
+      await env.DB.prepare('INSERT INTO product_analytics(id,event_type,product_key,path,session_key,user_id,created_at) VALUES(?,?,?,?,?,NULL,?)').bind(crypto.randomUUID(), type, productKey || null, page, sessionKey, new Date().toISOString()).run();
       return v2Reply({ ok: true }, 201);
     }
 
@@ -1842,8 +1950,10 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       }
 
       if (path === '/api/v2/admin/live-users' && method === 'GET') {
-        const cutoff = new Date(Date.now() - 90 * 1000).toISOString();
-        await env.DB.prepare('DELETE FROM live_visitors WHERE last_seen < ?').bind(new Date(Date.now() - 3 * 60 * 1000).toISOString()).run();
+        await ensureLiveVisitorsTable(env);
+        await cleanupLiveVisitorsOccasionally(env);
+        // Heartbeats arrive roughly every four minutes; allow up to eight minutes for jitter/background throttling.
+        const cutoff = new Date(Date.now() - 8 * 60 * 1000).toISOString();
         const summary = await env.DB.prepare('SELECT COUNT(*) AS active_visitors,COUNT(DISTINCT user_id) AS active_users FROM live_visitors WHERE last_seen >= ?').bind(cutoff).first<{active_visitors:number;active_users:number}>();
         const visitors = await env.DB.prepare('SELECT lv.session_key,lv.user_id,lv.path,lv.last_seen,u.email FROM live_visitors lv LEFT JOIN users u ON u.id=lv.user_id WHERE lv.last_seen >= ? ORDER BY lv.last_seen DESC LIMIT 100').bind(cutoff).all<{session_key:string;user_id:string|null;path:string;last_seen:string;email:string|null}>();
         return v2Reply({ active_visitors: summary?.active_visitors || 0, active_users: summary?.active_users || 0, visitors: visitors.results.map(v => ({ email: v.email || null, path: v.path, last_seen: v.last_seen, authenticated: Boolean(v.user_id) })) });
@@ -2198,3 +2308,52 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     return v2Reply({ error: 'Wystąpił błąd serwera. Spróbuj ponownie.' }, 500);
   }
 }
+
+function isV2PublicGetCacheable(request: Request): boolean {
+  if (request.method.toUpperCase() !== 'GET') return false;
+  const path = new URL(request.url).pathname;
+  return path === '/api/v2/products' || path === '/api/v2/settings/public' || /^\/api\/v2\/products\/[a-z0-9-]+$/.test(path);
+}
+
+/**
+ * Only non-personalized catalogue/settings GET responses are cached, for at most 15 seconds.
+ * Account, session, payment, notifications and admin responses never enter this cache.
+ */
+export async function handleV2Api(request: Request, env: V2Env): Promise<Response | null> {
+  if (!isV2PublicGetCacheable(request)) return handleV2ApiInternal(request, env);
+  const url = new URL(request.url);
+  const cacheKey = `${url.origin}${url.pathname}`;
+  const now = Date.now();
+  const hit = v2PublicGetCache.get(cacheKey);
+  if (hit && hit.expiresAt > now) {
+    return new Response(hit.body, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': `public, max-age=${Math.floor(V2_PUBLIC_GET_CACHE_TTL_MS / 1000)}, stale-while-revalidate=10`,
+        'X-Content-Type-Options': 'nosniff',
+      },
+    });
+  }
+  if (hit) v2PublicGetCache.delete(cacheKey);
+  const response = await handleV2ApiInternal(request, env);
+  if (!response || response.status !== 200) return response;
+  const contentType = response.headers.get('Content-Type') || '';
+  if (!contentType.toLowerCase().includes('application/json')) return response;
+  const body = await response.clone().text();
+  if (body.length > 250_000) return response;
+  if (v2PublicGetCache.size >= V2_PUBLIC_GET_CACHE_MAX_ENTRIES) {
+    for (const [key, entry] of v2PublicGetCache) if (entry.expiresAt <= now) v2PublicGetCache.delete(key);
+    while (v2PublicGetCache.size >= V2_PUBLIC_GET_CACHE_MAX_ENTRIES) {
+      const oldest = v2PublicGetCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      v2PublicGetCache.delete(oldest);
+    }
+  }
+  v2PublicGetCache.set(cacheKey, { expiresAt: now + V2_PUBLIC_GET_CACHE_TTL_MS, body });
+  const headers = new Headers(response.headers);
+  headers.set('Cache-Control', `public, max-age=${Math.floor(V2_PUBLIC_GET_CACHE_TTL_MS / 1000)}, stale-while-revalidate=10`);
+  headers.delete('Set-Cookie');
+  return new Response(body, { status: response.status, statusText: response.statusText, headers });
+}
+

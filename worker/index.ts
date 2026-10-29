@@ -23,6 +23,37 @@ const MAX_API_BODY_BYTES = 1 * 1024 * 1024;
 const MAX_WEBHOOK_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_UPLOAD_BODY_BYTES = 27 * 1024 * 1024;
 
+
+// Session expiry is refreshed lazily rather than on every API request.
+// A browser that continues using the app still keeps the session alive, but normal navigation
+// and polling no longer trigger two extra D1 operations per request.
+const SESSION_REFRESH_MIN_INTERVAL_MS = 6 * 60 * 1000;
+const sessionRefreshAtByToken = new Map<string, number>();
+function shouldRefreshSession(tokenHash: string, now: number): boolean {
+  if (sessionRefreshAtByToken.size > 2000) {
+    for (const [key, timestamp] of sessionRefreshAtByToken) {
+      if (now - timestamp > 30 * 60 * 1000) sessionRefreshAtByToken.delete(key);
+    }
+    while (sessionRefreshAtByToken.size > 2500) {
+      const oldest = sessionRefreshAtByToken.keys().next().value as string | undefined;
+      if (!oldest) break;
+      sessionRefreshAtByToken.delete(oldest);
+    }
+  }
+  const last = sessionRefreshAtByToken.get(tokenHash);
+  if (last !== undefined && now - last < SESSION_REFRESH_MIN_INTERVAL_MS) return false;
+  // Mark before the first await to collapse concurrent requests in the same Worker isolate.
+  sessionRefreshAtByToken.set(tokenHash, now);
+  return true;
+}
+function isPublicCachedRead(path: string, method: string): boolean {
+  return method === 'GET' && (
+    path === '/api/v2/products' ||
+    path === '/api/v2/settings/public' ||
+    /^\/api\/v2\/products\/[a-z0-9-]+$/.test(path)
+  );
+}
+
 function addSecurityHeaders(response: Response, request: Request): Response {
   const headers = new Headers(response.headers);
   headers.set('X-Content-Type-Options', 'nosniff');
@@ -268,20 +299,38 @@ async function createSession(request: Request, env: Env, user: PublicUser, remem
   return appendCookie(response, rememberFlagCookie(request, rememberMe));
 }
 async function refreshRollingSessionCookie(request: Request, env: Env, response: Response): Promise<Response> {
+  const url = new URL(request.url);
   const token = parseCookie(request, SESSION_COOKIE);
-  if (!token || !new URL(request.url).pathname.startsWith('/api/')) return response;
+  if (!token || !url.pathname.startsWith('/api/')) return response;
+  // Public catalogue/settings data is non-personalized and may be briefly cached. Do not add
+  // per-user Set-Cookie headers to those responses; the regular presence ping keeps active
+  // authenticated sessions alive independently.
+  if (isPublicCachedRead(url.pathname, request.method.toUpperCase())) return response;
+  let refreshTokenHash = '';
+  let refreshStartedAt = 0;
   try {
-    const tokenHash = await sha256(token), now = Date.now(), db = requireDb(env);
-    const row = await db.prepare('SELECT id FROM auth_sessions WHERE token_hash = ? AND expires_at > ? LIMIT 1')
-      .bind(tokenHash, now).first<{ id: string }>();
-    if (!row) return response;
+    const tokenHash = await sha256(token), now = Date.now();
+    if (!shouldRefreshSession(tokenHash, now)) return response;
+    refreshTokenHash = tokenHash;
+    refreshStartedAt = now;
+    const db = requireDb(env);
     const rememberMe = parseCookie(request, 'sf_remember') === '1';
     const ttl = rememberMe ? REMEMBER_TTL_MS : IDLE_TTL_MS;
-    await db.prepare('UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ? AND expires_at > ?').bind(now + ttl, tokenHash, now).run();
+    // A conditional UPDATE ... RETURNING validates the live session and renews it in one D1 query.
+    // The former SELECT followed by UPDATE cost two database operations every refresh window.
+    const row = await db.prepare('UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ? AND expires_at > ? RETURNING id')
+      .bind(now + ttl, tokenHash, now).first<{ id: string }>();
+    if (!row) return response;
     let refreshed = appendCookie(response, sessionCookie(request, token, Math.floor(ttl / 1000)));
     refreshed = appendCookie(refreshed, rememberFlagCookie(request, rememberMe));
     return refreshed;
-  } catch { return response; }
+  } catch {
+    // A transient D1 error must not suppress the next renewal attempt for the whole cooldown.
+    if (refreshTokenHash && sessionRefreshAtByToken.get(refreshTokenHash) === refreshStartedAt) {
+      sessionRefreshAtByToken.delete(refreshTokenHash);
+    }
+    return response;
+  }
 }
 let profileAgeSchemaReady = false;
 let profileAgeSchemaPromise: Promise<void> | null = null;
