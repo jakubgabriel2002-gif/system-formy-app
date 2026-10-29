@@ -5,6 +5,8 @@ interface V2Env {
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
   AUTH_PASSWORD_PEPPER?: string;
+  RESEND_API_KEY?: string;
+  SYSTEM_FORMY_EMAIL_FROM?: string;
 }
 type V2Session = { id: string; email: string };
 type V2Body = Record<string, unknown>;
@@ -83,13 +85,13 @@ function ensureIndividualPlanRequestTable(env: V2Env): Promise<void> {
   return ensureSchemaOnce(env, 'individual-plan-requests', () => createIndividualPlanRequestTable(env));
 }
 
-const PURCHASE_CONSENT_VERSION = 'sf-checkout-consents-2026-10-29-v1';
-const PURCHASE_TERMS_VERSION = '2026-10-29';
+const PURCHASE_CONSENT_VERSION = 'sf-checkout-consents-2026-10-29-v2';
+const PURCHASE_TERMS_VERSION = '2026-10-29-v2';
 const TERMS_ACCEPTANCE_TEXT = 'Akceptuję Regulamin Systemu Formy i zapoznałem/-am się z informacjami dotyczącymi zakupu, płatności i praw konsumenta.';
 const PURCHASE_TERMS_SNAPSHOT = `SYSTEM FORMY — WARUNKI ZAKUPU (wersja ${PURCHASE_TERMS_VERSION})
 Usługodawca: Jakub Gabriel, Kazimierza Wielkiego 4/28, Lubawa, Polska.
 Kontakt: kontakt@systemformy.com.pl; pomoc techniczna, zamówienia i reklamacje: pomoc@systemformy.com.pl; https://systemformy.com.pl.
-Przedmiot, zakres i cena zamówienia są określone nazwą produktu, opisem, ceną i okresem rozliczeniowym pokazanymi przed płatnością oraz danymi transakcji podanymi w potwierdzeniu. Płatność obsługuje Stripe. Materiały cyfrowe są udostępniane elektronicznie na koncie użytkownika lub w inny sposób wskazany w opisie produktu.
+Przedmiot, zakres i cena zamówienia są określone nazwą produktu, opisem, ceną i okresem rozliczeniowym pokazanymi przed płatnością oraz danymi transakcji podanymi w potwierdzeniu. Płatność obsługuje Stripe. Materiały cyfrowe są udostępniane elektronicznie na koncie użytkownika lub w inny sposób wskazany w opisie produktu. Kopia potwierdzenia zakupu i zaakceptowanych zgód jest udostępniana do pobrania w sekcji „Historia zakupów” na koncie użytkownika.
 ODSTĄPIENIE OD UMOWY — TREŚCI CYFROWE: Samo pobranie pliku ani jego cyfrowy charakter nie oznaczają automatycznie braku prawa odstąpienia. Wyjątek może mieć zastosowanie, gdy konsument przed rozpoczęciem dostarczania wyraźnie zgodzi się na rozpoczęcie przed końcem terminu odstąpienia, przyjmie do wiadomości utratę prawa po spełnieniu świadczenia przez sprzedawcę (dostarczeniu treści cyfrowej), a sprzedawca przekaże wymagane potwierdzenie na trwałym nośniku. Warunki muszą być spełnione łącznie.
 ODSTĄPIENIE OD UMOWY — USŁUGI CYFROWE I INDYWIDUALNE: Konsument może zażądać rozpoczęcia usługi przed upływem terminu odstąpienia. W razie odstąpienia po rozpoczęciu usługi może być należna kwota proporcjonalna do świadczenia spełnionego do chwili odstąpienia, jeżeli spełniono warunki ustawowe. Prawo odstąpienia wygasa po pełnym wykonaniu usługi tylko wtedy, gdy spełniono wszystkie warunki ustawowe. Samo indywidualne przygotowanie planu nie wyłącza automatycznie praw konsumenta.
 REKLAMACJE: Reklamacje należy składać na pomoc@systemformy.com.pl. Należy opisać problem oraz podać e-mail konta i dane identyfikujące zamówienie, jeśli są dostępne. Zrzuty ekranu są opcjonalne. Reklamacja z powodu niezgodności treści lub usługi cyfrowej z umową jest niezależna od prawa odstąpienia i nie jest wyłączona tymi zgodami. Możliwe rozwiązania oraz zwroty ustala się zgodnie z właściwymi przepisami.
@@ -103,6 +105,9 @@ function purchaseConsentStatement(kind: PurchaseConsentKind): string {
   return kind === 'digital_content' ? DIGITAL_CONTENT_CONSENT_TEXT : DIGITAL_SERVICE_CONSENT_TEXT;
 }
 function bodyBoolean(value: unknown): boolean { return value === true || value === 'true'; }
+function hasPurchaseConfirmationEmail(env: V2Env): boolean {
+  return Boolean(env.RESEND_API_KEY && env.SYSTEM_FORMY_EMAIL_FROM);
+}
 function ensurePurchaseConsentTable(env: V2Env): Promise<void> {
   return ensureSchemaOnce(env, 'purchase-consents', async () => {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS sf_purchase_consents (
@@ -123,6 +128,11 @@ function ensurePurchaseConsentTable(env: V2Env): Promise<void> {
       consent_statement TEXT NOT NULL,
       accepted_at TEXT NOT NULL,
       confirmation_email_sent_at TEXT,
+      order_id TEXT,
+      confirmation_status TEXT NOT NULL DEFAULT 'pending',
+      purchase_confirmed_at TEXT,
+      amount_cents INTEGER NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'PLN',
       created_at TEXT NOT NULL
     )`).run();
     // Add this column to a database from an earlier build without dropping stored consent records.
@@ -133,35 +143,103 @@ function ensurePurchaseConsentTable(env: V2Env): Promise<void> {
     if (!(columns.results || []).some((column) => column.name === 'terms_snapshot')) {
       await env.DB.prepare("ALTER TABLE sf_purchase_consents ADD COLUMN terms_snapshot TEXT NOT NULL DEFAULT 'System Formy — warunki zakupu (archiwalny zapis). Dla starszego zakupu zastosowanie ma regulamin obowiązujący w chwili zawarcia umowy.'").run();
     }
+    if (!(columns.results || []).some((column) => column.name === 'order_id')) {
+      await env.DB.prepare('ALTER TABLE sf_purchase_consents ADD COLUMN order_id TEXT').run();
+    }
+    if (!(columns.results || []).some((column) => column.name === 'confirmation_status')) {
+      await env.DB.prepare("ALTER TABLE sf_purchase_consents ADD COLUMN confirmation_status TEXT NOT NULL DEFAULT 'pending'").run();
+    }
+    if (!(columns.results || []).some((column) => column.name === 'purchase_confirmed_at')) {
+      await env.DB.prepare('ALTER TABLE sf_purchase_consents ADD COLUMN purchase_confirmed_at TEXT').run();
+    }
+    if (!(columns.results || []).some((column) => column.name === 'amount_cents')) {
+      await env.DB.prepare('ALTER TABLE sf_purchase_consents ADD COLUMN amount_cents INTEGER NOT NULL DEFAULT 0').run();
+    }
+    if (!(columns.results || []).some((column) => column.name === 'currency')) {
+      await env.DB.prepare("ALTER TABLE sf_purchase_consents ADD COLUMN currency TEXT NOT NULL DEFAULT 'PLN'").run();
+    }
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_sf_purchase_consents_user ON sf_purchase_consents(user_id,accepted_at DESC)').run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_sf_purchase_consents_status ON sf_purchase_consents(user_id,confirmation_status,purchase_confirmed_at DESC)').run();
   });
 }
 async function recordPurchaseConsent(env: V2Env, input: {
   checkoutSessionId: string; userId: string; userEmail: string; productKey: string; productTitle: string;
-  kind: PurchaseConsentKind; acceptedAt?: string;
+  kind: PurchaseConsentKind; acceptedAt?: string; amountCents?: number; currency?: string;
 }): Promise<void> {
   await ensurePurchaseConsentTable(env);
   const acceptedAt = input.acceptedAt || new Date().toISOString();
+  const amountCents = Number.isInteger(input.amountCents) && (input.amountCents as number) >= 0 ? input.amountCents as number : 0;
+  const currency = typeof input.currency === 'string' && /^[A-Za-z]{3}$/.test(input.currency) ? input.currency.toUpperCase() : 'PLN';
   await env.DB.prepare(`INSERT INTO sf_purchase_consents (
     id,checkout_session_id,user_id,user_email,product_key,product_title,purchase_kind,consent_version,terms_version,terms_acceptance_text,terms_snapshot,
-    terms_accepted,immediate_start_consent,withdrawal_acknowledged,consent_statement,accepted_at,created_at
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,1,1,1,?,?,?)`).bind(
+    terms_accepted,immediate_start_consent,withdrawal_acknowledged,consent_statement,amount_cents,currency,accepted_at,created_at
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,1,1,1,?,?,?,?,?)`).bind(
     crypto.randomUUID(), input.checkoutSessionId, input.userId, input.userEmail, input.productKey, input.productTitle,
-    input.kind, PURCHASE_CONSENT_VERSION, PURCHASE_TERMS_VERSION, TERMS_ACCEPTANCE_TEXT, PURCHASE_TERMS_SNAPSHOT, purchaseConsentStatement(input.kind), acceptedAt, acceptedAt,
+    input.kind, PURCHASE_CONSENT_VERSION, PURCHASE_TERMS_VERSION, TERMS_ACCEPTANCE_TEXT, PURCHASE_TERMS_SNAPSHOT,
+    purchaseConsentStatement(input.kind), amountCents, currency, acceptedAt, acceptedAt,
   ).run();
+}
+function purchaseConsentPaidStatement(env: V2Env, input: {
+  checkoutSessionId: string; userId: string; orderId?: string | null; confirmedAt: string;
+}): D1PreparedStatement {
+  return env.DB.prepare(`UPDATE sf_purchase_consents
+    SET confirmation_status='paid',purchase_confirmed_at=?,order_id=COALESCE(?,order_id)
+    WHERE checkout_session_id=? AND user_id=?`)
+    .bind(input.confirmedAt, input.orderId || null, input.checkoutSessionId, input.userId);
 }
 function htmlEscape(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
-// Purchase consent is recorded in D1 and tied to the checkout session.
-// Purchased materials are delivered in the app; no transactional email is sent.
-async function hasRecordedPurchaseConsent(env: V2Env, checkoutSessionId: string): Promise<boolean> {
+async function sendPurchaseConsentConfirmation(env: V2Env, checkoutSessionId: string, checkout: Record<string, any>): Promise<boolean> {
   await ensurePurchaseConsentTable(env);
-  const row = await env.DB.prepare('SELECT checkout_session_id FROM sf_purchase_consents WHERE checkout_session_id=? LIMIT 1')
-    .bind(checkoutSessionId).first<{ checkout_session_id: string }>();
-  return Boolean(row);
-}
+  const row = await env.DB.prepare('SELECT checkout_session_id,user_email,product_title,purchase_kind,consent_version,terms_version,terms_acceptance_text,terms_snapshot,consent_statement,accepted_at,confirmation_email_sent_at FROM sf_purchase_consents WHERE checkout_session_id=? LIMIT 1')
+    .bind(checkoutSessionId).first<{checkout_session_id:string;user_email:string;product_title:string;purchase_kind:PurchaseConsentKind;consent_version:string;terms_version:string;terms_acceptance_text:string;terms_snapshot:string;consent_statement:string;accepted_at:string;confirmation_email_sent_at:string|null}>();
+  if (!row) return false;
+  if (row.confirmation_email_sent_at) return true;
+  if (!hasPurchaseConfirmationEmail(env)) return false;
+  const amount = Number(checkout.amount_total);
+  const planKey = String(checkout.metadata?.plan_key || '');
+  const subscriptionPrice = checkout.mode === 'subscription' ? (planKey === 'yearly' ? '250,00 PLN / rok' : planKey === 'monthly' ? '50,00 PLN / miesiąc' : '') : '';
+  const price = subscriptionPrice || (checkout.amount_total !== null && checkout.amount_total !== undefined && Number.isFinite(amount) && amount >= 0
+    ? `${(amount / 100).toFixed(2).replace('.', ',')} ${String(checkout.currency || 'PLN').toUpperCase()}` : 'zgodnie z ceną i okresem podanym przed zakupem');
+  const kindLabel = row.purchase_kind === 'digital_content' ? 'Treść cyfrowa' : 'Usługa cyfrowa lub usługa indywidualna';
+  const acceptedAt = new Date(row.accepted_at).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' });
+  const statement = htmlEscape(row.consent_statement);
+  const product = htmlEscape(row.product_title);
+  const text = `Potwierdzenie umowy i zgód — System Formy
 
+Produkt: ${row.product_title}
+Rodzaj: ${kindLabel}
+Cena: ${price}
+Data zaakceptowania warunków: ${acceptedAt}
+Wersja regulaminu: ${row.terms_version}
+Wersja zgód: ${row.consent_version}
+
+Treść zaakceptowanego checkboxa regulaminu:
+${row.terms_acceptance_text}
+
+Archiwalny zapis warunków zakupu zaakceptowanych dla tej wersji:
+${row.terms_snapshot}
+
+Treść zaakceptowanej zgody/żądania:
+${row.consent_statement}
+
+To potwierdzenie nie ogranicza praw związanych z niezgodnością treści lub usługi cyfrowej z umową ani innych bezwzględnie obowiązujących praw. Regulamin: https://systemformy.com.pl/regulamin
+
+Confirmation of your agreement and consent — System Formy. This email preserves the exact consent statement accepted during checkout. Your statutory rights concerning conformity of digital content/services remain unaffected.`;
+  const html = `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#20251b"><h1>Potwierdzenie zakupu i zgód</h1><p>Dziękujemy za zamówienie w Systemie Formy.</p><p><b>Produkt:</b> ${product}<br><b>Rodzaj:</b> ${htmlEscape(kindLabel)}<br><b>Cena:</b> ${htmlEscape(price)}<br><b>Data zgody:</b> ${htmlEscape(acceptedAt)}<br><b>Wersja regulaminu:</b> ${htmlEscape(row.terms_version)}</p><h2>Treść zaakceptowanego checkboxa regulaminu</h2><blockquote>${htmlEscape(row.terms_acceptance_text)}</blockquote><h2>Archiwalny zapis warunków zakupu</h2><pre style="white-space:pre-wrap;font-family:Arial,sans-serif">${htmlEscape(row.terms_snapshot)}</pre><h2>Treść osobnej zgody lub żądania</h2><blockquote>${statement}</blockquote><p>To potwierdzenie nie ogranicza ustawowych praw dotyczących zgodności treści lub usług cyfrowych z umową ani innych praw, których nie można wyłączyć.</p><p><a href="https://systemformy.com.pl/regulamin">Regulamin Systemu Formy</a> · <a href="mailto:pomoc@systemformy.com.pl">pomoc@systemformy.com.pl</a></p><hr><p style="font-size:12px;color:#656b5e">Confirmation of your agreement and consent — System Formy. This email preserves the exact consent statement accepted during checkout. Your statutory rights concerning conformity of digital content/services remain unaffected.</p></div>`;
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': `system-formy-consent-${checkoutSessionId}` },
+      body: JSON.stringify({ from: env.SYSTEM_FORMY_EMAIL_FROM, to: [row.user_email], subject: 'System Formy — potwierdzenie zakupu i zgód', text, html }),
+    });
+    if (!response.ok) return false;
+    await env.DB.prepare('UPDATE sf_purchase_consents SET confirmation_email_sent_at=? WHERE checkout_session_id=? AND confirmation_email_sent_at IS NULL')
+      .bind(new Date().toISOString(), checkoutSessionId).run();
+    return true;
+  } catch { return false; }
+}
 function addPurchaseConsentMetadata(form: URLSearchParams, kind: PurchaseConsentKind): void {
   form.set('metadata[consent_version]', PURCHASE_CONSENT_VERSION);
   form.set('metadata[terms_version]', PURCHASE_TERMS_VERSION);
@@ -560,8 +638,8 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
       ['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(signedEventType) &&
       ['paid', 'no_payment_required'].includes(String(signedCheckout.payment_status || ''))) {
     const signedSessionId = typeof signedCheckout.id === 'string' ? signedCheckout.id : '';
-    if (!signedSessionId || !(await hasRecordedPurchaseConsent(env, signedSessionId))) {
-      return v2Reply({ error: 'Nie znaleziono zapisu zgód dla tej płatności. Zdarzenie zostanie ponowione; dostęp nie zostanie nadany bez zapisu zgód.' }, 503);
+    if (!signedSessionId || !(await sendPurchaseConsentConfirmation(env, signedSessionId, signedCheckout))) {
+      return v2Reply({ error: 'Nie udało się wysłać potwierdzenia zgód e-mailem. Zdarzenie zostanie ponowione; dostęp nie zostanie nadany przed potwierdzeniem.' }, 503);
     }
   }
   const premiumEventResponse = await v2PremiumStripeEvents(event, env);
@@ -627,6 +705,7 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
     await ensureNotificationTables(env);
     await env.DB.batch([
       env.DB.prepare('INSERT OR IGNORE INTO stripe_webhook_events(event_id,event_type,received_at) VALUES(?,?,?)').bind(eventId,eventType,now),
+      purchaseConsentPaidStatement(env,{checkoutSessionId:sessionId,userId,confirmedAt:now}),
       notificationInsert(env,userId,'System Formy Premium aktywne','Twoja subskrypcja Premium została potwierdzona. Zniżki i funkcje Premium są dostępne na Twoim koncie.',now),
     ]);
     await diagnose('processed','Subskrypcja Premium została zsynchronizowana.',sessionId,'');
@@ -678,6 +757,7 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
     await ensureNotificationTables(env);
     await env.DB.batch([
       env.DB.prepare('INSERT INTO stripe_webhook_events(event_id,event_type,received_at) VALUES(?,?,?)').bind(eventId, eventType, now),
+      purchaseConsentPaidStatement(env,{checkoutSessionId:sessionId,userId,orderId,confirmedAt:now}),
       env.DB.prepare("INSERT INTO orders(id,user_id,order_number,status,total_amount,currency,created_at,updated_at) VALUES(?,?,?,'paid',?,?,?,?)").bind(orderId, userId, `STRIPE-${sessionId}`, amount / 100, currency, now, now),
       env.DB.prepare('INSERT INTO order_display_numbers(order_id,display_number,created_at) VALUES(?,?,?)').bind(orderId, display, now),
       env.DB.prepare('INSERT INTO order_items(id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES(?,?,?,?,?,1,?,?)').bind(crypto.randomUUID(), orderId, productKey, item.title, item.product_type, amount / 100, now),
@@ -701,6 +781,7 @@ async function v2Webhook(request: Request, env: V2Env): Promise<Response | null>
   } catch { /* zakup niebędący wyzwaniem nie wymaga tabel wyzwań */ }
   const statements: D1PreparedStatement[] = [
     env.DB.prepare('INSERT INTO stripe_webhook_events(event_id,event_type,received_at) VALUES(?,?,?)').bind(eventId, eventType, now),
+    purchaseConsentPaidStatement(env,{checkoutSessionId:sessionId,userId,orderId,confirmedAt:now}),
     env.DB.prepare("INSERT INTO orders(id,user_id,order_number,status,total_amount,currency,created_at,updated_at) VALUES(?,?,?,'paid',?,?,?,?)").bind(orderId, userId, `STRIPE-${sessionId}`, amount / 100, currency, now, now),
     env.DB.prepare('INSERT INTO order_display_numbers(order_id,display_number,created_at) VALUES(?,?,?)').bind(orderId, display, now),
     env.DB.prepare('INSERT INTO order_items(id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES(?,?,?,?,?,1,?,?)').bind(crypto.randomUUID(), orderId, productKey, item.title, item.product_type, amount / 100, now),
@@ -828,6 +909,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const body = await v2Body(request), planKey = body.plan_key === 'yearly' ? 'yearly' : body.plan_key === 'monthly' ? 'monthly' : '';
       if (!planKey) return v2Reply({error:'Wybierz plan miesięczny albo roczny.'},400);
       if (!bodyBoolean(body.terms_accepted) || !bodyBoolean(body.early_start_consent) || !bodyBoolean(body.withdrawal_acknowledged)) return v2Reply({error:'Przed płatnością zaakceptuj regulamin oraz osobno potwierdź rozpoczęcie świadczenia przed upływem terminu odstąpienia.'},400);
+      if (!hasPurchaseConfirmationEmail(env)) return v2Reply({error:'Zakupy są tymczasowo niedostępne: administrator musi skonfigurować potwierdzenia zgód e-mailem przed uruchomieniem sprzedaży.'},503);
       const consentAcceptedAt = new Date().toISOString();
       const current = await v2PremiumSubscription(env,gate.session!.id);
       if (current && ['active','trialing','past_due'].includes(current.status) && (!current.current_period_end || Date.parse(current.current_period_end)>Date.now())) return v2Reply({error:'Masz już subskrypcję Premium. Możesz nią zarządzać w ustawieniach Premium.'},409);
@@ -846,7 +928,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (!response.ok || typeof payload.url !== 'string' || typeof payload.id !== 'string') return v2Reply({error:typeof payload.error?.message==='string'?`Stripe: ${payload.error.message}`:'Nie udało się otworzyć płatności Premium.'},502);
       try {
         await recordPurchaseConsent(env, { checkoutSessionId: payload.id, userId: gate.session!.id, userEmail: gate.session!.email,
-          productKey: `premium-${planKey}`, productTitle: planKey === 'yearly' ? 'System Formy Premium — plan roczny' : 'System Formy Premium — plan miesięczny', kind: 'digital_service', acceptedAt: consentAcceptedAt });
+          productKey: `premium-${planKey}`, productTitle: planKey === 'yearly' ? 'System Formy Premium — plan roczny' : 'System Formy Premium — plan miesięczny', kind: 'digital_service', amountCents: planKey === 'yearly' ? V2_PREMIUM_YEARLY_PRICE_CENTS : V2_PREMIUM_MONTHLY_PRICE_CENTS, currency: 'PLN', acceptedAt: consentAcceptedAt });
       } catch { return v2Reply({error:'Nie udało się bezpiecznie zapisać potwierdzenia zgód. Nie otworzyliśmy płatności — spróbuj ponownie.'},503); }
       return v2Reply({url:payload.url,session_id:payload.id});
     }
@@ -959,6 +1041,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (!termsAccepted || !earlyStartConsent || !withdrawalAcknowledged || body.purchase_consent_kind !== purchaseKind) {
         return v2Reply({ error: 'Przed płatnością zaakceptuj regulamin i potwierdź zgodę właściwą dla rodzaju produktu.' }, 400);
       }
+      if (!hasPurchaseConfirmationEmail(env)) return v2Reply({ error: 'Zakupy są tymczasowo niedostępne: administrator musi skonfigurować potwierdzenia zgód e-mailem przed uruchomieniem sprzedaży.' }, 503);
       const consentAcceptedAt = new Date().toISOString();
       // Rabat bezpośredni produktu: daty i procent sprawdzane po stronie serwera.
       const directDiscount = generatorCreditProduct ? null : await env.DB.prepare('SELECT discount_percent,starts_at,ends_at,is_active FROM product_discounts WHERE product_key=? LIMIT 1').bind(key).first<{discount_percent:number;starts_at:string|null;ends_at:string|null;is_active:number}>().catch(()=>null);
@@ -996,7 +1079,9 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (totalCents === 0) {
         const zeroCheckoutId = `sf_zero_${crypto.randomUUID()}`;
         try {
-          await recordPurchaseConsent(env, { checkoutSessionId: zeroCheckoutId, userId: gate.session!.id, userEmail: gate.session!.email, productKey: key, productTitle: item.title, kind: purchaseKind, acceptedAt: consentAcceptedAt });
+          await recordPurchaseConsent(env, { checkoutSessionId: zeroCheckoutId, userId: gate.session!.id, userEmail: gate.session!.email, productKey: key, productTitle: item.title, kind: purchaseKind, amountCents: 0, currency: item.currency || 'PLN', acceptedAt: consentAcceptedAt });
+          const confirmed = await sendPurchaseConsentConfirmation(env, zeroCheckoutId, { amount_total: 0, currency: item.currency || 'PLN' });
+          if (!confirmed) return v2Reply({ error: 'Nie udało się wysłać potwierdzenia zgód. Produkt nie został jeszcze odblokowany; spróbuj ponownie lub skontaktuj się z pomocą.' }, 503);
         } catch { return v2Reply({ error: 'Nie udało się zapisać potwierdzenia zgód. Produkt nie został odblokowany; spróbuj ponownie.' }, 503); }
         await ensureNotificationTables(env);
         await ensureChallengeTables(env);
@@ -1004,6 +1089,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         // Numery SF są osobne od numerów technicznych używanych przez Stripe i zachowują istniejące zamówienia.
         const display = await v2DisplayNumber(env, now);
         const statements: D1PreparedStatement[] = [
+          purchaseConsentPaidStatement(env,{checkoutSessionId:zeroCheckoutId,userId:gate.session!.id,orderId,confirmedAt:now}),
           env.DB.prepare("INSERT INTO orders(id,user_id,order_number,status,total_amount,currency,created_at,updated_at) VALUES(?,?,?,'paid',0,?,?,?)").bind(orderId, gate.session!.id, number, item.currency || 'PLN', now, now),
           env.DB.prepare('INSERT INTO order_display_numbers(order_id,display_number,created_at) VALUES(?,?,?)').bind(orderId, display, now),
           env.DB.prepare('INSERT INTO order_items(id,order_id,product_key,product_title,product_type,quantity,unit_amount,created_at) VALUES(?,?,?,?,?,1,0,?)').bind(crypto.randomUUID(), orderId, key, item.title, item.product_type, now),
@@ -1043,10 +1129,84 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const payload = await response.json() as Record<string, any>;
       if (!response.ok || typeof payload.url !== 'string' || typeof payload.id !== 'string') return v2Reply({ error: typeof payload.error?.message === 'string' ? `Stripe: ${payload.error.message}` : 'Nie udało się utworzyć sesji płatności.' }, 502);
       try {
-        await recordPurchaseConsent(env, { checkoutSessionId: payload.id, userId: gate.session!.id, userEmail: gate.session!.email, productKey: key, productTitle: item.title, kind: purchaseKind, acceptedAt: consentAcceptedAt });
+        await recordPurchaseConsent(env, { checkoutSessionId: payload.id, userId: gate.session!.id, userEmail: gate.session!.email, productKey: key, productTitle: item.title, kind: purchaseKind, amountCents: totalCents, currency: item.currency || 'PLN', acceptedAt: consentAcceptedAt });
       } catch { return v2Reply({ error: 'Nie udało się zapisać potwierdzenia zgód. Płatność nie została otwarta; spróbuj ponownie.' }, 503); }
       if (analyticsSession) await env.DB.prepare('INSERT INTO product_analytics(id,event_type,product_key,path,session_key,user_id,created_at) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(), 'checkout_started', key, `/produkty/${key}`, analyticsSession, gate.session!.id, new Date().toISOString()).run();
       return v2Reply({ url: payload.url, session_id: payload.id });
+    }
+
+    // Potwierdzenia zakupów i zgód — dostępne tylko dla zalogowanego właściciela.
+    if (path === '/api/v2/account/purchase-confirmations' && method === 'GET') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      await ensurePurchaseConsentTable(env);
+      const rows = await env.DB.prepare(`SELECT c.id,c.product_key,c.product_title,c.purchase_kind,c.consent_version,c.terms_version,
+        c.accepted_at,COALESCE(c.purchase_confirmed_at,o.created_at,c.accepted_at) AS purchase_confirmed_at,
+        COALESCE(d.display_number,o.order_number,'') AS display_order_number,
+        COALESCE(o.total_amount,CAST(c.amount_cents AS REAL)/100.0,0) AS total_amount,
+        COALESCE(o.currency,c.currency,'PLN') AS currency
+        FROM sf_purchase_consents c
+        LEFT JOIN orders o ON ((o.id=c.order_id OR o.order_number='STRIPE-' || c.checkout_session_id) AND o.user_id=c.user_id)
+        LEFT JOIN order_display_numbers d ON d.order_id=o.id
+        WHERE c.user_id=? AND (c.confirmation_status='paid' OR o.status IN ('paid','fulfilled','processing'))
+        ORDER BY COALESCE(c.purchase_confirmed_at,o.created_at,c.accepted_at) DESC LIMIT 100`)
+        .bind(gate.session!.id).all();
+      return v2Reply({ confirmations: rows.results || [] });
+    }
+    const purchaseConfirmationDownloadMatch = path.match(new RegExp('^/api/v2/account/purchase-confirmations/([a-z0-9-]+)/download$', 'i'));
+    if (purchaseConfirmationDownloadMatch && method === 'GET') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      await ensurePurchaseConsentTable(env);
+      const row = await env.DB.prepare(`SELECT c.id,c.user_email,c.product_key,c.product_title,c.purchase_kind,c.consent_version,c.terms_version,
+        c.terms_acceptance_text,c.terms_snapshot,c.terms_accepted,c.immediate_start_consent,c.withdrawal_acknowledged,
+        c.consent_statement,c.accepted_at,c.purchase_confirmed_at,c.confirmation_status,c.amount_cents,c.currency,
+        COALESCE(d.display_number,o.order_number,'') AS display_order_number,
+        COALESCE(o.total_amount,CAST(c.amount_cents AS REAL)/100.0,0) AS total_amount,
+        COALESCE(o.currency,c.currency,'PLN') AS currency,o.status AS order_status,o.created_at AS order_created_at
+        FROM sf_purchase_consents c
+        LEFT JOIN orders o ON ((o.id=c.order_id OR o.order_number='STRIPE-' || c.checkout_session_id) AND o.user_id=c.user_id)
+        LEFT JOIN order_display_numbers d ON d.order_id=o.id
+        WHERE c.id=? AND c.user_id=? AND (c.confirmation_status='paid' OR o.status IN ('paid','fulfilled','processing')) LIMIT 1`)
+        .bind(purchaseConfirmationDownloadMatch[1],gate.session!.id).first<Record<string, any>>();
+      if (!row) return v2Reply({ error:'Nie znaleziono potwierdzenia dla tego konta lub płatność nie została jeszcze potwierdzona.' },404);
+      const kindLabel = row.purchase_kind === 'digital_content' ? 'Treść cyfrowa' : 'Usługa cyfrowa';
+      const confirmationText = [
+        'SYSTEM FORMY — POTWIERDZENIE ZAKUPU I ZGÓD',
+        'Kopia zapisu transakcji dostępna w historii zakupów konta użytkownika.',
+        '',
+        `Produkt: ${String(row.product_title || '')}`,
+        `Klucz produktu: ${String(row.product_key || '')}`,
+        row.display_order_number ? `Numer zamówienia: ${String(row.display_order_number)}` : '',
+        'Status płatności: potwierdzona',
+        `Data akceptacji: ${String(row.accepted_at || '')}`,
+        `Data potwierdzenia zakupu: ${String(row.purchase_confirmed_at || row.order_created_at || row.accepted_at || '')}`,
+        `Kwota: ${Number(row.total_amount || 0).toFixed(2)} ${String(row.currency || 'PLN').toUpperCase()}`,
+        `Konto kupującego: ${String(row.user_email || '')}`,
+        `Rodzaj świadczenia: ${kindLabel}`,
+        `Wersja zapisu zgód: ${String(row.consent_version || '')}`,
+        `Wersja Regulaminu: ${String(row.terms_version || '')}`,
+        '',
+        'ZAREJESTROWANE OŚWIADCZENIA',
+        `Akceptacja Regulaminu: ${Number(row.terms_accepted) === 1 ? 'TAK' : 'NIE'}`,
+        `Zgoda/żądanie rozpoczęcia przed terminem odstąpienia: ${Number(row.immediate_start_consent) === 1 ? 'TAK' : 'NIE'}`,
+        `Potwierdzenie informacji o skutkach ustawowych: ${Number(row.withdrawal_acknowledged) === 1 ? 'TAK' : 'NIE'}`,
+        '',
+        'Treść zgody zaakceptowanej w procesie zakupu:',
+        String(row.consent_statement || ''),
+        '',
+        'Treść akceptacji Regulaminu:',
+        String(row.terms_acceptance_text || ''),
+        '',
+        'Zapis warunków zakupu obowiązujących przy akceptacji:',
+        String(row.terms_snapshot || ''),
+        '',
+        'Uwaga: jest to kopia zapisu systemowego potwierdzenia zakupu i zgód; plik nie jest fakturą ani dokumentem fiskalnym.'
+      ].join(String.fromCharCode(13,10));
+      return new Response(confirmationText, { status:200, headers:{
+        'Content-Type':'text/plain; charset=utf-8',
+        'Content-Disposition':`attachment; filename="system-formy-potwierdzenie-${String(row.id)}.txt"`,
+        'Cache-Control':'private, no-store',
+        'X-Content-Type-Options':'nosniff'
+      }});
     }
 
     // Konto: zamówienia i własne materiały.
@@ -1087,6 +1247,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       await ensureSystemTrainingProducts(env);
       const b = await v2Body(request);
       if (!bodyBoolean(b.terms_accepted) || !bodyBoolean(b.early_start_consent) || !bodyBoolean(b.withdrawal_acknowledged)) return v2Reply({ error: 'Przed płatnością zaakceptuj regulamin oraz żądanie rozpoczęcia realizacji zamówienia przed upływem terminu odstąpienia.' }, 400);
+      if (!hasPurchaseConfirmationEmail(env)) return v2Reply({ error: 'Zakupy są tymczasowo niedostępne: administrator musi skonfigurować potwierdzenia zgód e-mailem przed uruchomieniem sprzedaży.' }, 503);
       const consentAcceptedAt = new Date().toISOString();
       const goal = v2Field(b, 'goal', 40), level = v2Field(b, 'level', 30), location = v2Field(b, 'location', 20);
       const rawEquipment = v2Field(b, 'equipment', 500);
@@ -1191,7 +1352,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       if (!stripeResponse.ok || typeof payload.url !== 'string' || typeof payload.id !== 'string') return v2Reply({ error: typeof payload.error?.message === 'string' ? `Stripe: ${payload.error.message}` : 'Nie udało się otworzyć płatności za plan indywidualny.' }, 502);
       try {
         await recordPurchaseConsent(env, { checkoutSessionId: payload.id, userId: gate.session!.id, userEmail: gate.session!.email,
-          productKey: V2_INDIVIDUAL_PLAN_PRODUCT_KEY, productTitle: 'Indywidualny plan treningowy', kind: 'digital_service', acceptedAt: consentAcceptedAt });
+          productKey: V2_INDIVIDUAL_PLAN_PRODUCT_KEY, productTitle: 'Indywidualny plan treningowy', kind: 'digital_service', amountCents: individualPlanPriceCents, currency: 'PLN', acceptedAt: consentAcceptedAt });
       } catch { return v2Reply({ error: 'Nie udało się bezpiecznie zapisać zgód. Płatność nie została otwarta; spróbuj ponownie.' }, 503); }
       await env.DB.prepare("UPDATE individual_plan_requests SET checkout_session_id=?,updated_at=? WHERE id=? AND user_id=? AND payment_status='pending'").bind(payload.id, new Date().toISOString(), requestId, gate.session!.id).run();
       return v2Reply({ ok: true, url: payload.url, session_id: payload.id, request_id: requestId, amount_cents: individualPlanPriceCents, is_premium_price: premiumPlanPrice });
