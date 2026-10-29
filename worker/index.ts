@@ -9,8 +9,6 @@ interface Env {
   PRODUCT_FILES?: R2Bucket;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
-  RESEND_API_KEY?: string;
-  SYSTEM_FORMY_EMAIL_FROM?: string;
 }
 type PublicUser = { id: string; email: string };
 type UserRow = PublicUser & { password_hash: string; password_salt: string };
