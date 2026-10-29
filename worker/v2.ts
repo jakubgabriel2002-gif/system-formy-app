@@ -900,12 +900,27 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
     if (path === '/api/v2/premium/portal' && method === 'POST') {
       const gate = await v2Gate(request, env); if (gate.response) return gate.response;
       if (!env.STRIPE_SECRET_KEY) return v2Reply({error:'Portal płatności Stripe nie jest skonfigurowany.'},503);
+      const body = await v2Body(request);
+      // Powrót jest ograniczony do wewnętrznych ekranów aplikacji; nie przyjmujemy dowolnych URL.
+      const returnPath = body.return_to === '/app/profil' ? '/app/profil' : '/app/premium';
       const subscription = await v2PremiumSubscription(env,gate.session!.id);
-      if (!subscription?.stripe_customer_id) return v2Reply({error:'Nie znaleziono profilu płatniczego Stripe. Skontaktuj się z obsługą.'},404);
-      const form = new URLSearchParams(); form.set('customer',subscription.stripe_customer_id); form.set('return_url',`${url.origin}/app/premium`);
+      if (!subscription) return v2Reply({error:'Nie znaleziono subskrypcji powiązanej z tym kontem. Jeśli masz płatne Premium, skontaktuj się z obsługą.'},404);
+      let customerId = subscription.stripe_customer_id || '';
+      // Odzyskaj identyfikator klienta ze Stripe, jeśli starszy rekord nie zapisał go lokalnie.
+      if (!customerId && subscription.stripe_subscription_id) {
+        const lookup = await fetch(`https://api.stripe.com/v1/subscriptions/${encodeURIComponent(subscription.stripe_subscription_id)}`, {headers:{Authorization:`Bearer ${env.STRIPE_SECRET_KEY}`}});
+        const lookupPayload = await lookup.json() as Record<string,any>;
+        if (lookup.ok && typeof lookupPayload.customer === 'string') {
+          customerId = lookupPayload.customer;
+          await env.DB.prepare('UPDATE premium_subscriptions SET stripe_customer_id=?,updated_at=? WHERE user_id=? AND stripe_subscription_id=?')
+            .bind(customerId,new Date().toISOString(),gate.session!.id,subscription.stripe_subscription_id).run();
+        }
+      }
+      if (!customerId) return v2Reply({error:'Nie udało się znaleźć profilu płatniczego Stripe. Skontaktuj się z obsługą.'},404);
+      const form = new URLSearchParams(); form.set('customer',customerId); form.set('return_url',`${url.origin}${returnPath}`);
       const response = await fetch('https://api.stripe.com/v1/billing_portal/sessions',{method:'POST',headers:{Authorization:`Bearer ${env.STRIPE_SECRET_KEY}`,'Content-Type':'application/x-www-form-urlencoded'},body:form.toString()});
       const payload = await response.json() as Record<string,any>;
-      if (!response.ok || typeof payload.url !== 'string') return v2Reply({error:typeof payload.error?.message==='string'?`Stripe: ${payload.error.message}`:'Nie udało się otworzyć zarządzania subskrypcją.'},502);
+      if (!response.ok || typeof payload.url !== 'string') return v2Reply({error:typeof payload.error?.message==='string'?`Stripe: ${payload.error.message}`:'Nie udało się otworzyć zarządzania subskrypcją. Sprawdź konfigurację portalu klienta w Stripe.'},502);
       return v2Reply({url:payload.url});
     }
     // Publiczny katalog, kategorie i szczegóły produktu.
