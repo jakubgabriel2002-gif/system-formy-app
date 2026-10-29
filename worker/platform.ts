@@ -235,9 +235,12 @@ export async function handleSitePageLock(request: Request, env: { DB: D1Database
   const isUnlockEndpoint = path === '/api/v2/site-lock/unlock' && request.method.toUpperCase() === 'POST';
   const isLockStatusEndpoint = path === '/api/v2/site-lock/status' && request.method.toUpperCase() === 'GET';
   const isAuthOrAdminApi = path.startsWith('/api/v2/admin/') || path === '/api/auth/login' || path === '/api/auth/logout' || path === '/api/auth/me' || path === '/api/auth/register' || path === '/api/admin/me' || path === '/api/v2/presence/heartbeat';
+  // Stripe must be able to deliver signed events even while the public site is password-locked.
+  // The handler still verifies Stripe-Signature before it accepts or changes any payment state.
+  const isStripeWebhook = path === '/api/stripe/webhook' && request.method.toUpperCase() === 'POST';
 
   if (isAcpLogin) return null;
-  if (!isAcpPath && (isStaticAsset || isUnlockEndpoint || isLockStatusEndpoint || isAuthOrAdminApi)) return null;
+  if (!isAcpPath && (isStaticAsset || isUnlockEndpoint || isLockStatusEndpoint || isAuthOrAdminApi || isStripeWebhook)) return null;
   if (isAcpPath) {
     const adminSession = await sessionFor(request, env as PlatformEnv).catch(() => null);
     if (isAdmin(adminSession, env as PlatformEnv)) return null;

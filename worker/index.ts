@@ -452,6 +452,19 @@ export default {
       }
     }
 
+    // Protect the CPU-expensive PBKDF2 site-unlock endpoint from repeated password guessing.
+    // Uses the same persisted per-IP limiter as authentication endpoints and runs before the page lock.
+    if (path === '/api/v2/site-lock/unlock' && method === 'POST') {
+      try {
+        await applyRateLimit(request, requireDb(env), 'site-lock-unlock', 5);
+      } catch (error) {
+        const limitedResponse = error instanceof HttpError
+          ? json({ error: error.message }, error.status)
+          : safeFailure(error);
+        return addSecurityHeaders(limitedResponse, request);
+      }
+    }
+
     const lockedPage = await handleSitePageLock(request, env);
     if (lockedPage) return addSecurityHeaders(lockedPage, request);
     if (!path.startsWith('/api/')) {
