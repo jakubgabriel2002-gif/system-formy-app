@@ -6,225 +6,200 @@ type Props = {
 };
 
 const VERSION_DATE = '29 października 2026 r.';
+const OPERATOR_NAME = 'Jakub Gabriel';
+const OPERATOR_ADDRESS = 'Kazimierza Wielkiego 4/28, Lubawa, Polska';
+const LEGAL_EMAIL = 'kontakt@systemformy.com.pl';
+const SUPPORT_EMAIL = 'pomoc@systemformy.com.pl';
+const SITE_URL = 'https://systemformy.com.pl';
 
-function ContactDetails({ supportEmail }: { supportEmail: string }) {
+function ContactDetails() {
   return (
     <section className="sf-legal-section">
       <h2>Dane usługodawcy i kontakt</h2>
-      <div className="sf-legal-placeholder">
-        <b>Uzupełnij te dane przed uruchomieniem sprzedaży.</b>
-        <p>
-          Usługodawca: <strong>[WSTAW IMIĘ I NAZWISKO LUB PEŁNĄ FIRMĘ]</strong><br />
-          Adres: <strong>[WSTAW ADRES DO KONTAKTU / ADRES DZIAŁALNOŚCI]</strong><br />
-          Forma działalności / rejestr: <strong>[WSTAW, JEŚLI DOTYCZY]</strong><br />
-          NIP: <strong>[WSTAW, JEŚLI DOTYCZY]</strong><br />
-          E-mail: <strong>{supportEmail || '[WSTAW ADRES E-MAIL DO OBSŁUGI KLIENTA]'}</strong><br />
-          Telefon lub inny szybki kanał kontaktu: <strong>[WSTAW DANE, JEŚLI UDOSTĘPNIASZ]</strong>
-        </p>
-        <p>
-          Dane muszą odpowiadać rzeczywistemu statusowi prawnemu sprzedawcy i informacjom podanym w Stripe.
-          Nie publikuj dokumentu z nawiasami do uzupełnienia.
-        </p>
-      </div>
+      <p>
+        Usługodawca i administrator danych: <strong>{OPERATOR_NAME}</strong><br />
+        Adres: <strong>{OPERATOR_ADDRESS}</strong><br />
+        E-mail w sprawach prawnych i dotyczących danych: <a href={`mailto:${LEGAL_EMAIL}`}>{LEGAL_EMAIL}</a><br />
+        Pomoc techniczna, zamówienia i reklamacje: <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a><br />
+        Serwis: <a href={SITE_URL}>{SITE_URL}</a>
+      </p>
+      <p>Numer NIP nie został podany. Dane identyfikacyjne należy utrzymywać zgodne z rzeczywistym statusem prawnym usługodawcy oraz informacjami przekazywanymi operatorowi płatności.</p>
     </section>
   );
 }
 
-function TermsPage({ supportEmail }: { supportEmail: string }) {
+function TermsPage() {
   return (
     <>
       <div className="sf-legal-meta">Wersja z dnia {VERSION_DATE}</div>
-      <div className="sf-legal-warning" role="note">
-        <b>Przed publikacją uzupełnij dane usługodawcy.</b>
-        <p>Ten projekt regulaminu opisuje funkcje widoczne w aktualnej wersji aplikacji. Wyróżnione pola wymagają danych właściciela i sprawdzenia zgodności z faktycznym sposobem prowadzenia sprzedaży.</p>
-      </div>
-      <ContactDetails supportEmail={supportEmail} />
+      <ContactDetails />
 
       <section className="sf-legal-section">
         <h2>1. Postanowienia ogólne</h2>
-        <p>Regulamin określa zasady korzystania z serwisu i aplikacji System Formy, zakładania kont, korzystania z funkcji treningowych, udziału w wyzwaniach oraz zakupu materiałów cyfrowych i członkostwa Premium.</p>
-        <p>Regulamin jest udostępniany bezpłatnie przed zawarciem umowy. Korzystając z funkcji płatnych, użytkownik powinien zapoznać się z opisem produktu, ceną i warunkami wyświetlanymi przed złożeniem zamówienia.</p>
-        <p>Postanowienia regulaminu nie ograniczają praw konsumenta wynikających z bezwzględnie obowiązujących przepisów prawa.</p>
+        <p>Regulamin określa zasady korzystania z serwisu internetowego i aplikacji System Formy, zakładania i używania konta, korzystania z funkcji treningowych, udziału w wyzwaniach oraz zawierania umów dotyczących materiałów cyfrowych, planów i dostępu Premium.</p>
+        <p>Przed złożeniem zamówienia użytkownik otrzymuje informacje o produkcie, jego zakresie, cenie i dostępnych warunkach zakupu. Regulamin nie wyłącza ani nie ogranicza praw przyznanych konsumentom przez bezwzględnie obowiązujące przepisy.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>2. Definicje</h2>
+        <h2>2. Definicje i zakres usług</h2>
         <ul>
-          <li><b>Serwis</b> — strona internetowa i aplikacja System Formy.</li>
-          <li><b>Użytkownik</b> — osoba korzystająca z serwisu.</li>
-          <li><b>Konto</b> — indywidualny profil użytkownika utworzony przy użyciu adresu e-mail i hasła.</li>
-          <li><b>Materiały</b> — e-booki, poradniki, plany, pliki do pobrania oraz inne treści udostępniane w serwisie.</li>
-          <li><b>Premium</b> — płatne członkostwo z dodatkowymi funkcjami, rozliczane w cyklu wybranym przez użytkownika.</li>
+          <li><b>Serwis</b> — strona systemformy.com.pl oraz powiązana aplikacja System Formy.</li>
+          <li><b>Użytkownik</b> — osoba korzystająca z Serwisu.</li>
+          <li><b>Konto</b> — profil użytkownika służący do korzystania z dostępnych funkcji.</li>
+          <li><b>Materiały cyfrowe</b> — e-booki, poradniki, plany treningowe, pliki i inne treści udostępniane elektronicznie.</li>
+          <li><b>Wyzwanie</b> — cyfrowy program treningowy udostępniany zgodnie z opisem i ceną wskazanymi w Serwisie.</li>
+          <li><b>Premium</b> — płatny dostęp do dodatkowych funkcji na okres i za cenę wskazane przed zakupem; jeśli oferta wskazuje cykliczne odnowienie, obowiązują zasady z punktu 7.</li>
         </ul>
+        <p>Oferta może obejmować bezpłatne materiały, e-booki i gotowe plany, płatne wyzwania, indywidualne plany treningowe oraz prowadzenie 1:1. Dostępność i dokładny zakres konkretnego produktu wynikają z jego aktualnego opisu.</p>
       </section>
 
       <section className="sf-legal-section">
         <h2>3. Konto i wymagania techniczne</h2>
-        <p>Do korzystania z konta potrzebne są dostęp do internetu, aktualna przeglądarka obsługująca nowoczesne aplikacje internetowe oraz aktywny adres e-mail. Niektóre funkcje, w tym instalacja aplikacji PWA, zależą od możliwości urządzenia i przeglądarki.</p>
-        <p>Użytkownik odpowiada za prawdziwość podanych danych, zachowanie poufności hasła i działania wykonywane na swoim koncie. Nie należy udostępniać innym osobom danych logowania.</p>
-        <p>Zabronione jest korzystanie z serwisu w sposób bezprawny, zakłócający jego działanie, naruszający prawa innych osób lub próbujący uzyskać nieuprawniony dostęp do kont, danych czy materiałów.</p>
+        <p>Do korzystania z Serwisu potrzebne są urządzenie z dostępem do internetu i aktualna przeglądarka obsługująca nowoczesne aplikacje internetowe. Niektóre funkcje mogą zależeć od urządzenia, przeglądarki lub możliwości instalacji aplikacji PWA.</p>
+        <p>Użytkownik powinien podawać prawdziwe informacje, chronić dane logowania i nie udostępniać konta w sposób naruszający warunki zakupu lub prawa innych osób. Zabronione jest zakłócanie działania Serwisu, próby uzyskania nieuprawnionego dostępu oraz bezprawne kopiowanie lub rozpowszechnianie materiałów.</p>
+        <p>Serwis nie określa w tej wersji regulaminu odrębnego minimalnego wieku użytkownika. W przypadku osób małoletnich zastosowanie mają przepisy dotyczące zdolności do czynności prawnych i zgody przedstawiciela ustawowego, gdy jest wymagana.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>4. Funkcje serwisu</h2>
-        <p>W zależności od stanu konta i zakupionych uprawnień serwis może udostępniać tworzenie i zapisywanie planów, rejestrowanie treningów, śledzenie postępów, udział w wyzwaniach, pobieranie materiałów, historię zamówień, zgłoszenia do pomocy oraz funkcje Premium.</p>
-        <p>Dostęp do materiałów płatnych jest przypisywany do konta po potwierdzeniu płatności przez system. Samo przekierowanie na stronę po płatności nie stanowi potwierdzenia jej rozliczenia.</p>
-        <p>Usługodawca może aktualizować funkcje i interfejs, o ile zmiana nie pozbawia użytkownika praw nabytych ani nie zmienia istotnie zakupionego świadczenia z naruszeniem obowiązujących przepisów.</p>
+        <h2>4. Funkcje aplikacji i materiały</h2>
+        <p>W zależności od konta i zakupionych uprawnień Serwis może umożliwiać tworzenie i zapisywanie planów, rejestrowanie treningów, monitorowanie postępów, udział w wyzwaniach, korzystanie z materiałów, przeglądanie zamówień oraz używanie funkcji Premium.</p>
+        <p>Zakupione treści i funkcje są przypisywane do konta po potwierdzeniu płatności przez system. Samo przekierowanie po płatności nie oznacza, że transakcja została rozliczona. Jeśli środki pobrano, a dostęp nie został przyznany, należy skontaktować się z pomocą i podać adres e-mail konta oraz informacje pozwalające zidentyfikować zamówienie.</p>
+        <p>Materiały są przeznaczone do osobistego użytku kupującego, chyba że opis produktu stanowi inaczej. Bez odpowiedniej podstawy nie wolno ich odsprzedawać, publicznie udostępniać ani rozpowszechniać.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>5. Produkty, ceny i płatności</h2>
-        <p>Aktualna cena, opis, zakres, forma dostarczenia oraz ewentualny rabat są wskazywane przy produkcie i w podsumowaniu zamówienia przed rozpoczęciem płatności. Właściwa jest cena wyświetlona dla konkretnego zamówienia, z uwzględnieniem przyznanych rabatów.</p>
-        <p>Płatności elektroniczne obsługuje Stripe. Dane płatnicze są przekazywane na stronę płatności operatora; System Formy otrzymuje informacje niezbędne do rozpoznania transakcji i przypisania zamówienia do konta.</p>
-        <p>Jeżeli płatność nie zostanie potwierdzona, produkt może nie zostać odblokowany. W razie pobrania środków bez aktywowania dostępu skontaktuj się z pomocą, podając e-mail konta i dane transakcji — nigdy pełny numer karty ani kod CVC.</p>
+        <h2>5. Zamówienia, ceny i płatności</h2>
+        <p>Cena, waluta, opis, zakres produktu i ewentualne warunki promocyjne są pokazywane przy produkcie i w procesie zamówienia przed płatnością. Dla konkretnego zamówienia wiążące są warunki przedstawione przed jego złożeniem.</p>
+        <p>Obsługę płatności elektronicznych zapewnia Stripe. Płatność może wymagać przejścia do interfejsu operatora. System Formy otrzymuje informacje niezbędne do rozpoznania transakcji i przypisania zamówienia do konta. Nie przesyłaj pomocy pełnego numeru karty ani kodu CVC.</p>
+        <p>Jeżeli płatność nie zostanie potwierdzona, dostęp do produktu może nie zostać odblokowany. W przypadku błędu skontaktuj się z pomocą: <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>6. Materiały cyfrowe i indywidualne plany</h2>
-        <p>Materiały cyfrowe są udostępniane w formie i zakresie opisanym przy produkcie, na przykład przez pobranie pliku albo udostępnienie funkcji w aplikacji. Użytkownik powinien sprawdzić wymagania techniczne oraz kompatybilność pliku z własnym urządzeniem.</p>
-        <p>Indywidualny plan jest przygotowywany na podstawie informacji przekazanych przez użytkownika. Termin realizacji, cena i zakres świadczenia wynikają z opisu aktualnej oferty oraz informacji pokazanych w trakcie zamówienia.</p>
-        <p>Materiałów nie wolno rozpowszechniać, sprzedawać ani udostępniać publicznie bez zgody uprawnionego podmiotu, z zastrzeżeniem dozwolonego użytku wynikającego z przepisów prawa.</p>
+        <h2>6. Dostarczenie produktów cyfrowych i planów indywidualnych</h2>
+        <p>Produkty cyfrowe są udostępniane na koncie użytkownika lub w inny sposób wskazany w opisie konkretnego produktu. Użytkownik powinien zapoznać się z opisem, zakresem i wymaganiami technicznymi przed zakupem.</p>
+        <p>Indywidualny plan lub prowadzenie jest realizowane w zakresie opisanym w ofercie i na podstawie informacji przekazanych przez użytkownika. Jeżeli do przygotowania usługi potrzebne są dodatkowe dane, ich przekazanie może być konieczne do wykonania zamówienia.</p>
+        <p>System Formy nie świadczy usług medycznych, diagnostycznych ani rehabilitacyjnych. Plany i materiały mają charakter treningowy i edukacyjny, a materiały żywieniowe nie stanowią indywidualnej diety medycznej.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>7. Premium i płatności cykliczne</h2>
-        <p>Jeśli przy zakupie Premium widnieje informacja o automatycznym odnowieniu, subskrypcja odnawia się na kolejny okres zgodnie z wybranym wariantem i ceną przedstawioną przed płatnością, aż do anulowania.</p>
-        <p>Subskrypcją można zarządzać w udostępnionym portalu płatności Stripe, gdy opcja zarządzania jest aktywna dla danego konta. Anulowanie zatrzymuje kolejne odnowienia zgodnie z informacją pokazaną w portalu; nie uchyla praw ustawowych, w tym prawa do odstąpienia, gdy przysługuje.</p>
+        <h2>7. Premium i subskrypcje</h2>
+        <p>Jeżeli przy zakupie Premium wskazano subskrypcję odnawianą automatycznie, opłata jest pobierana za kolejne okresy zgodnie z ceną i częstotliwością przedstawioną przed zakupem, aż do skutecznego anulowania. Przed potwierdzeniem zamówienia użytkownik powinien sprawdzić cenę, okres rozliczeniowy i warunki odnowienia.</p>
+        <p>Jeżeli w Serwisie lub portalu płatności udostępniono zarządzanie subskrypcją, można z niego skorzystać, aby sprawdzić status lub anulować kolejne odnowienia. Jeśli opcja nie jest dostępna, należy skontaktować się z pomocą. Anulowanie odnowienia nie pozbawia praw, które przysługują na mocy przepisów.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>8. Odstąpienie od umowy i treści cyfrowe</h2>
-        <p>Konsument, co do zasady, ma 14 dni na odstąpienie od umowy zawartej na odległość, chyba że zastosowanie ma ustawowy wyjątek. Szczegóły i wyjątki zależą od rodzaju świadczenia i okoliczności zawarcia umowy.</p>
-        <p>W przypadku treści cyfrowych niedostarczanych na nośniku materialnym utrata prawa odstąpienia przed upływem terminu może nastąpić wyłącznie po spełnieniu wymagań ustawowych, w tym po uzyskaniu uprzedniej wyraźnej zgody na rozpoczęcie świadczenia przed upływem terminu oraz potwierdzenia przyjęcia do wiadomości skutku dla prawa odstąpienia. Sama płatność ani samo przekierowanie do materiału nie zastępują tych wymagań.</p>
-        <p>Żądanie odstąpienia lub pytanie o zwrot wyślij na dane kontaktowe wskazane w regulaminie. Usługodawca rozpatrzy sprawę zgodnie z właściwymi przepisami i warunkami konkretnej umowy.</p>
+        <h2>8. Odstąpienie od umowy i zwroty</h2>
+        <p>Prawo odstąpienia od umowy zawartej na odległość zależy od rodzaju umowy i przepisów mających zastosowanie do danego zakupu. Konsumentowi co do zasady przysługuje 14-dniowy termin na odstąpienie od umowy zawartej na odległość, z zastrzeżeniem ustawowych wyjątków.</p>
+        <p>W przypadku treści cyfrowych niedostarczanych na nośniku materialnym prawo odstąpienia nie jest automatycznie wyłączone tylko dlatego, że produkt jest cyfrowy lub został opłacony. Wyjątek może mieć zastosowanie, gdy spełnione są wymagania ustawowe, w tym uzyskanie uprzedniej wyraźnej zgody konsumenta na rozpoczęcie dostarczania treści przed upływem terminu odstąpienia, przyjęcie przez niego do wiadomości utraty prawa odstąpienia oraz przekazanie wymaganego potwierdzenia zawarcia umowy. Sam zapis w tym regulaminie nie zastępuje odpowiednich zgód i potwierdzeń w procesie zakupu.</p>
+        <p>Jeżeli wymagane zgody lub potwierdzenia nie zostały prawidłowo uzyskane, nie należy zakładać, że prawo odstąpienia zostało utracone. Każde zgłoszenie jest oceniane zgodnie z przepisami i okolicznościami konkretnej umowy.</p>
+        <p>Aby zgłosić odstąpienie lub zapytać o zwrot, napisz na <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. Dobrowolna polityka zwrotów, jeśli zostanie wprowadzona, nie ogranicza praw ustawowych.</p>
       </section>
 
       <section className="sf-legal-section">
         <h2>9. Reklamacje i pomoc</h2>
-        <p>Problem z kontem, płatnością, dostępem lub działaniem funkcji można zgłosić przez formularz w sekcji „Pomoc i kontakt” albo na adres e-mail wskazany w danych usługodawcy. W zgłoszeniu podaj temat, opis problemu i — jeśli dotyczy zakupu — numer zamówienia.</p>
-        <p>Nie przesyłaj haseł, pełnych danych karty płatniczej ani innych danych, które nie są potrzebne do rozpatrzenia zgłoszenia. Reklamacje są rozpatrywane bez zbędnej zwłoki, z zachowaniem terminów wymaganych przez obowiązujące przepisy.</p>
-        <p>Konsument może korzystać z pozasądowych sposobów rozwiązywania sporów, jeśli są dostępne dla danej sprawy, oraz z pomocy właściwych instytucji ochrony konsumentów.</p>
+        <p>Problemy z kontem, płatnością, dostępem do produktu lub działaniem funkcji można zgłaszać na adres <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> albo przez Centrum pomocy w Serwisie. W zgłoszeniu opisz problem i podaj informacje potrzebne do znalezienia zamówienia.</p>
+        <p>Nie wysyłaj hasła, pełnych danych karty płatniczej ani innych informacji, które nie są niezbędne do obsługi sprawy. Zgłoszenia będą rozpatrywane bez zbędnej zwłoki i w terminach wynikających z właściwych przepisów.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>10. Charakter treningowy i ograniczenia</h2>
-        <p>System Formy ma charakter treningowy i edukacyjny. Nie świadczy usług medycznych, nie diagnozuje chorób i nie zastępuje lekarza, fizjoterapeuty ani dietetyka. Materiały żywieniowe mają charakter ogólny i nie są dietą medyczną.</p>
-        <p>Użytkownik powinien dostosować ćwiczenia do swoich możliwości i przerwać aktywność, jeżeli pojawią się niepokojące objawy. W przypadku chorób, kontuzji, przyjmowania leków lub wątpliwości dotyczących bezpieczeństwa należy skonsultować trening ze specjalistą.</p>
-        <p>Nie gwarantuje się konkretnej zmiany sylwetki, liczby kilogramów, czasu uzyskania efektu ani wyniku sportowego. Rezultaty zależą m.in. od indywidualnej sytuacji i sposobu realizacji planu.</p>
+        <h2>10. Bezpieczeństwo i rezultaty treningowe</h2>
+        <p>System Formy ma charakter treningowy i edukacyjny; nie diagnozuje ani nie leczy chorób i nie zastępuje lekarza, fizjoterapeuty ani innego odpowiedniego specjalisty. Ćwiczenia należy dostosować do własnych możliwości. W razie choroby, kontuzji lub wątpliwości co do bezpieczeństwa należy skonsultować się ze specjalistą.</p>
+        <p>Nie gwarantuje się konkretnej zmiany sylwetki, liczby kilogramów, czasu osiągnięcia efektu ani wyniku sportowego. Rezultaty zależą od indywidualnej sytuacji oraz sposobu realizacji planu.</p>
       </section>
 
       <section className="sf-legal-section">
         <h2>11. Zmiany regulaminu i prawo właściwe</h2>
-        <p>Zmiany regulaminu będą publikowane w serwisie z datą obowiązywania. Zmiana nie narusza praw nabytych i nie zmienia z mocą wsteczną warunków już zawartych umów, chyba że przepisy stanowią inaczej.</p>
-        <p>Do umów stosuje się prawo polskie, z zachowaniem ochrony przyznanej konsumentowi na mocy bezwzględnie obowiązujących przepisów.</p>
-      </section>
-
-      <section className="sf-legal-section">
-        <h2>Kontakt</h2>
-        <p>Pomoc i zgłoszenia: <a href="/pomoc">Centrum pomocy</a>{supportEmail ? <> lub <a href={`mailto:${supportEmail}`}>{supportEmail}</a></> : null}.</p>
-        <p>Polityka prywatności: <a href="/prywatnosc">zobacz dokument</a>.</p>
+        <p>Aktualna wersja regulaminu jest publikowana w Serwisie. Zmiany będą stosowane z poszanowaniem praw nabytych oraz zasad wynikających z przepisów. Do umów stosuje się prawo polskie, z zastrzeżeniem ochrony konsumenta wynikającej z bezwzględnie obowiązujących przepisów.</p>
+        <p>Kontakt: <a href={`mailto:${LEGAL_EMAIL}`}>{LEGAL_EMAIL}</a> lub <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>.</p>
       </section>
     </>
   );
 }
 
-function PrivacyPage({ supportEmail }: { supportEmail: string }) {
+function PrivacyPage() {
   return (
     <>
       <div className="sf-legal-meta">Wersja z dnia {VERSION_DATE}</div>
-      <div className="sf-legal-warning" role="note">
-        <b>Przed publikacją uzupełnij dane administratora.</b>
-        <p>Trzeba wpisać prawdziwe dane właściciela serwisu, ustalić faktyczne okresy przechowywania oraz sprawdzić umowy i ustawienia dostawców. Ankieta planu indywidualnego może obejmować dane dotyczące zdrowia.</p>
-      </div>
+      <ContactDetails />
 
       <section className="sf-legal-section">
-        <h2>1. Administrator danych</h2>
-        <div className="sf-legal-placeholder">
-          <b>Administrator danych osobowych</b>
-          <p>
-            <strong>[WSTAW IMIĘ I NAZWISKO LUB PEŁNĄ FIRMĘ]</strong><br />
-            Adres: <strong>[WSTAW ADRES DO KONTAKTU]</strong><br />
-            E-mail: <strong>{supportEmail || '[WSTAW ADRES E-MAIL DO SPRAW DANYCH OSOBOWYCH]'}</strong><br />
-            Inspektor ochrony danych: <strong>[JEŚLI ZOSTAŁ WYZNACZONY — PODAJ KONTAKT; W PRZECIWNYM RAZIE USUŃ TEN WIERSZ]</strong>
-          </p>
-        </div>
-        <p>Ta polityka wyjaśnia, jakie dane są przetwarzane podczas korzystania z Systemu Formy, w jakich celach, komu mogą być przekazane oraz jakie prawa przysługują osobom, których dane dotyczą.</p>
+        <h2>1. Zakres polityki</h2>
+        <p>Polityka opisuje zasady przetwarzania danych osobowych podczas korzystania z Systemu Formy, w tym konta, funkcji treningowych, wyzwań, materiałów, zamówień, Premium i kontaktu z pomocą. Zakres przetwarzania zależy od funkcji, z których korzysta użytkownik, oraz informacji, które sam przekazuje.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>2. Jakie dane przetwarzamy</h2>
+        <h2>2. Jakie dane mogą być przetwarzane</h2>
         <ul>
-          <li><b>Dane konta:</b> adres e-mail, identyfikator konta i informacje niezbędne do uwierzytelniania oraz ochrony sesji. Hasła nie powinny być przekazywane obsłudze.</li>
-          <li><b>Dane profilu:</b> imię, cel treningowy, miejsce treningu, wzrost, masa ciała i preferowana częstotliwość treningów, jeśli użytkownik je poda.</li>
-          <li><b>Dane treningowe:</b> plany, ćwiczenia, serie, powtórzenia, ciężary, ukończone sesje, cele, pomiary i postęp zapisany przez użytkownika.</li>
-          <li><b>Dane o wyzwaniach:</b> udział, status i dni oznaczone jako ukończone.</li>
-          <li><b>Dane zakupowe:</b> historia zamówień, produkty, kwoty, status płatności i identyfikatory transakcji. Dane karty obsługuje operator płatności.</li>
-          <li><b>Dane pomocy:</b> e-mail i treść zgłoszenia oraz informacje potrzebne do obsługi problemu.</li>
-          <li><b>Dane ankiety planu indywidualnego:</b> m.in. wiek, płeć, wzrost, masa ciała, cel, sprzęt, a także odpowiedzi o chorobach, kontuzjach, ograniczeniach ruchowych i lekach — w zakresie, w jakim użytkownik je poda.</li>
-          <li><b>Dane techniczne i analityczne:</b> adres odwiedzanej ścieżki, typ zdarzenia, identyfikator produktu i klucz sesji analitycznej, jeśli użytkownik zaakceptował opcjonalną analitykę.</li>
+          <li><b>Dane konta:</b> adres e-mail, identyfikator konta i dane technicznie niezbędne do uwierzytelnienia oraz utrzymania sesji.</li>
+          <li><b>Dane profilu i treningowe:</b> informacje podane w profilu, takie jak imię, cel treningowy, miejsce treningu, wzrost, masa ciała i preferowana częstotliwość treningów, oraz zapisy planów, ćwiczeń, serii, powtórzeń, obciążeń, treningów i postępów.</li>
+          <li><b>Dane o wyzwaniach:</b> udział w wyzwaniu, jego status i postęp, jeżeli funkcja jest używana.</li>
+          <li><b>Dane zamówień:</b> kupione produkty, kwoty, status płatności, identyfikatory zamówień i informacje transakcyjne niezbędne do obsługi zakupu. Dane karty płatniczej obsługuje operator płatności; Serwis nie prosi o przekazywanie pełnych danych karty w wiadomościach.</li>
+          <li><b>Dane ankiet i planów indywidualnych:</b> odpowiedzi potrzebne do przygotowania planu, które mogą obejmować wiek, parametry fizyczne, cele, dostępny sprzęt, ograniczenia ruchowe, kontuzje, choroby lub leki, jeżeli użytkownik je poda. Informacje o zdrowiu mogą stanowić szczególną kategorię danych osobowych.</li>
+          <li><b>Dane kontaktowe i zgłoszenia:</b> adres e-mail, treść zgłoszenia i informacje potrzebne do rozwiązania problemu.</li>
+          <li><b>Dane techniczne i analityczne:</b> informacje o odwiedzanej ścieżce, zdarzeniu w Serwisie, produkcie i sesji analitycznej. Opcjonalna analityka aktywności sklepu w aplikacji jest uzależniona od wyboru użytkownika w banerze zgody. Inne narzędzia analityczne lub reklamowe nie zostały w tej polityce potwierdzone.</li>
         </ul>
+        <p>Nie przekazuj danych, które nie są potrzebne do danej funkcji. W szczególności informacje o zdrowiu podawaj tylko wtedy, gdy są potrzebne do realizacji wybranej usługi.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>3. Cele i podstawy prawne</h2>
+        <h2>3. Cele i podstawy przetwarzania</h2>
         <ul>
-          <li>utworzenie i obsługa konta, zapewnienie funkcji aplikacji oraz dostarczenie zakupionych produktów — wykonanie umowy lub działania przed jej zawarciem;</li>
-          <li>obsługa zamówień, płatności, reklamacji i obowiązków księgowych lub prawnych — wykonanie umowy i obowiązek prawny;</li>
-          <li>zapewnienie bezpieczeństwa serwisu, zapobieganie nadużyciom i ustalenie lub obrona roszczeń — prawnie uzasadniony interes administratora, w zakresie w jakim ma zastosowanie;</li>
-          <li>opcjonalna analityka aktywności w sklepie — zgoda użytkownika, którą można wycofać przez zmianę decyzji w zakresie analityki, zgodnie z dostępnymi ustawieniami serwisu;</li>
-          <li>dane dotyczące zdrowia lub ograniczeń przekazane w ankiecie — tylko w zakresie niezbędnym do realizacji zamówionego planu i na podstawie odpowiedniej, wyraźnej zgody, jeżeli jest wymagana. Nie podawaj danych, które nie są potrzebne do przygotowania planu.</li>
+          <li>utworzenie i obsługa konta, udostępnienie funkcji oraz wykonanie zakupu — w zakresie niezbędnym do wykonania umowy lub podjęcia działań przed jej zawarciem;</li>
+          <li>obsługa płatności, zamówień, reklamacji i obowiązków rozliczeniowych — w celu wykonania umowy oraz wypełnienia obowiązków prawnych, które mają zastosowanie;</li>
+          <li>zapewnienie bezpieczeństwa, zapobieganie nadużyciom i dochodzenie lub obrona roszczeń — w zakresie prawnie uzasadnionego interesu, jeśli ma zastosowanie;</li>
+          <li>opcjonalna analityka zachowania w Serwisie — na podstawie wyboru użytkownika, zgodnie z mechanizmem zgody udostępnionym w aplikacji;</li>
+          <li>przetwarzanie danych o zdrowiu, jeżeli użytkownik poda takie dane w ankiecie — wyłącznie, gdy istnieje odpowiednia podstawa prawna, w tym wyraźna zgoda, jeśli jest wymagana. Przed wdrożeniem ankiety administrator powinien zapewnić właściwy sposób uzyskiwania i dokumentowania takiej zgody.</li>
         </ul>
-        <p>Wycofanie zgody nie wpływa na zgodność z prawem przetwarzania dokonanego przed jej wycofaniem. Jeśli dane są niezbędne do wykonania zamówienia lub wypełnienia obowiązku prawnego, samo wycofanie zgody nie usuwa automatycznie wszystkich danych, które muszą być dalej przechowywane na innej podstawie.</p>
+        <p>Wycofanie zgody nie wpływa na zgodność z prawem przetwarzania dokonanego przed jej wycofaniem. Dane, które muszą być zachowane na innej podstawie prawnej, nie są automatycznie usuwane po wycofaniu zgody.</p>
       </section>
 
       <section className="sf-legal-section">
         <h2>4. Odbiorcy danych</h2>
-        <p>Dane mogą być dostępne osobom upoważnionym przez administratora oraz dostawcom technologii niezbędnym do działania serwisu, w szczególności Cloudflare (obsługa aplikacji, bazy danych i przechowywanie plików) oraz Stripe (obsługa płatności i zarządzanie subskrypcją). Dane mogą być udostępnione także uprawnionym organom, jeżeli wynika to z prawa.</p>
-        <p>Dostawcy przetwarzają dane w zakresie wynikającym z ich usług i właściwych umów. Przed publikacją administrator powinien sprawdzić aktualne umowy powierzenia, role dostawców oraz warunki ewentualnego transferu danych poza Europejski Obszar Gospodarczy.</p>
+        <p>Dostęp do danych mogą mieć osoby upoważnione do obsługi Serwisu oraz dostawcy technologii niezbędni do jego działania. Aplikacja korzysta z usług Cloudflare do obsługi aplikacji, bazy danych i przechowywania plików oraz Stripe do obsługi płatności i subskrypcji. Dane mogą być również przekazane uprawnionym organom, jeśli wymaga tego prawo.</p>
+        <p>Przed publikacją administrator powinien zweryfikować aktualne warunki i role dostawców, umowy dotyczące przetwarzania danych oraz ewentualne transfery danych poza Europejski Obszar Gospodarczy.</p>
       </section>
 
       <section className="sf-legal-section">
         <h2>5. Okres przechowywania</h2>
-        <p>Dane konta, profilu i aktywności są przechowywane tak długo, jak to konieczne do utrzymania konta i świadczenia funkcji, a następnie przez okres potrzebny do rozliczeń, ustalenia lub obrony roszczeń albo spełnienia obowiązków prawnych.</p>
-        <p>Dane zamówień i dokumenty związane z rozliczeniami są przechowywane przez okres wymagany przepisami. Zgłoszenia pomocy przechowuje się przez czas potrzebny do ich obsługi i ewentualnego wykazania przebiegu sprawy. Dane o zdrowiu powinny być ograniczone do minimum i przechowywane wyłącznie przez okres uzasadniony celem, zgodą i obowiązkami prawnymi.</p>
-        <p>Administrator powinien określić i wdrożyć rzeczywiste okresy retencji oraz zasady usuwania danych w systemach i kopiach zapasowych.</p>
+        <p>Dane konta, profilu i aktywności są przechowywane tak długo, jak jest to potrzebne do obsługi konta i funkcji, a następnie przez okres konieczny do rozliczeń, realizacji obowiązków prawnych lub ustalenia, dochodzenia i obrony roszczeń. Dane zamówień i dokumenty rozliczeniowe są przechowywane przez okres wynikający z właściwych przepisów.</p>
+        <p>Zgłoszenia pomocy przechowuje się przez czas potrzebny do ich obsługi i ewentualnego wykazania przebiegu sprawy. Dane o zdrowiu powinny być ograniczone do minimum i przechowywane wyłącznie przez okres uzasadniony celem i właściwą podstawą prawną. Konkretne okresy retencji i zasady usuwania danych, w tym kopii zapasowych, powinny zostać określone i wdrożone przez administratora.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>6. Pliki cookies i pamięć urządzenia</h2>
-        <p>Serwis wykorzystuje niezbędne mechanizmy sesji, aby zalogować użytkownika i utrzymać bezpieczeństwo konta. W przeglądarce mogą być zapisywane techniczne pliki cookies sesji oraz ustawienia pamięci, w tym decyzja dotycząca opcjonalnej analityki i tymczasowy identyfikator sesji analitycznej.</p>
-        <p>Opcjonalna analityka jest uruchamiana po wybraniu „Akceptuję analitykę”. Wybór „Odrzuć” zapisuje odmowę i nie powinien uruchamiać tych zdarzeń. Serwis może korzystać także z mechanizmu Service Worker/PWA dla funkcji instalacji aplikacji.</p>
-        <p>Usunięcie niezbędnych cookies lub zablokowanie pamięci przeglądarki może spowodować, że logowanie lub niektóre funkcje nie będą działały prawidłowo.</p>
+        <h2>6. Cookies, pamięć urządzenia i analityka</h2>
+        <p>Serwis wykorzystuje techniczne mechanizmy potrzebne do logowania, utrzymania sesji, bezpieczeństwa i działania aplikacji. W pamięci przeglądarki może być zapisywana decyzja dotycząca opcjonalnej analityki oraz tymczasowy identyfikator sesji analitycznej.</p>
+        <p>Opcjonalna analityka aktywności sklepu jest uruchamiana po wybraniu akceptacji w banerze zgody. Użytkownik może ponownie otworzyć ustawienia prywatności z poziomu Serwisu i zmienić wybór. W tej wersji dokumentu nie deklaruje się użycia Google Analytics, Meta Pixel ani innych zewnętrznych narzędzi reklamowych, ponieważ nie zostało to potwierdzone.</p>
+        <p>Usunięcie niezbędnych danych sesji lub zablokowanie pamięci przeglądarki może spowodować, że logowanie albo niektóre funkcje nie będą działać prawidłowo.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>7. Prawa użytkownika</h2>
-        <p>W granicach i na zasadach określonych w przepisach użytkownik może żądać dostępu do danych, ich sprostowania, usunięcia, ograniczenia przetwarzania, przeniesienia, wnieść sprzeciw lub wycofać zgodę. Przysługuje mu również prawo wniesienia skargi do Prezesa Urzędu Ochrony Danych Osobowych.</p>
-        <p>W celu skorzystania z praw skontaktuj się z administratorem, korzystając z danych wskazanych w tej polityce. Administrator może poprosić o informacje potrzebne do potwierdzenia tożsamości i prawidłowej obsługi żądania.</p>
+        <h2>7. Prawa osób, których dane dotyczą</h2>
+        <p>W granicach określonych przepisami użytkownik może żądać dostępu do danych, ich sprostowania, usunięcia, ograniczenia przetwarzania lub przeniesienia, wnieść sprzeciw, a w przypadku danych przetwarzanych na podstawie zgody — wycofać zgodę. Przysługuje mu również prawo wniesienia skargi do Prezesa Urzędu Ochrony Danych Osobowych.</p>
+        <p>Żądania dotyczące danych można przesłać na <a href={`mailto:${LEGAL_EMAIL}`}>{LEGAL_EMAIL}</a>. Administrator może poprosić o informacje niezbędne do potwierdzenia tożsamości i prawidłowej obsługi żądania.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>8. Bezpieczeństwo</h2>
-        <p>Serwis stosuje środki techniczne i organizacyjne odpowiednie do jego działania, w tym ochronę sesji i kontrolę dostępu do danych kont oraz materiałów. Użytkownik powinien chronić swoje dane logowania i nie przesyłać w zgłoszeniach pomocy haseł ani danych karty płatniczej.</p>
-        <p>Żaden system transmisji lub przechowywania danych nie daje jednak bezwzględnej gwarancji bezpieczeństwa. W razie podejrzenia nieuprawnionego dostępu skontaktuj się niezwłocznie z administratorem.</p>
+        <h2>8. Usuwanie konta</h2>
+        <p>Aby poprosić o usunięcie konta, napisz na <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> z adresu e-mail powiązanego z kontem lub podaj informacje pozwalające je zidentyfikować. Usunięcie konta nie zawsze oznacza natychmiastowe usunięcie wszystkich informacji: część danych może być zachowana, jeśli wymaga tego prawo albo jest to konieczne do ustalenia, dochodzenia lub obrony roszczeń. Dane, dla których nie ma dalszej podstawy przetwarzania, powinny zostać usunięte zgodnie z procedurą administratora.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>9. Dobrowolność podania danych</h2>
-        <p>Podanie danych niezbędnych do utworzenia konta lub realizacji zakupu jest konieczne, aby skorzystać z danej funkcji. Podanie danych w opcjonalnych polach profilu lub analityka może być dobrowolne. Niepodanie informacji potrzebnych do przygotowania planu indywidualnego może uniemożliwić jego właściwe dopasowanie.</p>
+        <h2>9. Bezpieczeństwo i dobrowolność podania danych</h2>
+        <p>Stosowane są środki techniczne i organizacyjne właściwe dla działania Serwisu, w tym kontrola dostępu do kont i danych. Użytkownik powinien chronić swoje dane logowania. Żaden system nie gwarantuje jednak bezwzględnego bezpieczeństwa transmisji lub przechowywania informacji.</p>
+        <p>Podanie danych niezbędnych do założenia konta, zakupu lub przygotowania zamówionego planu jest konieczne do skorzystania z danej funkcji. Podanie informacji opcjonalnych jest dobrowolne. Niepodanie informacji wymaganych do wykonania planu indywidualnego może uniemożliwić jego przygotowanie.</p>
       </section>
 
       <section className="sf-legal-section">
-        <h2>10. Zmiany polityki i kontakt</h2>
-        <p>Polityka może być aktualizowana, gdy zmienią się funkcje serwisu, dostawcy, przepisy lub sposób przetwarzania. Aktualna wersja jest publikowana pod tym adresem.</p>
-        <p>Kontakt w sprawie danych: <a href="/pomoc">Centrum pomocy</a>{supportEmail ? <> lub <a href={`mailto:${supportEmail}`}>{supportEmail}</a></> : null}.</p>
-        <p>Regulamin serwisu: <a href="/regulamin">zobacz dokument</a>.</p>
+        <h2>10. Marketing i zmiany polityki</h2>
+        <p>Na dzień publikacji polityki wysyłka newslettera lub marketingowych wiadomości e-mail nie została potwierdzona jako aktywna funkcja. Jeżeli zostanie wdrożona, użytkownik powinien otrzymać odpowiednią informację i — gdy jest to wymagane — możliwość udzielenia oraz wycofania zgody niezależnie od wiadomości niezbędnych do obsługi konta lub zamówienia.</p>
+        <p>Polityka może być aktualizowana, gdy zmienią się funkcje Serwisu, dostawcy, przepisy lub sposób przetwarzania danych. Aktualna wersja jest publikowana pod tym adresem.</p>
+        <p>Kontakt w sprawach danych: <a href={`mailto:${LEGAL_EMAIL}`}>{LEGAL_EMAIL}</a>. Pomoc techniczna i zamówienia: <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. <a href="/regulamin">Przeczytaj regulamin.</a></p>
       </section>
     </>
   );
 }
 
-export default function LegalPages({ kind, supportEmail = '' }: Props) {
+export default function LegalPages({ kind }: Props) {
   const title = kind === 'terms' ? 'Regulamin Systemu Formy' : 'Polityka prywatności';
   return (
     <main className="sf-container sf-legal">
@@ -232,11 +207,11 @@ export default function LegalPages({ kind, supportEmail = '' }: Props) {
         <div>
           <p className="sf-eyebrow">DOKUMENTY / SYSTEM FORMY</p>
           <h1>{title}</h1>
-          <p className="sf-muted">Jasne zasady korzystania z platformy, zakupów i ochrony danych.</p>
+          <p className="sf-muted">Zasady korzystania z platformy, zakupów i ochrony danych.</p>
         </div>
       </div>
       <article className="sf-content-panel sf-legal-document">
-        {kind === 'terms' ? <TermsPage supportEmail={supportEmail} /> : <PrivacyPage supportEmail={supportEmail} />}
+        {kind === 'terms' ? <TermsPage /> : <PrivacyPage />}
       </article>
     </main>
   );
