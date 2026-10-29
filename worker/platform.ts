@@ -1,5 +1,5 @@
 import { handleV2Api } from './v2';
-interface PlatformEnv { DB: D1Database; PRODUCT_FILES?: R2Bucket; ADMIN_EMAIL?: string; STRIPE_SECRET_KEY?: string; STRIPE_WEBHOOK_SECRET?: string; }
+interface PlatformEnv { DB: D1Database; PRODUCT_FILES?: R2Bucket; ADMIN_EMAIL?: string; STRIPE_SECRET_KEY?: string; STRIPE_WEBHOOK_SECRET?: string; RESEND_API_KEY?: string; SYSTEM_FORMY_EMAIL_FROM?: string; }
 type Session = { id: string; email: string };
 type Body = Record<string, unknown>;
 type Product = { id:string;product_key:string;title:string;description:string;product_type:string;price_amount:number;currency:string;is_free:number;is_published:number;checkout_url:string|null;file_key:string;original_filename:string;file_content_type:string;created_at:string;updated_at:string };
@@ -78,6 +78,8 @@ export async function handlePlatformApi(request:Request,env:PlatformEnv):Promise
   }
   if(badOrigin(request))return reply({error:'Żądanie pochodzi z nieprawidłowej strony.'},403);
   try {
+  // Legacy checkout is disabled so every new paid order must pass through the consent-aware V2 flow.
+  if(path==='/api/checkout/session' && method==='POST')return reply({error:'Ten stary endpoint płatności jest wyłączony. Rozpocznij zakup z aktualnego sklepu Systemu Formy.'},410);
   if(path==='/api/checkout/session' && method==='POST'){
    const s=await sessionFor(request,env);if(!s)return reply({error:'Zaloguj się, aby kupić produkt.'},401);
    if(!env.STRIPE_SECRET_KEY||!env.STRIPE_WEBHOOK_SECRET)return reply({error:'Płatności Stripe nie są w pełni skonfigurowane. Sprzedaż zostanie uruchomiona po ustawieniu klucza API i webhooka.'},503);
