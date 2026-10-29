@@ -299,7 +299,8 @@ async function v2UpsertPremiumSubscription(env: V2Env, sub: Record<string, any>,
   const planKey = rawPlan === 'yearly' ? 'yearly' : rawPlan === 'monthly' ? 'monthly' : existing?.plan_key || fallback?.plan_key || 'monthly';
   if (!userId || !['monthly','yearly'].includes(planKey)) return false;
   const status = typeof sub.status === 'string' ? sub.status : 'incomplete';
-  const periodRaw = Number(sub.current_period_end);
+  // Stripe API versions using Basil and newer expose billing periods on subscription items.
+  const periodRaw = Number(sub.current_period_end ?? sub.items?.data?.[0]?.current_period_end);
   const periodEnd = Number.isFinite(periodRaw) && periodRaw > 0 ? new Date(periodRaw * 1000).toISOString() : null;
   const customer = typeof sub.customer === 'string' ? sub.customer : fallback?.stripe_customer_id || existing?.stripe_customer_id || null;
   const now = new Date().toISOString();
@@ -893,6 +894,33 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
       const payload = await response.json() as Record<string,any>;
       if (!response.ok || typeof payload.url !== 'string') return v2Reply({error:typeof payload.error?.message==='string'?`Stripe: ${payload.error.message}`:'Nie udało się otworzyć zarządzania subskrypcją.'},502);
       return v2Reply({url:payload.url});
+    }
+    if (path === '/api/v2/premium/cancel' && method === 'POST') {
+      const gate = await v2Gate(request, env); if (gate.response) return gate.response;
+      if (!env.STRIPE_SECRET_KEY) return v2Reply({error:'Anulowanie subskrypcji Stripe nie jest skonfigurowane.'},503);
+      const subscription = await v2PremiumSubscription(env, gate.session!.id);
+      if (!subscription) return v2Reply({error:'Nie znaleziono płatnej subskrypcji Premium do anulowania.'},404);
+      if (subscription.cancel_at_period_end) {
+        return v2Reply({ok:true, cancel_at_period_end:true, current_period_end:subscription.current_period_end, already_scheduled:true});
+      }
+      if (['canceled','incomplete_expired'].includes(subscription.status)) {
+        return v2Reply({error:'Ta subskrypcja jest już zakończona. Nie musisz jej anulować ponownie.'},409);
+      }
+      const form = new URLSearchParams();
+      // Do not immediately terminate paid access: disable only the next automatic renewal.
+      form.set('cancel_at_period_end', 'true');
+      const response = await fetch(`https://api.stripe.com/v1/subscriptions/${encodeURIComponent(subscription.stripe_subscription_id)}`, {
+        method:'POST',
+        headers:{Authorization:`Bearer ${env.STRIPE_SECRET_KEY}`,'Content-Type':'application/x-www-form-urlencoded'},
+        body:form.toString(),
+      });
+      const payload = await response.json() as Record<string, any>;
+      if (!response.ok || payload.id !== subscription.stripe_subscription_id || payload.object !== 'subscription' || payload.cancel_at_period_end !== true) {
+        return v2Reply({error:typeof payload.error?.message === 'string' ? `Stripe: ${payload.error.message}` : 'Stripe nie potwierdził anulowania subskrypcji.'},502);
+      }
+      await v2UpsertPremiumSubscription(env, payload);
+      const periodEnd = v2StripePeriodIso(payload.current_period_end) || v2StripePeriodIso(payload.items?.data?.[0]?.current_period_end) || subscription.current_period_end;
+      return v2Reply({ok:true, cancel_at_period_end:payload.cancel_at_period_end === true, current_period_end:periodEnd, status:typeof payload.status === 'string' ? payload.status : subscription.status});
     }
     // Publiczny katalog, kategorie i szczegóły produktu.
     if (path === '/api/v2/products' && method === 'GET') {
