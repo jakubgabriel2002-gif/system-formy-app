@@ -4,7 +4,8 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-20",
   "vars": {
-    "ADMIN_EMAIL": "jakub.gabriel2002@gmail.com"
+    "ADMIN_EMAIL": "jakub.gabriel2002@gmail.com",
+    "SYSTEM_FORMY_EMAIL_FROM": "System Formy <pomoc@systemformy.com.pl>"
   },
   "assets": {
     "directory": "./dist",
