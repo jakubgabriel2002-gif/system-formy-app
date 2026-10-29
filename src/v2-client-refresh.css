@@ -569,3 +569,19 @@
 /* Explicit background taps are consumed by the modal; only its labelled buttons close it. */
 .sf-product-popup-backdrop{z-index:20000!important;pointer-events:auto;touch-action:pan-y}
 .sf-product-popup{position:relative;z-index:1;pointer-events:auto;overscroll-behavior:contain;max-height:min(88dvh,760px)}
+
+
+/* Premium subscription management card in Profile settings. */
+.sf-subscription-settings-card{display:grid;grid-template-columns:52px minmax(0,1fr);gap:17px;align-items:start;margin:0 0 22px;padding:22px;border:1px solid rgba(198,243,106,.28);border-radius:20px;background:radial-gradient(ellipse at 100% 0,rgba(198,243,106,.09),transparent 48%),linear-gradient(140deg,#1b2017,#151713);min-width:0}
+.sf-subscription-settings-icon{display:grid;place-items:center;width:52px;height:52px;border:1px solid rgba(198,243,106,.34);border-radius:16px;background:rgba(198,243,106,.08);color:var(--lime)}
+.sf-subscription-settings-content{display:grid;justify-items:start;gap:10px;min-width:0}
+.sf-subscription-settings-content .sf-eyebrow{margin:0}
+.sf-subscription-settings-content h2{margin:0;font-size:clamp(1.2rem,2.5vw,1.65rem);letter-spacing:-.04em}
+.sf-subscription-settings-meta{display:flex;align-items:center;gap:9px;flex-wrap:wrap;color:#b9c1b0;font-size:11px}
+.sf-subscription-settings-status{display:inline-flex;align-items:center;gap:6px;padding:6px 9px;border:1px solid #383f31;border-radius:999px;background:#24291f;color:#c0c9b5;font-size:10px;font-weight:800}
+.sf-subscription-settings-status.is-okay{border-color:rgba(198,243,106,.3);background:rgba(198,243,106,.08);color:var(--lime)}
+.sf-subscription-settings-status.is-warning{border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.08);color:#f5c56f}
+.sf-subscription-settings-note{max-width:780px;margin:0;color:var(--muted);font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.sf-subscription-settings-content>.sf-button{margin-top:2px}
+.sf-subscription-settings-content>.sf-muted{max-width:720px;font-size:10px;line-height:1.6}
+@media(max-width:520px){.sf-subscription-settings-card{grid-template-columns:40px minmax(0,1fr);gap:12px;padding:16px}.sf-subscription-settings-icon{width:40px;height:40px;border-radius:13px}.sf-subscription-settings-content>.sf-button{width:100%;font-size:11px;padding-inline:10px}.sf-subscription-settings-meta{align-items:flex-start;flex-direction:column}}
