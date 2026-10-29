@@ -90,6 +90,8 @@ export default function AppV2() {
   const [activeNotification, setActiveNotification] = useState<AppNotification | null>(null);
   const activeNotificationRef = useRef<AppNotification | null>(null);
   const seenNotificationIds = useRef<Set<string>>(new Set());
+  const lastUiActivityAtRef = useRef(Date.now());
+  const lastPresencePingAtRef = useRef(0);
   const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [browseAvailableChallenges, setBrowseAvailableChallenges] = useState(false);
@@ -237,7 +239,15 @@ export default function AppV2() {
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
-    const poll = async () => {
+    let inFlight = false;
+    let lastPollAt = Date.now(); // Initial load above already fetched the current notifications.
+    const poll = async (force = false) => {
+      if (cancelled || inFlight || document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (!force && now - lastUiActivityAtRef.current > 2 * 60_000) return;
+      if (now - lastPollAt < 240_000) return;
+      lastPollAt = now;
+      inFlight = true;
       try {
         const result = await api<{notifications: AppNotification[]}>('/api/v2/notifications');
         if (cancelled) return;
@@ -254,9 +264,30 @@ export default function AppV2() {
           }
         }
       } catch { /* Polling powiadomień nie może blokować korzystania z aplikacji. */ }
+      finally { inFlight = false; }
     };
-    const timer = window.setInterval(() => { void poll(); }, 12000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    const onActivity = () => {
+      if (document.visibilityState !== 'visible') return;
+      lastUiActivityAtRef.current = Date.now();
+      void poll();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      lastUiActivityAtRef.current = Date.now();
+      void poll(true);
+    };
+    const timer = window.setInterval(() => { void poll(); }, 240_000);
+    const activityEvents: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'scroll', 'touchstart'];
+    activityEvents.forEach(eventName => window.addEventListener(eventName, onActivity, { passive: true }));
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onVisibility);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      activityEvents.forEach(eventName => window.removeEventListener(eventName, onActivity));
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onVisibility);
+    };
   }, [user?.id]);
   useEffect(() => {
     if (!activeNotification) return;
@@ -269,9 +300,28 @@ export default function AppV2() {
   const track = useCallback((event_type: string, product_key = '') => {
     if (consent !== 'yes') return;
     try {
-      let sessionKey = sessionStorage.getItem('sf-v2-analytics-session');
-      if (!sessionKey) { sessionKey = crypto.randomUUID(); sessionStorage.setItem('sf-v2-analytics-session', sessionKey); }
-      void api('/api/v2/analytics', { method: 'POST', body: JSON.stringify({ event_type, product_key, path: window.location.pathname, session_key: sessionKey }) }).catch(() => {});
+      const pathKey = window.location.pathname;
+      const sessionKeyName = 'sf-v2-analytics-session';
+      let sessionKey = sessionStorage.getItem(sessionKeyName);
+      if (!sessionKey) { sessionKey = crypto.randomUUID(); sessionStorage.setItem(sessionKeyName, sessionKey); }
+
+      // Avoid repeated writes for route re-renders/reloads of the same page or product.
+      // Analytics is approximate; one visit to the same view per five minutes is enough.
+      const dedupeStorageKey = 'sf-v2-analytics-dedupe-v1';
+      const eventKey = `${event_type}:${event_type === 'product_view' ? product_key : pathKey}`;
+      const now = Date.now();
+      let recent: Record<string, number> = {};
+      try {
+        const raw = sessionStorage.getItem(dedupeStorageKey);
+        const parsed: unknown = raw ? JSON.parse(raw) : {};
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          recent = Object.fromEntries(Object.entries(parsed as Record<string, unknown>).filter(([, value]) => typeof value === 'number' && now - value < 5 * 60_000) as Array<[string, number]>);
+        }
+      } catch { recent = {}; }
+      if (typeof recent[eventKey] === 'number' && now - recent[eventKey] < 5 * 60_000) return;
+      recent[eventKey] = now;
+      sessionStorage.setItem(dedupeStorageKey, JSON.stringify(recent));
+      void api('/api/v2/analytics', { method: 'POST', body: JSON.stringify({ event_type, product_key, path: pathKey, session_key: sessionKey }) }).catch(() => {});
     } catch { /* Analityka jest opcjonalna; jej błąd nie może blokować aplikacji. */ }
   }, [consent]);
 
@@ -506,6 +556,7 @@ export default function AppV2() {
     const resetTimer = () => {
       if (signedOut) return;
       lastActivity = Date.now();
+      lastUiActivityAtRef.current = lastActivity;
       if (inactivityTimer !== undefined) window.clearTimeout(inactivityTimer);
       inactivityTimer = window.setTimeout(() => {
         goToLogin('Wylogowano po 4 godzinach bezczynności. Zaloguj się ponownie.');
@@ -547,7 +598,8 @@ export default function AppV2() {
     const onActivity = () => {
       if (document.visibilityState !== 'visible') return;
       const now = Date.now();
-      if (now - lastPing < 60_000 || checking) return;
+      lastUiActivityAtRef.current = now;
+      if (now - lastPing < 5 * 60_000 || checking) return;
       lastPing = now;
       checking = true;
       void api<{ user: User | null }>('/api/auth/me')
@@ -575,14 +627,47 @@ export default function AppV2() {
 
   useEffect(() => { track(path.startsWith('/produkty/') ? 'product_view' : 'page_view', path.startsWith('/produkty/') ? decodeURIComponent(path.split('/')[2] || '') : ''); }, [path, track]);
 
-  // Presence is deliberately ephemeral and independent from optional marketing analytics consent.
+  // Presence is only an approximate, ephemeral admin metric. Hidden tabs do not ping; guests
+  // stop pinging when idle, while authenticated foreground sessions keep their 10-minute idle TTL
+  // alive. The route does not reset the timer, and D1 updates are limited to roughly once/4 min.
   useEffect(() => {
     let sessionKey = '';
+    let sending = false;
     try { sessionKey = sessionStorage.getItem('sf-live-presence-session') || ''; if (!sessionKey) { sessionKey = crypto.randomUUID().replace(/-/g, ''); sessionStorage.setItem('sf-live-presence-session', sessionKey); } } catch { sessionKey = crypto.randomUUID().replace(/-/g, ''); }
-    const ping = () => { void api('/api/v2/presence/heartbeat', { method: 'POST', body: JSON.stringify({ session_key: sessionKey, path: window.location.pathname }) }).catch(() => {}); };
-    ping(); const timer = window.setInterval(ping, 30000);
-    return () => window.clearInterval(timer);
-  }, [path, user?.id]);
+    const ping = (force = false) => {
+      if (document.visibilityState !== 'visible' || sending) return;
+      const now = Date.now();
+      if (!user?.id && now - lastUiActivityAtRef.current > 5 * 60_000) return;
+      if (!force && now - lastPresencePingAtRef.current < 240_000) return;
+      lastPresencePingAtRef.current = now;
+      sending = true;
+      void api('/api/v2/presence/heartbeat', { method: 'POST', body: JSON.stringify({ session_key: sessionKey, path: window.location.pathname }) })
+        .catch(() => {})
+        .finally(() => { sending = false; });
+    };
+    const onActivity = () => {
+      if (document.visibilityState !== 'visible') return;
+      lastUiActivityAtRef.current = Date.now();
+      ping();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      lastUiActivityAtRef.current = Date.now();
+      ping();
+    };
+    ping(true);
+    const timer = window.setInterval(() => ping(), 240_000);
+    const activityEvents: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'scroll', 'touchstart'];
+    activityEvents.forEach(eventName => window.addEventListener(eventName, onActivity, { passive: true }));
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      activityEvents.forEach(eventName => window.removeEventListener(eventName, onActivity));
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onVisibility);
+    };
+  }, [user?.id]);
   useEffect(() => {
     if (!path.startsWith('/acp') || !admin) return;
     const load = async () => {
@@ -608,9 +693,16 @@ export default function AppV2() {
 
   useEffect(() => {
     if (!(path === '/acp' || path === '/acp/') || !admin) return;
-    const refresh = () => { void api<typeof liveUsers>('/api/v2/admin/live-users').then(setLiveUsers).catch(() => {}); };
-    const timer = window.setInterval(refresh, 30000);
-    return () => window.clearInterval(timer);
+    let inFlight = false;
+    const refresh = () => {
+      if (document.visibilityState !== 'visible' || inFlight) return;
+      inFlight = true;
+      void api<typeof liveUsers>('/api/v2/admin/live-users').then(setLiveUsers).catch(() => {}).finally(() => { inFlight = false; });
+    };
+    const onVisibility = () => { if (document.visibilityState === 'visible') refresh(); };
+    const timer = window.setInterval(refresh, 120_000);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisibility); };
   }, [path, admin]);
 
   const privateRoute = path === '/app' || path.startsWith('/app/');
