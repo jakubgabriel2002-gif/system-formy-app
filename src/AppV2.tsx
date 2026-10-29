@@ -38,6 +38,12 @@ import type {
   OrderItem, Plan, PremiumStatus, Product, Promo, Ticket, User, Workout, WorkoutExercise,
 } from './lib/appDomain';
 
+type CheckoutConsentKind = 'digital_content' | 'digital_service';
+type PendingCheckout =
+  | { flow: 'product'; product: Product; kind: CheckoutConsentKind; title: string }
+  | { flow: 'generator'; kind: 'digital_service'; title: string }
+  | { flow: 'premium'; planKey: 'monthly' | 'yearly'; kind: 'digital_service'; title: string };
+
 const SAMPLE_PLANS: Record<'home' | 'gym', { name: string; description: string; days: Day[] }> = {
   home: {
     name: 'Plan przykładowy — dom bez sprzętu',
@@ -79,6 +85,9 @@ export default function AppV2() {
   const [adminNotifications, setAdminNotifications] = useState<AppNotification[]>([]);
   const [notificationDraft, setNotificationDraft] = useState({ title: '', message: '', target_email: '' });
   const [individualPlanPaymentConfirmed, setIndividualPlanPaymentConfirmed] = useState(false);
+  const [pendingCheckout, setPendingCheckout] = useState<PendingCheckout | null>(null);
+  const [checkoutTermsAccepted, setCheckoutTermsAccepted] = useState(false);
+  const [checkoutStartAccepted, setCheckoutStartAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [promoPopupOpen, setPromoPopupOpen] = useState(false);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
@@ -653,29 +662,72 @@ export default function AppV2() {
     finally { setLoading(false); }
   }
   async function signOut() { try { await api('/api/auth/logout', { method: 'POST', body: '{}' }); } finally { setUser(null); setAdmin(false); go('/', true); notify('Wylogowano.', 'success'); } }
-  async function buy(product: Product) {
+  function requestPurchaseConsent(pending: PendingCheckout): void {
+    setCheckoutTermsAccepted(false);
+    setCheckoutStartAccepted(false);
+    setPendingCheckout(pending);
+  }
+
+  async function completeProductCheckout(product: Product, kind: CheckoutConsentKind): Promise<void> {
     if (!user) { go(`/login?next=${encodeURIComponent(`/produkty/${product.product_key}`)}`); return; }
     setLoading(true);
     try {
-      if (product.is_free) { await api(`/api/products/${encodeURIComponent(product.product_key)}/claim`, { method: 'POST', body: '{}' }); notify('Materiał dodano do Twojej biblioteki.', 'success'); await refreshUserData(); go('/app/materialy'); return; }
-      // Zdarzenie checkout_started zapisuje API dopiero po utworzeniu sesji Stripe; unikamy podwójnego zliczania.
       let analyticsSession = ''; try { if (consent === 'yes') analyticsSession = sessionStorage.getItem('sf-v2-analytics-session') || ''; } catch {}
-      const r = await api<{ url?: string; free?: boolean }>('/api/v2/checkout/session', { method: 'POST', body: JSON.stringify({ product_key: product.product_key, promotion_code: productCode.trim(), analytics_session_key: analyticsSession }) });
+      const r = await api<{ url?: string; free?: boolean }>('/api/v2/checkout/session', {
+        method: 'POST',
+        body: JSON.stringify({ product_key: product.product_key, promotion_code: productCode.trim(), analytics_session_key: analyticsSession,
+          terms_accepted: true, early_start_consent: true, withdrawal_acknowledged: true, purchase_consent_kind: kind }),
+      });
       if (r.free) { notify('Materiał został odblokowany i jest dostępny na Twoim koncie.', 'success'); await refreshUserData(); go('/app/materialy'); }
       else if (r.url) window.location.assign(r.url);
+      else throw new Error('Nie otrzymano linku do płatności. Spróbuj ponownie.');
     } catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się rozpocząć zakupu.', 'error'); }
     finally { setLoading(false); }
   }
-  async function startPremiumCheckout(planKey: 'monthly' | 'yearly'): Promise<void> {
+
+  async function buy(product: Product) {
+    if (!user) { go(`/login?next=${encodeURIComponent(`/produkty/${product.product_key}`)}`); return; }
+    if (product.is_free) {
+      setLoading(true);
+      try { await api(`/api/products/${encodeURIComponent(product.product_key)}/claim`, { method: 'POST', body: '{}' }); notify('Materiał dodano do Twojej biblioteki.', 'success'); await refreshUserData(); go('/app/materialy'); }
+      catch (e) { notify(e instanceof Error ? e.message : 'Nie udało się pobrać materiału.', 'error'); }
+      finally { setLoading(false); }
+      return;
+    }
+    const normalizedType = String(product.product_type || '').toLowerCase();
+    const looksLikeDigitalContent = ['ebook', 'guide', 'training_plan', 'bundle', 'other'].includes(normalizedType) && !product.is_challenge_product && !/challenge|wyzwanie/i.test(`${product.product_key} ${product.product_type}`);
+    requestPurchaseConsent({ flow: 'product', product, title: product.title, kind: looksLikeDigitalContent ? 'digital_content' : 'digital_service' });
+  }
+
+  async function completePremiumCheckout(planKey: 'monthly' | 'yearly'): Promise<void> {
     if (!user) { go(`/login?next=${encodeURIComponent('/app/premium')}`); return; }
     setLoading(true);
     try {
-      const response = await api<{ url?: string }>('/api/v2/premium/checkout', { method:'POST', body:JSON.stringify({plan_key:planKey}) });
+      const response = await api<{ url?: string }>('/api/v2/premium/checkout', { method:'POST', body:JSON.stringify({
+        plan_key: planKey, terms_accepted: true, early_start_consent: true, withdrawal_acknowledged: true,
+      }) });
       if (!response.url) throw new Error('Nie otrzymano linku do płatności Premium.');
       window.location.assign(response.url);
     } catch (error) { notify(error instanceof Error ? error.message : 'Nie udało się rozpocząć subskrypcji Premium.', 'error'); }
     finally { setLoading(false); }
   }
+
+  async function startPremiumCheckout(planKey: 'monthly' | 'yearly'): Promise<void> {
+    if (!user) { go(`/login?next=${encodeURIComponent('/app/premium')}`); return; }
+    requestPurchaseConsent({ flow: 'premium', planKey, kind: 'digital_service', title: planKey === 'yearly' ? 'System Formy Premium — plan roczny' : 'System Formy Premium — plan miesięczny' });
+  }
+
+  function confirmPendingCheckout(): void {
+    if (!pendingCheckout) return;
+    if (!checkoutTermsAccepted) { notify('Zaakceptuj regulamin, aby kontynuować.', 'error'); return; }
+    if (!checkoutStartAccepted) { notify('Potwierdź zgodę na rozpoczęcie dostarczania treści lub usługi przed upływem terminu odstąpienia.', 'error'); return; }
+    const pending = pendingCheckout;
+    setPendingCheckout(null);
+    if (pending.flow === 'product') void completeProductCheckout(pending.product, pending.kind);
+    else if (pending.flow === 'generator') void completeGeneratorCheckout();
+    else void completePremiumCheckout(pending.planKey);
+  }
+
   async function openPremiumPortal(): Promise<void> {
     setLoading(true);
     try {
@@ -692,10 +744,16 @@ export default function AppV2() {
 
   async function purchaseGeneratorPlan(): Promise<void> {
     if (!user) { go(`/login?next=${encodeURIComponent('/app/plan/katalog')}`); return; }
+    requestPurchaseConsent({ flow: 'generator', title: 'Generator planu treningowego', kind: 'digital_service' });
+  }
+
+  async function completeGeneratorCheckout(): Promise<void> {
+    if (!user) { go(`/login?next=${encodeURIComponent('/app/plan/katalog')}`); return; }
     setLoading(true);
     try {
       const response = await api<{ url?: string; free?: boolean }>('/api/v2/checkout/session', {
-        method: 'POST', body: JSON.stringify({ product_key: 'generator-planu-treningowego', promotion_code: '', analytics_session_key: '' }),
+        method: 'POST', body: JSON.stringify({ product_key: 'generator-planu-treningowego', promotion_code: '', analytics_session_key: '',
+          terms_accepted: true, early_start_consent: true, withdrawal_acknowledged: true, purchase_consent_kind: 'digital_service' }),
       });
       if (response.url) window.location.assign(response.url);
       else if (response.free) { await refreshUserData(); notify('Dostęp do generatora został odblokowany.', 'success'); }
@@ -1370,5 +1428,5 @@ export default function AppV2() {
   const promoPopupProduct = products.find(product => !product.is_free && product.is_published !== 0 && product.product_key !== 'generator-planu-treningowego' && product.product_key !== 'plan-indywidualny');
   const closePromoPopup = () => setPromoPopupOpen(false);
 
-  return <div className="sf-root"><PwaInstallGuide open={showInstallGuide && Boolean(user)} installPrompt={installPromptEvent} onClose={() => setShowInstallGuide(false)} onPromptConsumed={() => setInstallPromptEvent(null)} />{!showApp && !showAdmin && Header()}{storeNotice && !showApp && !showAdmin && <div className="sf-store-notice" role="status">{storeNotice}</div>}{showAdmin ? <Suspense fallback={<div className="sf-lazy-screen" role="status"><span className="sf-page-loading"/>Ładowanie panelu administracyjnego…</div>}>{admin ? AdminLayout() : <main className="sf-container sf-empty"><ShieldCheck size={28}/><h2>Sprawdzam uprawnienia…</h2></main>}</Suspense> : showApp ? <Suspense fallback={<div className="sf-lazy-screen" role="status"><span className="sf-page-loading"/>Ładowanie modułu aplikacji…</div>}>{AppLayout()}</Suspense> : PublicPage()}{showApp && promoPopupOpen && user && premiumStatus && (promoPopupMode === 'trialWelcome' ? Boolean(premiumStatus.is_trial) : !premiumStatus.is_premium) && <PromoPopup mode={promoPopupMode} product={promoPopupProduct} onClose={closePromoPopup} onPremium={() => { closePromoPopup(); go('/app/premium'); }} onProduct={(productKey) => { closePromoPopup(); go(productKey ? `/app/sklep/${encodeURIComponent(productKey)}` : '/app/sklep'); }} onStore={() => { closePromoPopup(); go('/app/sklep'); }} />}{showApp && activeNotification && <div className="sf-notification-toast" role="status"><span className="sf-notification-toast-icon"><Bell size={18}/></span><div><b>{activeNotification.title}</b><p>{activeNotification.message}</p></div><button aria-label="Ukryj powiadomienie" onClick={() => { setActiveNotification(null); setNotificationQueue(old => { if (!old.length) return old; const [next, ...rest] = old; window.setTimeout(() => setActiveNotification(current => current || next), 250); return rest; }); }}><X size={16}/></button></div>}{notice && <div className={`sf-toast sf-toast-${notice.type}`} role="status"><span>{notice.type === 'success' ? <CheckCircle2 size={18}/> : notice.type === 'error' ? <X size={18}/> : <Activity size={18}/>}</span><p>{notice.text}</p><button aria-label="Zamknij komunikat" onClick={() => setNotice(null)}><X size={16}/></button></div>}{!consent && <AnalyticsConsentBanner onChoose={(choice) => { try { localStorage.setItem('sf-v2-analytics-consent', choice); if (choice === 'no') sessionStorage.removeItem('sf-v2-analytics-session'); } catch { /* Storage may be unavailable; consent still applies to this app session. */ } setConsent(choice); }} />}{!showApp && !showAdmin && <footer className="sf-footer"><button className="sf-brand sf-footer-brand" onClick={() => go('/')}><img className="sf-brand-logo" src="/sf-logo.webp" alt="System Formy"/></button><p>Trening · Postępy · Materiały</p><div><button onClick={() => go('/regulamin')}>Regulamin</button><button onClick={() => go('/prywatnosc')}>Prywatność</button><button onClick={() => go('/pomoc')}>Pomoc</button><button onClick={reopenAnalyticsConsent}>Ustawienia prywatności</button></div><small>© {new Date().getFullYear()} System Formy</small></footer>}</div>;
+  return <div className="sf-root">{pendingCheckout && <div className="sf-checkout-consent-overlay" role="presentation"><section className="sf-checkout-consent-modal" role="dialog" aria-modal="true" aria-labelledby="sf-checkout-consent-title"><button type="button" className="sf-checkout-consent-close" aria-label="Anuluj zakup" onClick={() => setPendingCheckout(null)}><X size={19}/></button><p className="sf-eyebrow">PRZED PŁATNOŚCIĄ</p><h2 id="sf-checkout-consent-title">Potwierdź warunki zakupu</h2><p className="sf-checkout-consent-product">{pendingCheckout.title}</p><label className="sf-checkout-consent-check"><input type="checkbox" checked={checkoutTermsAccepted} onChange={event => setCheckoutTermsAccepted(event.target.checked)}/><span>Akceptuję <a href="/regulamin" target="_blank" rel="noreferrer">Regulamin Systemu Formy</a> i zapoznałem/-am się z informacjami dotyczącymi zakupu, płatności i praw konsumenta.</span></label>{pendingCheckout.kind === 'digital_content' ? <label className="sf-checkout-consent-check"><input type="checkbox" checked={checkoutStartAccepted} onChange={event => setCheckoutStartAccepted(event.target.checked)}/><span>Wyrażam wyraźną zgodę na rozpoczęcie dostarczania zakupionej treści cyfrowej przed upływem 14-dniowego terminu odstąpienia od umowy i przyjmuję do wiadomości, że utracę prawo odstąpienia po spełnieniu świadczenia przez sprzedawcę, czyli dostarczeniu zakupionej treści cyfrowej, jeżeli zostaną spełnione pozostałe warunki ustawowe. Zgoda nie ogranicza moich praw dotyczących zgodności treści cyfrowej z umową.</span></label> : <label className="sf-checkout-consent-check"><input type="checkbox" checked={checkoutStartAccepted} onChange={event => setCheckoutStartAccepted(event.target.checked)}/><span>Żądam rozpoczęcia świadczenia usługi cyfrowej lub realizacji zamówionej usługi przed upływem 14-dniowego terminu na odstąpienie od umowy. Przyjmuję do wiadomości, że w razie odstąpienia po rozpoczęciu świadczenia mogę być zobowiązany/-a do zapłaty kwoty proporcjonalnej do świadczeń spełnionych do chwili odstąpienia, a prawo odstąpienia wygasa po pełnym wykonaniu usługi wyłącznie po spełnieniu warunków ustawowych. Samo indywidualne przygotowanie planu nie wyłącza automatycznie ustawowych praw.</span></label>}<p className="sf-checkout-consent-note">To nie jest zrzeczenie się prawa do reklamacji. Nie ogranicza ustawowych uprawnień, jeśli produkt lub usługa cyfrowa są niezgodne z umową. Po potwierdzonej płatności wyślemy e-mailem potwierdzenie zakupu i dokładną treść zaakceptowanej zgody.</p><div className="sf-checkout-consent-actions"><button type="button" className="sf-button sf-button-outline" disabled={loading} onClick={() => setPendingCheckout(null)}>Wróć</button><button type="button" className="sf-button sf-button-lime" disabled={loading || !checkoutTermsAccepted || !checkoutStartAccepted} onClick={confirmPendingCheckout}>{loading ? 'Przygotowuję…' : 'Potwierdzam i przechodzę do płatności'} <ArrowRight size={16}/></button></div></section></div>}<PwaInstallGuide open={showInstallGuide && Boolean(user)} installPrompt={installPromptEvent} onClose={() => setShowInstallGuide(false)} onPromptConsumed={() => setInstallPromptEvent(null)} />{!showApp && !showAdmin && Header()}{storeNotice && !showApp && !showAdmin && <div className="sf-store-notice" role="status">{storeNotice}</div>}{showAdmin ? <Suspense fallback={<div className="sf-lazy-screen" role="status"><span className="sf-page-loading"/>Ładowanie panelu administracyjnego…</div>}>{admin ? AdminLayout() : <main className="sf-container sf-empty"><ShieldCheck size={28}/><h2>Sprawdzam uprawnienia…</h2></main>}</Suspense> : showApp ? <Suspense fallback={<div className="sf-lazy-screen" role="status"><span className="sf-page-loading"/>Ładowanie modułu aplikacji…</div>}>{AppLayout()}</Suspense> : PublicPage()}{showApp && promoPopupOpen && user && premiumStatus && (promoPopupMode === 'trialWelcome' ? Boolean(premiumStatus.is_trial) : !premiumStatus.is_premium) && <PromoPopup mode={promoPopupMode} product={promoPopupProduct} onClose={closePromoPopup} onPremium={() => { closePromoPopup(); go('/app/premium'); }} onProduct={(productKey) => { closePromoPopup(); go(productKey ? `/app/sklep/${encodeURIComponent(productKey)}` : '/app/sklep'); }} onStore={() => { closePromoPopup(); go('/app/sklep'); }} />}{showApp && activeNotification && <div className="sf-notification-toast" role="status"><span className="sf-notification-toast-icon"><Bell size={18}/></span><div><b>{activeNotification.title}</b><p>{activeNotification.message}</p></div><button aria-label="Ukryj powiadomienie" onClick={() => { setActiveNotification(null); setNotificationQueue(old => { if (!old.length) return old; const [next, ...rest] = old; window.setTimeout(() => setActiveNotification(current => current || next), 250); return rest; }); }}><X size={16}/></button></div>}{notice && <div className={`sf-toast sf-toast-${notice.type}`} role="status"><span>{notice.type === 'success' ? <CheckCircle2 size={18}/> : notice.type === 'error' ? <X size={18}/> : <Activity size={18}/>}</span><p>{notice.text}</p><button aria-label="Zamknij komunikat" onClick={() => setNotice(null)}><X size={16}/></button></div>}{!consent && <AnalyticsConsentBanner onChoose={(choice) => { try { localStorage.setItem('sf-v2-analytics-consent', choice); if (choice === 'no') sessionStorage.removeItem('sf-v2-analytics-session'); } catch { /* Storage may be unavailable; consent still applies to this app session. */ } setConsent(choice); }} />}{!showApp && !showAdmin && <footer className="sf-footer"><button className="sf-brand sf-footer-brand" onClick={() => go('/')}><img className="sf-brand-logo" src="/sf-logo.webp" alt="System Formy"/></button><p>Trening · Postępy · Materiały</p><div><button onClick={() => go('/regulamin')}>Regulamin</button><button onClick={() => go('/prywatnosc')}>Prywatność</button><button onClick={() => go('/pomoc')}>Pomoc</button><button onClick={reopenAnalyticsConsent}>Ustawienia prywatności</button></div><small>© {new Date().getFullYear()} System Formy</small></footer>}</div>;
 }
