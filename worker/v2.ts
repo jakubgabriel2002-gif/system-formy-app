@@ -214,6 +214,17 @@ function ensurePremiumSubscriptionTable(env: V2Env): Promise<void> {
       created_at TEXT NOT NULL
     )`).run();
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_premium_trials_ends_at ON premium_trials(ends_at)').run();
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS premium_admin_grants (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      starts_at TEXT NOT NULL,
+      ends_at TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      granted_by_user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`).run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_premium_admin_grants_user_active ON premium_admin_grants(user_id,is_active,starts_at,ends_at)').run();
   });
 }
 
@@ -236,6 +247,14 @@ async function v2IsPremium(env: V2Env, userId: string): Promise<boolean> {
     const periodValid = !subscription.current_period_end || Date.parse(subscription.current_period_end) > Date.now();
     if (activeStatus && periodValid) return true;
   }
+
+  // Dostęp Premium nadany ręcznie przez administratora ma własny, jawny zakres dat.
+  await ensurePremiumSubscriptionTable(env);
+  const nowIso = new Date().toISOString();
+  const manualGrant = await env.DB.prepare(`SELECT id FROM premium_admin_grants
+    WHERE user_id=? AND is_active=1 AND starts_at<=? AND (ends_at IS NULL OR ends_at>?)
+    ORDER BY created_at DESC LIMIT 1`).bind(userId, nowIso, nowIso).first<{id:string}>();
+  if (manualGrant) return true;
 
   // Okres próbny jest jednorazowy i nadawany wyłącznie podczas rejestracji nowego konta.
   const trial = await v2PremiumTrial(env, userId);
@@ -1919,15 +1938,45 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
         const userId = userDetailMatch[1];
         const user = await env.DB.prepare('SELECT id,email,created_at,updated_at FROM users WHERE id=? LIMIT 1').bind(userId).first<{ id: string; email: string; created_at: string; updated_at: string }>();// No password hash or session token is returned.
         if (!user) return v2Reply({ error: 'Nie znaleziono użytkownika.' }, 404);
-        const [profile, orders, entitlements, workouts, tickets, items] = await Promise.all([
+        await ensurePremiumSubscriptionTable(env);
+        const [profile, orders, entitlements, workouts, tickets, items, premiumGrant] = await Promise.all([
           env.DB.prepare('SELECT first_name,gender,weight_kg,height_cm,training_location,primary_goal,training_days_per_week,created_at,updated_at FROM user_profiles WHERE user_id=? LIMIT 1').bind(userId).first(),
           env.DB.prepare('SELECT o.id,o.order_number,COALESCE(d.display_number,o.order_number) AS display_order_number,o.status,o.total_amount,o.currency,o.created_at,o.updated_at FROM orders o LEFT JOIN order_display_numbers d ON d.order_id=o.id WHERE o.user_id=? ORDER BY o.created_at DESC LIMIT 100').bind(userId).all(),
           env.DB.prepare("SELECT id,product_key,product_title,product_type,access_status,created_at FROM user_entitlements WHERE user_id=? ORDER BY created_at DESC LIMIT 200").bind(userId).all(),
           env.DB.prepare('SELECT id,title,performed_on,created_at FROM workout_sessions WHERE user_id=? ORDER BY performed_on DESC,created_at DESC LIMIT 20').bind(userId).all(),
           env.DB.prepare('SELECT id,topic,subject,status,order_id,created_at,updated_at FROM support_tickets WHERE user_id=? ORDER BY created_at DESC LIMIT 50').bind(userId).all(),
           env.DB.prepare('SELECT i.order_id,i.product_key,i.product_title,i.product_type,i.quantity,i.unit_amount FROM order_items i JOIN orders o ON o.id=i.order_id WHERE o.user_id=? ORDER BY i.created_at DESC LIMIT 300').bind(userId).all(),
+          env.DB.prepare('SELECT id,starts_at,ends_at,is_active,granted_by_user_id,created_at,updated_at FROM premium_admin_grants WHERE user_id=? ORDER BY created_at DESC LIMIT 1').bind(userId).first(),
         ]);
-        return v2Reply({ user, profile: profile || null, orders: orders.results, entitlements: entitlements.results, recent_workouts: workouts.results, tickets: tickets.results, items: items.results });
+        return v2Reply({ user, profile: profile || null, orders: orders.results, entitlements: entitlements.results, recent_workouts: workouts.results, tickets: tickets.results, items: items.results, premium_grant: premiumGrant || null });
+      }
+      // Ręczne nadawanie i odbieranie Premium w ACP, niezależnie od płatnej subskrypcji Stripe.
+      const premiumGrantMatch = path.match(/^\/api\/v2\/admin\/users\/([a-f0-9-]+)\/premium-grant$/i);
+      if (premiumGrantMatch && method === 'POST') {
+        const gate = await v2Gate(request, env, true); if (gate.response) return gate.response;
+        const userId = premiumGrantMatch[1];
+        const target = await env.DB.prepare('SELECT id,email FROM users WHERE id=? LIMIT 1').bind(userId).first<{id:string;email:string}>();
+        if (!target) return v2Reply({error:'Nie znaleziono użytkownika.'},404);
+        await ensurePremiumSubscriptionTable(env);
+        const b = await v2Body(request), active = b.active !== false;
+        const now = new Date().toISOString();
+        if (!active) {
+          await env.DB.prepare('UPDATE premium_admin_grants SET is_active=0,updated_at=? WHERE user_id=? AND is_active=1').bind(now,userId).run();
+          await env.DB.prepare('INSERT INTO admin_audit_log(id,actor_user_id,actor_email,action,entity_type,entity_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),gate.session!.id,gate.session!.email,'revoke_manual_premium','user',userId,JSON.stringify({target_email:target.email}),now).run().catch(()=>{});
+          return v2Reply({ok:true,active:false});
+        }
+        const startsRaw = typeof b.starts_at === 'string' && b.starts_at.trim() ? b.starts_at.trim() : now;
+        const endsRaw = typeof b.ends_at === 'string' && b.ends_at.trim() ? b.ends_at.trim() : null;
+        const startsMs = Date.parse(startsRaw), endsMs = endsRaw ? Date.parse(endsRaw) : null;
+        if (!Number.isFinite(startsMs) || (endsRaw && !Number.isFinite(endsMs as number)) || (endsMs !== null && (endsMs as number) <= startsMs)) return v2Reply({error:'Podaj prawidłowy zakres dat. Data końcowa musi być późniejsza niż początkowa.'},400);
+        const startsAt = new Date(startsMs).toISOString(), endsAt = endsMs === null ? null : new Date(endsMs).toISOString();
+        // New grant replaces earlier manual grants for this account, preventing an old
+        // indefinite grant from bypassing a newly configured future start/end date.
+        await env.DB.prepare('UPDATE premium_admin_grants SET is_active=0,updated_at=? WHERE user_id=? AND is_active=1').bind(now,userId).run();
+        const id = crypto.randomUUID();
+        await env.DB.prepare('INSERT INTO premium_admin_grants(id,user_id,starts_at,ends_at,is_active,granted_by_user_id,created_at,updated_at) VALUES(?,?,?,?,1,?,?,?)').bind(id,userId,startsAt,endsAt,gate.session!.id,now,now).run();
+        await env.DB.prepare('INSERT INTO admin_audit_log(id,actor_user_id,actor_email,action,entity_type,entity_id,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),gate.session!.id,gate.session!.email,'grant_manual_premium','user',userId,JSON.stringify({target_email:target.email,starts_at:startsAt,ends_at:endsAt}),now).run().catch(()=>{});
+        return v2Reply({ok:true,active:true,starts_at:startsAt,ends_at:endsAt});
       }
       // Zarządzanie kontem: edycja e-maila, reset hasła, nadawanie i odbieranie dostępu.
       const userMutation = path.match(/^\/api\/v2\/admin\/users\/([a-f0-9-]+)$/i);
@@ -1945,7 +1994,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
             'user_profiles','workout_sessions','training_plans_v2','training_plan_days_v2','training_plan_exercises_v2',
             'training_session_drafts','individual_plan_requests','support_tickets','product_analytics','weekly_checkins',
             'user_goals','user_measurements','app_notification_reads','app_notifications','sf_challenge_day_logs',
-            'sf_challenge_participants','premium_trials','premium_subscriptions','users'
+            'sf_challenge_participants','premium_trials','premium_subscriptions','premium_admin_grants','users'
           ];
           const tableInfo = await env.DB.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${deleteTableNames.map(()=>'?').join(',')})`)
             .bind(...deleteTableNames).all<{name:string}>();
@@ -1973,7 +2022,7 @@ export async function handleV2Api(request: Request, env: V2Env): Promise<Respons
             'promotion_redemptions','auth_sessions','user_entitlements','user_profiles','workout_sessions',
             'training_session_drafts','individual_plan_requests','support_tickets','product_analytics',
             'weekly_checkins','user_goals','user_measurements','app_notification_reads','sf_challenge_day_logs',
-            'sf_challenge_participants','premium_trials','premium_subscriptions'
+            'sf_challenge_participants','premium_trials','premium_subscriptions','premium_admin_grants'
           ]) addDelete(table,`DELETE FROM ${table} WHERE user_id=?`);
           if (existingTables.has('app_notifications')) {
             addDelete('app_notifications','DELETE FROM app_notifications WHERE target_user_id=?');
