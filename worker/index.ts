@@ -283,6 +283,28 @@ async function refreshRollingSessionCookie(request: Request, env: Env, response:
     return refreshed;
   } catch { return response; }
 }
+let profileAgeSchemaReady = false;
+let profileAgeSchemaPromise: Promise<void> | null = null;
+async function ensureProfileAgeColumn(db: D1Database): Promise<void> {
+  if (profileAgeSchemaReady) return;
+  if (!profileAgeSchemaPromise) {
+    profileAgeSchemaPromise = (async () => {
+      const columns = await db.prepare('PRAGMA table_info(user_profiles)').all<{ name: string }>();
+      if (!(columns.results || []).some(column => column.name === 'age_years')) {
+        try {
+          await db.prepare('ALTER TABLE user_profiles ADD COLUMN age_years INTEGER').run();
+        } catch (error) {
+          // Another isolate may add the same nullable column at the same time.
+          const message = error instanceof Error ? error.message : String(error);
+          if (!/duplicate column name|already exists/i.test(message)) throw error;
+        }
+      }
+      profileAgeSchemaReady = true;
+    })().finally(() => { profileAgeSchemaPromise = null; });
+  }
+  await profileAgeSchemaPromise;
+}
+
 async function handleApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url), path = url.pathname, method = request.method.toUpperCase();
   if (path === '/api/health' && method === 'GET') {
@@ -304,15 +326,18 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     }
     if (path === '/api/account/profile' && method === 'GET') {
       const session = await requireSession(request, env);
-      const row = await db.prepare(`SELECT first_name, gender, weight_kg, height_cm, training_location, primary_goal, training_days_per_week
+      await ensureProfileAgeColumn(db);
+      const row = await db.prepare(`SELECT first_name, gender, age_years, weight_kg, height_cm, training_location, primary_goal, training_days_per_week
         FROM user_profiles WHERE user_id = ? LIMIT 1`).bind(session.user_id).first<{
-          first_name: string; gender: string; weight_kg: number | null; height_cm: number | null; training_location: string; primary_goal: string; training_days_per_week: number | null;
+          first_name: string; gender: string; age_years: number | null; weight_kg: number | null; height_cm: number | null; training_location: string; primary_goal: string; training_days_per_week: number | null;
         }>();
-      return json({ has_profile: Boolean(row), profile: row ?? { first_name: '', gender: '', weight_kg: null, height_cm: null, training_location: '', primary_goal: '', training_days_per_week: null } });
+      return json({ has_profile: Boolean(row), profile: row ?? { first_name: '', gender: '', age_years: null, weight_kg: null, height_cm: null, training_location: '', primary_goal: '', training_days_per_week: null } });
     }
     if (path === '/api/account/profile' && method === 'PUT') {
       const session = await requireSession(request, env), body = await readJson(request);
+      await ensureProfileAgeColumn(db);
       const firstName = stringField(body, 'first_name'), gender = stringField(body, 'gender'), trainingLocation = stringField(body, 'training_location'), primaryGoal = stringField(body, 'primary_goal');
+      const ageYears = body.age_years == null || body.age_years === '' ? null : Number(body.age_years);
       const weightKg = body.weight_kg == null || body.weight_kg === '' ? null : Number(body.weight_kg);
       const heightCm = body.height_cm == null || body.height_cm === '' ? null : Number(body.height_cm);
       const trainingDays = body.training_days_per_week == null || body.training_days_per_week === '' ? null : Number(body.training_days_per_week);
@@ -320,17 +345,18 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       if (!['', 'female', 'male', 'other', 'prefer_not_to_say'].includes(gender)) throw new HttpError(400, 'Wybierz prawidłową wartość pola płci.');
       if (!['', 'gym', 'home', 'both'].includes(trainingLocation)) throw new HttpError(400, 'Wybierz prawidłowe miejsce treningu.');
       if (!['', 'muscle', 'fat_loss', 'strength', 'consistency', 'health'].includes(primaryGoal)) throw new HttpError(400, 'Wybierz prawidłowy cel treningowy.');
+      if (ageYears !== null && (!Number.isInteger(ageYears) || ageYears < 13 || ageYears > 120)) throw new HttpError(400, 'Wiek musi mieścić się w zakresie 13–120 lat.');
       if (weightKg !== null && (!Number.isFinite(weightKg) || weightKg < 20 || weightKg > 400)) throw new HttpError(400, 'Waga musi mieścić się w zakresie 20–400 kg.');
       if (heightCm !== null && (!Number.isFinite(heightCm) || heightCm < 80 || heightCm > 260)) throw new HttpError(400, 'Wzrost musi mieścić się w zakresie 80–260 cm.');
       if (trainingDays !== null && (!Number.isInteger(trainingDays) || trainingDays < 1 || trainingDays > 7)) throw new HttpError(400, 'Liczba treningów musi wynosić od 1 do 7 tygodniowo.');
       const now = new Date().toISOString();
-      await db.prepare(`INSERT INTO user_profiles (user_id, first_name, gender, weight_kg, height_cm, training_location, primary_goal, training_days_per_week, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET first_name=excluded.first_name, gender=excluded.gender, weight_kg=excluded.weight_kg,
+      await db.prepare(`INSERT INTO user_profiles (user_id, first_name, gender, age_years, weight_kg, height_cm, training_location, primary_goal, training_days_per_week, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET first_name=excluded.first_name, gender=excluded.gender, age_years=excluded.age_years, weight_kg=excluded.weight_kg,
         height_cm=excluded.height_cm, training_location=excluded.training_location, primary_goal=excluded.primary_goal,
         training_days_per_week=excluded.training_days_per_week, updated_at=excluded.updated_at`)
-        .bind(session.user_id, firstName, gender, weightKg, heightCm, trainingLocation, primaryGoal, trainingDays, now, now).run();
-      return json({ has_profile: true, profile: { first_name: firstName, gender, weight_kg: weightKg, height_cm: heightCm, training_location: trainingLocation, primary_goal: primaryGoal, training_days_per_week: trainingDays } });
+        .bind(session.user_id, firstName, gender, ageYears, weightKg, heightCm, trainingLocation, primaryGoal, trainingDays, now, now).run();
+      return json({ has_profile: true, profile: { first_name: firstName, gender, age_years: ageYears, weight_kg: weightKg, height_cm: heightCm, training_location: trainingLocation, primary_goal: primaryGoal, training_days_per_week: trainingDays } });
     }
     if (path === '/api/auth/change-password' && method === 'POST') {
       const session = await requireSession(request, env); await applyRateLimit(request, db, 'change-password', 6);
