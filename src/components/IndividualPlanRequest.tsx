@@ -75,6 +75,8 @@ export default function IndividualPlanRequest({ name, email, saving, isPremium, 
   const [schedule, setSchedule] = useState('');
   const [notes, setNotes] = useState('');
   const [consent, setConsent] = useState(false);
+  const [termsConsent, setTermsConsent] = useState(false);
+  const [earlyStartConsent, setEarlyStartConsent] = useState(false);
   const [paymentNotice, setPaymentNotice] = useState('');
   const [answers, setAnswers] = useState<Record<string, string>>(initialAnswers);
 
@@ -136,6 +138,8 @@ export default function IndividualPlanRequest({ name, email, saving, isPremium, 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError('');
     if (!consent) { setError('Zaznacz zgodę na wykorzystanie odpowiedzi do przygotowania i obsługi zamówienia.'); return; }
+    if (!termsConsent) { setError('Zaakceptuj Regulamin Systemu Formy.'); return; }
+    if (!earlyStartConsent) { setError('Potwierdź żądanie rozpoczęcia realizacji zamówienia przed upływem terminu odstąpienia.'); return; }
     if (!Number.isInteger(Number(answers.age)) || Number(answers.age) < 13 || Number(answers.age) > 100) { setError('Podaj wiek w zakresie 13–100 lat.'); return; }
     if (!['female', 'male', 'other', 'prefer_not_to_say'].includes(answers.sex)) { setError('Wybierz płeć lub „Nie chcę podawać”.'); return; }
     if (!Number.isFinite(Number(answers.weight_kg)) || Number(answers.weight_kg) < 25 || Number(answers.weight_kg) > 400) { setError('Podaj prawidłową wagę w zakresie 25–400 kg.'); return; }
@@ -148,7 +152,7 @@ export default function IndividualPlanRequest({ name, email, saving, isPremium, 
     const values: Record<string, string> = {
       goal, level, location, equipment: JSON.stringify(selectedEquipment), equipment_other: location === 'gym' ? '' : answers.equipment_other,
       days_per_week: days, session_minutes: duration, training_history: trainingHistory, schedule, preferences, avoid, notes,
-      ...answers, max_profile: maxProfile, consent: 'true',
+      ...answers, max_profile: maxProfile, consent: 'true', terms_accepted: 'true', early_start_consent: 'true', withdrawal_acknowledged: 'true',
     };
     try {
       sessionStorage.setItem(FORM_STORAGE_KEY, JSON.stringify(values));
@@ -177,6 +181,9 @@ export default function IndividualPlanRequest({ name, email, saving, isPremium, 
       <div className="sf-form-section"><p className="sf-eyebrow">04 / MAKSIMA STARTOWE</p><h3>Jakie są Twoje obecne możliwości?</h3><p className="sf-muted">Wybierz profil, którego dotyczą wyniki. Jeżeli nie znasz maksimum danego ćwiczenia, zaznacz „Nie wiem”. Pierwszy trening może wtedy służyć do bezpiecznego sprawdzenia poziomu, a okres programu zacznie się po przygotowaniu pełnego planu.</p>{location==='both' && <label>Profil do sprawdzenia maksimów<select value={answers.max_profile} onChange={e=>setAnswer('max_profile',e.target.value)}><option value="gym">Siłownia</option><option value="home">Dom</option></select></label>}{location!=='both' && <p className="sf-info-note">Profil: {maxProfile==='gym'?'siłownia':'trening w domu'}.</p>}<div className="sf-max-grid">{visibleMaxFields.map(field=><div className="sf-max-item" key={field.key}><label>{field.label} <small>({field.unit})</small><input type="number" min="0" max={field.unit==='kg'?'1000':'1000'} step={field.unit==='kg'?'0.5':'1'} disabled={answers[field.unknown]==='true'} value={answers[field.key]} onChange={e=>setAnswer(field.key,e.target.value)} placeholder="Wpisz wynik"/></label><label className="sf-check"><input type="checkbox" checked={answers[field.unknown]==='true'} onChange={e=>{setAnswer(field.unknown,e.target.checked?'true':'false');if(e.target.checked)setAnswer(field.key,'');}}/><span>Nie wiem</span></label></div>)}</div></div>
       <div className="sf-form-section"><p className="sf-eyebrow">05 / PREFERENCJE</p><h3>Jak lubisz trenować?</h3><label>Dotychczasowe doświadczenie treningowe<textarea value={trainingHistory} onChange={e=>setTrainingHistory(e.target.value)} rows={3} maxLength={1500} placeholder="Jak długo trenujesz? Co robiłeś do tej pory?"/></label><label>Dni i godziny, które Ci odpowiadają<textarea value={schedule} onChange={e=>setSchedule(e.target.value)} rows={2} maxLength={800} placeholder="Np. poniedziałek, środa i sobota po pracy."/></label><label>Ćwiczenia, które lubisz wykonywać<textarea value={preferences} onChange={e=>setPreferences(e.target.value)} rows={2} maxLength={1000} placeholder="Wymień ulubione ćwiczenia lub formy treningu."/></label><label>Ćwiczenia, których nie lubisz<textarea value={avoid} onChange={e=>setAvoid(e.target.value)} rows={2} maxLength={1200} placeholder="Wymień ćwiczenia, które wolisz pominąć."/></label><label>Dodatkowe informacje<textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={3} maxLength={1500} placeholder="Inne preferencje, oczekiwania lub ważne uwagi."/></label></div>
       <label className="sf-check sf-individual-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/><span>Wyrażam zgodę na zapisanie odpowiedzi, w tym informacji o zdrowiu i ograniczeniach, oraz wykorzystanie ich przez System Formy do przygotowania i realizacji zamówionego planu i kontaktu w tej sprawie. Wiem, że mogę skontaktować się z administratorem w sprawie moich danych.</span></label>
+      <label className="sf-check sf-individual-consent"><input type="checkbox" checked={termsConsent} onChange={e=>setTermsConsent(e.target.checked)}/><span>Akceptuję <a href="/regulamin" target="_blank" rel="noreferrer">Regulamin Systemu Formy</a> i zapoznałem/-am się z informacjami dotyczącymi zakupu, płatności i praw konsumenta.</span></label>
+      <label className="sf-check sf-individual-consent"><input type="checkbox" checked={earlyStartConsent} onChange={e=>setEarlyStartConsent(e.target.checked)}/><span>Żądam rozpoczęcia świadczenia usługi cyfrowej lub realizacji zamówionej usługi przed upływem 14-dniowego terminu na odstąpienie od umowy. Przyjmuję do wiadomości, że w razie odstąpienia po rozpoczęciu świadczenia mogę być zobowiązany/-a do zapłaty kwoty proporcjonalnej do świadczeń spełnionych do chwili odstąpienia, a prawo odstąpienia wygasa po pełnym wykonaniu usługi wyłącznie po spełnieniu warunków ustawowych. Samo indywidualne przygotowanie planu nie wyłącza automatycznie ustawowych praw.</span></label>
+      <p className="sf-muted">To potwierdzenie nie ogranicza praw dotyczących niezgodności treści lub usługi cyfrowej z umową. Po płatności otrzymasz e-mailem potwierdzenie zamówienia i zaakceptowanej treści.</p>
       {paymentNotice && <div className="sf-info-note" role="status">{paymentNotice}</div>}
       {error && <div className="sf-gen-error" role="alert">{error}</div>}
       <button type="submit" className="sf-button sf-button-lime sf-button-full" disabled={saving}>{saving ? 'Przygotowuję bezpieczną płatność…' : isPremium ? 'Przejdź do płatności · 49,99 zł' : 'Przejdź do płatności · 59,99 zł'} <Send size={16}/></button>
